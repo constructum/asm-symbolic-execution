@@ -1,0 +1,10 @@
+/.config
+/.vscode
+/.examples
+/obj
+
+.fake
+*.txt
+
+bin
+

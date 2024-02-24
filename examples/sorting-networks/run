@@ -1,0 +1,1 @@
+time dotnet run -symbolic $2 -file examples/sorting-networks/sorting-network-$1.asm

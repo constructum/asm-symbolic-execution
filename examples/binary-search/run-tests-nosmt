@@ -1,0 +1,6 @@
+examples/binary-search/run 2 -nosmt > examples/binary-search/binary-search-nosmt-n=2-result.txt
+examples/binary-search/run 3 -nosmt > examples/binary-search/binary-search-nosmt-n=3-result.txt
+examples/binary-search/run 4 -nosmt > examples/binary-search/binary-search-nosmt-n=4-result.txt
+examples/binary-search/run 5 -nosmt > examples/binary-search/binary-search-nosmt-n=5-result.txt
+examples/binary-search/run 6 -nosmt > examples/binary-search/binary-search-nosmt-n=6-result.txt
+examples/binary-search/run 7 -nosmt > examples/binary-search/binary-search-nosmt-n=7-result.txt

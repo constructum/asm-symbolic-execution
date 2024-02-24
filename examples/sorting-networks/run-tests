@@ -1,0 +1,6 @@
+examples/sorting-networks/run 2 > examples/sorting-networks/sorting-network-2-result.txt
+examples/sorting-networks/run 3 > examples/sorting-networks/sorting-network-3-result.txt
+examples/sorting-networks/run 4 > examples/sorting-networks/sorting-network-4-result.txt
+examples/sorting-networks/run 5 > examples/sorting-networks/sorting-network-5-result.txt
+examples/sorting-networks/run 6 > examples/sorting-networks/sorting-network-6-result.txt
+examples/sorting-networks/run 7 > examples/sorting-networks/sorting-network-7-result.txt

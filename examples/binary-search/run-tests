@@ -1,0 +1,6 @@
+examples/binary-search/run 2 > examples/binary-search/binary-search-n=2-result.txt
+examples/binary-search/run 3 > examples/binary-search/binary-search-n=3-result.txt
+examples/binary-search/run 4 > examples/binary-search/binary-search-n=4-result.txt
+examples/binary-search/run 5 > examples/binary-search/binary-search-n=5-result.txt
+examples/binary-search/run 6 > examples/binary-search/binary-search-n=6-result.txt
+examples/binary-search/run 7 > examples/binary-search/binary-search-n=7-result.txt

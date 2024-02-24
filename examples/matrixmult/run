@@ -1,0 +1,1 @@
+time dotnet run -symbolic $4 -str "function m : Integer initially $1" -str "function n : Integer initially $2" -str "function p : Integer initially $3" -file examples/matrixmult/matrixmult.asm

@@ -1,0 +1,6 @@
+examples/bubblesort/run 2 -nosmt > examples/bubblesort/bubblesort-nosmt-n=2-result.txt
+examples/bubblesort/run 3 -nosmt > examples/bubblesort/bubblesort-nosmt-n=3-result.txt
+examples/bubblesort/run 4 -nosmt > examples/bubblesort/bubblesort-nosmt-n=4-result.txt
+examples/bubblesort/run 5 -nosmt > examples/bubblesort/bubblesort-nosmt-n=5-result.txt
+examples/bubblesort/run 6 -nosmt > examples/bubblesort/bubblesort-nosmt-n=6-result.txt
+examples/bubblesort/run 7 -nosmt > examples/bubblesort/bubblesort-nosmt-n=7-result.txt

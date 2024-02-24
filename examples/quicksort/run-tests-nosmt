@@ -1,0 +1,11 @@
+examples/quicksort/run-a 2 -nosmt > examples/quicksort/quicksort-a-nosmt-n=2-result.txt
+examples/quicksort/run-a 3 -nosmt > examples/quicksort/quicksort-a-nosmt-n=3-result.txt
+examples/quicksort/run-a 4 -nosmt > examples/quicksort/quicksort-a-nosmt-n=4-result.txt
+examples/quicksort/run-a 5 -nosmt > examples/quicksort/quicksort-a-nosmt-n=5-result.txt
+examples/quicksort/run-a 6 -nosmt > examples/quicksort/quicksort-a-nosmt-n=6-result.txt
+
+examples/quicksort/run-b 2 -nosmt > examples/quicksort/quicksort-b-nosmt-n=2-result.txt
+examples/quicksort/run-b 3 -nosmt > examples/quicksort/quicksort-b-nosmt-n=3-result.txt
+examples/quicksort/run-b 4 -nosmt > examples/quicksort/quicksort-b-nosmt-n=4-result.txt
+examples/quicksort/run-b 5 -nosmt > examples/quicksort/quicksort-b-nosmt-n=5-result.txt
+examples/quicksort/run-b 6 -nosmt > examples/quicksort/quicksort-b-nosmt-n=6-result.txt

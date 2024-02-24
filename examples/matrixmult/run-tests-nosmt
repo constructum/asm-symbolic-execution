@@ -1,0 +1,5 @@
+examples/matrixmult/run 2 2 2 -nosmt > examples/matrixmult/matrixmult-nosmt-n=m=p=2-result.txt
+examples/matrixmult/run 3 3 3 -nosmt > examples/matrixmult/matrixmult-nosmt-n=m=p=3-result.txt
+examples/matrixmult/run 4 4 4 -nosmt > examples/matrixmult/matrixmult-nosmt-n=m=p=4-result.txt
+examples/matrixmult/run 5 5 5 -nosmt > examples/matrixmult/matrixmult-nosmt-n=m=p=5-result.txt
+examples/matrixmult/run 6 6 6 -nosmt > examples/matrixmult/matrixmult-nosmt-n=m=p=6-result.txt

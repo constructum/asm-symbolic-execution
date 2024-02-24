@@ -1,0 +1,6 @@
+examples/sorting-networks/run 2 -nosmt > examples/sorting-networks/sorting-network-2-nosmt-result.txt
+examples/sorting-networks/run 3 -nosmt > examples/sorting-networks/sorting-network-3-nosmt-result.txt
+examples/sorting-networks/run 4 -nosmt > examples/sorting-networks/sorting-network-4-nosmt-result.txt
+examples/sorting-networks/run 5 -nosmt > examples/sorting-networks/sorting-network-5-nosmt-result.txt
+examples/sorting-networks/run 6 -nosmt > examples/sorting-networks/sorting-network-6-nosmt-result.txt
+examples/sorting-networks/run 7 -nosmt > examples/sorting-networks/sorting-network-7-nosmt-result.txt

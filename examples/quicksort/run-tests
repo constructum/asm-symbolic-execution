@@ -1,0 +1,11 @@
+examples/quicksort/run-a 2 > examples/quicksort/quicksort-a-n=2-result.txt
+examples/quicksort/run-a 3 > examples/quicksort/quicksort-a-n=3-result.txt
+examples/quicksort/run-a 4 > examples/quicksort/quicksort-a-n=4-result.txt
+examples/quicksort/run-a 5 > examples/quicksort/quicksort-a-n=5-result.txt
+examples/quicksort/run-a 6 > examples/quicksort/quicksort-a-n=6-result.txt
+
+examples/quicksort/run-b 2 > examples/quicksort/quicksort-b-n=2-result.txt
+examples/quicksort/run-b 3 > examples/quicksort/quicksort-b-n=3-result.txt
+examples/quicksort/run-b 4 > examples/quicksort/quicksort-b-n=4-result.txt
+examples/quicksort/run-b 5 > examples/quicksort/quicksort-b-n=5-result.txt
+examples/quicksort/run-b 6 > examples/quicksort/quicksort-b-n=6-result.txt
