@@ -140,9 +140,12 @@ let typecheck_rule (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TY
                         then
                             let (f_dom, f_ran) = fct_type f sign
                             let ts = ts >>| fun t -> t (sign, tyenv)
-                            let _  = t (sign, tyenv)
-                            let _ = match_fct_type f ts (f_dom, f_ran)
-                            Rule
+                            let t_type  = t (sign, tyenv)
+                            let f_res_type = match_fct_type f ts (f_dom, f_ran)
+                            if t_type <> f_res_type
+                            then failwith (sprintf "type of right-hand side of update rule (%s) does not match type of function %s : %s -> %s"
+                                                (t_type |> type_to_string) f (ts |> type_list_to_string) (f_res_type |> type_to_string))
+                            else Rule
                         else
                             failwith (sprintf "error: function %s on the left-hand of update rule is of the wrong kind (it should be 'controlled', 'shared' or 'out')" f);
         CondRule   = fun (G, R1, R2) (sign, tyenv) -> 
