@@ -2,10 +2,9 @@
 
 This is a prototype tool for symbolic execution of Abstract State Machines (ASM).
 
-The principles on which it is based are described in a paper titled "Elimination
-of Sequential Composition from Abstract State Machines Rules by Symbolic
-Execution" submitted to the [ABZ 2024](https://abz-conf.org/site/2024/)
-conference.
+The principles on which it is based are described in a short paper titled "Using Symbolic Execution to Transform Turbo Abstract State Machines into Basic Abstract State Machines" accepted at the [ABZ 2024](https://abz-conf.org/site/2024/) conference.
+
+An extended version of that paper will be made available soon in this repository.
 
 The tool implements a transformation of ASM transition rules, which eliminates `seq` and `iterate` rules to obtain a transition rule that condenses a whole sequential computation into one single step.
 
