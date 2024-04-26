@@ -1,1 +1,1 @@
-time dotnet run -symbolic $2 -str "function n : Integer initially $1" -file examples/binary-search/binary-search.asm
+time dotnet run -symbolic $2 -str "static n : Integer = $1" -file examples/binary-search/binary-search.asm
