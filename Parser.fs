@@ -295,22 +295,39 @@ let fct_initially (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserRe
                              Map.add [] (Eval.eval_term t (state, Map.empty)) Map.empty )
     ) s
 
+let fct_eqdef (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<VALUE list -> VALUE> =
+    // for the time being, only 0-ary functions can be initialised
+    let term = term sign
+    (       ( ((kw "=") << term)
+                |>> fun t -> let _ = typecheck_term t (sign, Map.empty)
+                             let t_val = Eval.eval_term t (State.background_state  (* !!! use only background !!! *), Map.empty)
+                             (function [] -> t_val | _ -> UNDEF) )
+
+    ) s
+
 let definition (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNATURE * STATE * RULES_DB> =
-    let (new_fct_name, fct_parameter_types, fct_initially, new_rule_name, rule) =
-            (new_fct_name sign, fct_parameter_types sign, fct_initially (sign, state), new_rule_name sign, rule sign)
-    let opt_state_initialisation f (tys_ran, ty_dom) opt_initially = 
-            match opt_initially with
-                |   None -> empty_state
-                |   Some initial_values ->
+    let (new_fct_name, fct_parameter_types, fct_initially, fct_eqdef, new_rule_name, rule) =
+            (new_fct_name sign, fct_parameter_types sign, fct_initially (sign, state), fct_eqdef (sign, state), new_rule_name sign, rule sign)
+    let opt_state_initialisation (kind : Signature.FCT_KIND) f (tys_ran, ty_dom) (opt_static_def, opt_initially) = 
+            match (opt_static_def, opt_initially) with
+                |   (Some static_def, _) ->
+                        state_override_static empty_state (Map.add f static_def Map.empty)
+                |   (_, Some initial_values) ->
                         let _ = Map.map (fun xs y -> 
                                     if (xs >>| type_of_value, type_of_value y) <> (tys_ran, ty_dom)
                                     then failwith (sprintf "type mismatch in initialisation of function '%s'" f)
                                     else ()) initial_values
                         state_override_dynamic empty_state (Map.add f initial_values Map.empty)
-    (   (   ( ((kw "controlled" <|> kw "function" <|> (kw "controlled" >> kw "function")) << new_fct_name ++ fct_parameter_types) ++ (poption fct_initially) )
+                |   _ -> empty_state
+    (   (   ( ((kw "static" >> poption (kw "function")) << new_fct_name ++ fct_parameter_types) ++ (poption fct_eqdef) )
+                |>> fun ((f, (tys_ran, ty_dom)), opt_fct_def) ->
+                        (   add_function_name f (Static, (tys_ran, ty_dom), NonInfix) Map.empty,
+                            opt_state_initialisation (Signature.Static) f (tys_ran, ty_dom) (opt_fct_def, None),
+                            empty_rules_db ) )
+        <|> (   ( ((kw "controlled" <|> kw "function" <|> (kw "controlled" >> kw "function")) << new_fct_name ++ fct_parameter_types) ++ (poption fct_initially) )
                 |>> fun ((f, (tys_ran, ty_dom)), opt_initially) ->
                         (   add_function_name f (Controlled, (tys_ran, ty_dom), NonInfix) Map.empty,
-                            opt_state_initialisation f (tys_ran, ty_dom) opt_initially,
+                            opt_state_initialisation (Signature.Controlled) f (tys_ran, ty_dom) (None, opt_initially),
                             empty_rules_db ) )
         <|> ( ((kw "rule" << new_rule_name) ++ (kw "=" << rule))
                 |>> fun (rule_name, R) ->
