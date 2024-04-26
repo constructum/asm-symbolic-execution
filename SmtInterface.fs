@@ -47,8 +47,8 @@ let smt_map_type C (T : TYPE) : Sort =
     |   String  -> ctx.StringSort
     |   _       -> failwith (sprintf "smt_map_type: unsupported type %s" (type_to_string T))
 
-let smt_initial_fct f =
-    "__initial__" + f + "__"  //!!!!! check for potential conflicts
+// let smt_initial_fct f =
+//     "__initial__" + f + "__"  //!!!!! check for potential conflicts
 
 let smt_add_functions C (new_sign : SIGNATURE, new_state : STATE) : unit =
     let ctx = !C.ctx
@@ -57,10 +57,10 @@ let smt_add_functions C (new_sign : SIGNATURE, new_state : STATE) : unit =
         let (Ts_dom, T_ran) = fct_type fct_name new_sign
         let func_decl = ctx.MkFuncDecl (fct_name, Array.ofList (Ts_dom >>| smt_map_type C), smt_map_type C T_ran)
         C.fct := Map.add fct_name func_decl (!C.fct)
-        // same function, but in the initial state
-        let initial_fct_name = smt_initial_fct fct_name
-        let initial_func_decl = ctx.MkFuncDecl (initial_fct_name, Array.ofList (Ts_dom >>| smt_map_type C), smt_map_type C T_ran)
-        C.fct := Map.add initial_fct_name initial_func_decl (!C.fct)
+        // -- not necessary -- dynamic functions are always to be interpreted in the initial state -- same function, but in the initial state
+        // let initial_fct_name = smt_initial_fct fct_name
+        // let initial_func_decl = ctx.MkFuncDecl (initial_fct_name, Array.ofList (Ts_dom >>| smt_map_type C), smt_map_type C T_ran)
+        // C.fct := Map.add initial_fct_name initial_func_decl (!C.fct)
     Set.map (add_function C) fct_names |> ignore
     // !!! state tbd, but there is no syntax for defining initial interpretation of functions yet
 
@@ -94,12 +94,11 @@ let rec smt_map_term_background_function sign C (f, ts) : SMT_EXPR =
     |   ("*",       [ SMT_IntExpr e1;  SMT_IntExpr e2 ])  -> SMT_IntExpr (ctx.MkMul (e1, e2) :?> IntExpr)
     |   _ -> failwith (sprintf "smt_map_term_background_function: error (t = %s)\n%A\n" (term_to_string sign (AppTerm (FctName f, ts))) es)
 
-and smt_map_term_user_defined_function initial_flag sign C (f, ts) : SMT_EXPR =
+and smt_map_term_user_defined_function sign C (f, ts) : SMT_EXPR =
     let (ctx, fct) = (!C.ctx, !C.fct)
-    let f_smt = if initial_flag then smt_initial_fct f else f
     match (f, fct_type f sign, ts >>| fun t -> smt_map_term sign C t) with
-    |   (f, (_, Boolean), es) -> SMT_BoolExpr (ctx.MkApp (Map.find f_smt fct, Array.ofList (es >>| convert_to_expr)) :?> BoolExpr)
-    |   (f, (_, Integer), es) -> SMT_IntExpr (ctx.MkApp (Map.find f_smt fct, Array.ofList (es >>| convert_to_expr)) :?> IntExpr)
+    |   (f, (_, Boolean), es) -> SMT_BoolExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> BoolExpr)
+    |   (f, (_, Integer), es) -> SMT_IntExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> IntExpr)
     |   _ -> failwith (sprintf "smt_map_term_user_defined_function : error (t = %s)" (term_to_string sign (AppTerm (FctName f, ts))))
 
 and smt_map_ITE sign C (G, t1, t2) : SMT_EXPR =
@@ -114,13 +113,17 @@ and smt_map_ITE sign C (G, t1, t2) : SMT_EXPR =
             failwith (sprintf "smt_map_ITE: type error: for term %s the expected type is (Boolean, T, T) with T in { Boolean, Integer }, type (%s, %s, %s) found instead"
                 (term_to_string sign (CondTerm (G, t1, t2))) (type_to_string T_G) (type_to_string T_t1) (type_to_string T_t2) )
 
-and smt_map_app_term_ initial_flag sign C (f, ts) : SMT_EXPR =
+and smt_map_app_term sign C (f, ts) : SMT_EXPR =
     if (Set.contains f (fct_names Background.signature))
     then smt_map_term_background_function sign C (f, ts)
-    else smt_map_term_user_defined_function initial_flag sign C (f, ts)
+    else if Signature.fct_kind f sign = Static
+         then smt_map_term_user_defined_function sign C (f, ts)
+         else failwith (sprintf "smt_map_app_term: '%s' is not a static function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
-and smt_map_app_term = smt_map_app_term_ false
-and smt_map_initial = smt_map_app_term_ true
+and smt_map_initial sign C (f, ts) : SMT_EXPR =
+    if not (Signature.fct_kind f sign = Static)
+    then smt_map_term_user_defined_function sign C (f, ts)
+    else failwith (sprintf "smt_map_app_term: '%s' is a static function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
 and smt_map_term sign C (t : TERM) : SMT_EXPR =
     let ctx = !C.ctx
