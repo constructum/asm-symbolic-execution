@@ -364,3 +364,15 @@ let symbolic_execution (R_in : RULE) : int * RULE =
     let S0 = !TopLevel.initial_state
     let R_out = s_eval_rule R_in (state_to_s_state S0, Map.empty, Set.empty)
     (count_s_updates R_out, reconvert_rule R_out)
+
+//--------------------------------------------------------------------
+// this version sets all non-static functions to be uninterpreted,
+//   as needed for translation turbo ASM-> basic ASM (see paper
+//   https://github.com/constructum/asm-symbolic-execution/blob/main/doc/2024--Del-Castillo--extended-version-of-ABZ-2024-paper--Using-Symbolic-Execution-to-Transform-Turbo-ASM-into-Basic-ASM.pdf
+//   - section 4)
+//
+// first element of pair returned is the number of S_Updates rules, i.e. paths in the decision tree
+let symbolic_execution_for_turbo_asm_to_basic_asm_transformation (R_in : RULE) : int * RULE =
+    let S0 = !TopLevel.initial_state
+    let R_out = s_eval_rule R_in (state_to_s_state_only_static S0, Map.empty, Set.empty)
+    (count_s_updates R_out, reconvert_rule R_out)

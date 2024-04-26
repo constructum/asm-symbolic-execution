@@ -26,6 +26,12 @@ let state_to_s_state (S : State.STATE) : S_STATE = {
     _dynamic   = Map.map (fun f -> fun f_table -> Map.map (fun loc -> fun x -> Value x) f_table) S._dynamic;
 }
 
+let state_to_s_state_only_static (S : State.STATE) : S_STATE = {
+    _signature = S._signature;
+    _static    = S._static;
+    _dynamic   = Map.empty;
+}
+
 let background_state = {
     _signature = Background.signature;
     _static    = Background.state;
