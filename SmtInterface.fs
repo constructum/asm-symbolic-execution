@@ -47,9 +47,6 @@ let smt_map_type C (T : TYPE) : Sort =
     |   String  -> ctx.StringSort
     |   _       -> failwith (sprintf "smt_map_type: unsupported type %s" (type_to_string T))
 
-// let smt_initial_fct f =
-//     "__initial__" + f + "__"  //!!!!! check for potential conflicts
-
 let smt_add_functions C (new_sign : SIGNATURE, new_state : STATE) : unit =
     let ctx = !C.ctx
     let fct_names = Signature.fct_names new_sign
@@ -57,10 +54,6 @@ let smt_add_functions C (new_sign : SIGNATURE, new_state : STATE) : unit =
         let (Ts_dom, T_ran) = fct_type fct_name new_sign
         let func_decl = ctx.MkFuncDecl (fct_name, Array.ofList (Ts_dom >>| smt_map_type C), smt_map_type C T_ran)
         C.fct := Map.add fct_name func_decl (!C.fct)
-        // -- not necessary -- dynamic functions are always to be interpreted in the initial state -- same function, but in the initial state
-        // let initial_fct_name = smt_initial_fct fct_name
-        // let initial_func_decl = ctx.MkFuncDecl (initial_fct_name, Array.ofList (Ts_dom >>| smt_map_type C), smt_map_type C T_ran)
-        // C.fct := Map.add initial_fct_name initial_func_decl (!C.fct)
     Set.map (add_function C) fct_names |> ignore
     // !!! state tbd, but there is no syntax for defining initial interpretation of functions yet
 
@@ -73,7 +66,6 @@ let convert_to_expr = function
 let rec smt_map_term_background_function sign C (f, ts) : SMT_EXPR =
     let ctx = !C.ctx
     let es = ts >>| smt_map_term sign C
-    //fprintf stderr "smt_map_background_function: error (t = %s)\n%A\n" (term_to_string sign (AppTerm (FctName f, ts))) es
     match (f, es) with
     |   ("=",       [ SMT_BoolExpr e1; SMT_BoolExpr e2 ]) -> SMT_BoolExpr (ctx.MkEq (e1, e2))
     |   ("=",       [ SMT_IntExpr e1;  SMT_IntExpr e2 ])  -> SMT_BoolExpr (ctx.MkEq (e1, e2))
