@@ -176,7 +176,7 @@ let eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name : NAME, ts) =
                             else t
                     else t
                     (* if there is nothing to simplify by rewriting or using context, it would return AppTerm (FctName f, ts) *)
-            else failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n(term '%s' found instead)"
+            else failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
                                         f (term_to_string (signature_of S) (AppTerm (FctName f, ts))))
 
 let eval_cond_term (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) = 
@@ -233,7 +233,9 @@ let rec s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
     let eval_update ((f, ts), t_rhs) (S, env, C) =
         match get_values (ts >>| fun t -> s_eval_term t (S, env, C)) with
         |   Some xs -> S_Updates (Set.singleton ((f, xs), s_eval_term t_rhs (S, env, C)));
-        |   None -> failwith (sprintf "location %A on the lhs of update cannot be fully evaluated" (f, ts))
+        |   None ->
+                let display_terms ts = String.concat ", " (ts >>| (fun t -> t |> pp_term (signature_of S) |> PrettyPrinting.toString 10000))
+                failwith $"location ({f}, ({display_terms ts})) on the lhs of update cannot be fully evaluated"
 
     let eval_cond (G, R1, R2) (S, env, C) = 
         match s_eval_term G (S, env, C) with

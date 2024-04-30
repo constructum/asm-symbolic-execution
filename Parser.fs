@@ -51,7 +51,7 @@ let kw kw_name =
             >>= fun s ->
                 if s = explode kw_name
                 then preturn s
-                else pfail_msg "keyword" (sprintf "keyword '%s' expected, '%s' found" kw_name (implode s))
+                else pfail_msg "keyword" ($"keyword '{kw_name}' expected, '{implode s}' found")
 
 //--------------------------------------------------------------------
 
@@ -69,13 +69,13 @@ let fct_name (sign : SIGNATURE) =
         >>= (fun s ->
                 if is_function_name s sign && not (is_infix s sign)
                 then preturn s
-                else pfail_msg "fct_name" (sprintf "function name expected, '%s' found" s))
+                else pfail_msg "fct_name" ($"function name expected, '{s}' found"))
 
 let variable (sign : SIGNATURE) =
     alphanumeric_identifier
         >>= (fun s ->
                 if s = "true" || s = "false" || s = "undef" || is_function_name s sign
-                then pfail_msg "variable" (sprintf "variable expected, '%s' found" s)
+                then pfail_msg "variable" ($"variable expected, '{s}' found")
                 else preturn s)
 
 // infix operator (function name)
@@ -84,17 +84,17 @@ let op_name (sign : SIGNATURE) =
         >>= (fun s ->
                 if is_function_name s sign && is_infix s sign
                 then preturn s
-                else pfail_msg "op_name" (sprintf "infix operator expected, '%s' found" s))
+                else pfail_msg "op_name" ($"infix operator expected, '{s}' found"))
 
 // 'new_fct_name' is for use in function definitions, differs from 'fct_name' in that it must be not be in the signature
 // !!! add syntax for user-defined infix operators at some point
 let new_fct_name (sign : SIGNATURE) =
     (alphanumeric_identifier)
-        >>= (fun s -> if not (is_name_defined s sign) then preturn s else failwith (sprintf "name '%s' in function definition is already in use" s))
+        >>= (fun s -> if not (is_name_defined s sign) then preturn s else failwith ($"name '{s}' in function definition is already in use"))
 
 let new_rule_name (sign : SIGNATURE) =
     (alphanumeric_identifier)
-        >>= (fun s -> if not (is_name_defined s sign) then preturn s else failwith (sprintf "name '%s' in rule definition is already in use" s))
+        >>= (fun s -> if not (is_name_defined s sign) then preturn s else failwith ($"name '{s}' in rule definition is already in use"))
 
 let name (sign : SIGNATURE) =
         ( kw "true"      |>> (fun _ -> BoolConst true) )
@@ -127,16 +127,15 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
                         |   (_, (_, f_ran)) -> f_ran    // special constants UndefConst, BoolConst b, etc.
         CondTerm = fun (G, t1, t2) (sign, tyenv) ->
                         if G (sign, tyenv) <> Boolean
-                        then failwith (sprintf "type of guard in conditional term must be Boolean)")
+                        then failwith "type of guard in conditional term must be Boolean)"
                         else
                         (   let (t1, t2) = (t1 (sign, tyenv), t2 (sign, tyenv))
                             if t1 = t2 then t1
-                            else failwith (sprintf "branches of conditional term have different types (then-branch: %s; else-branch: %s)"
-                                                (t1 |> type_to_string) (t2 |> type_to_string))  );
+                            else failwith $"branches of conditional term have different types (then-branch: {t1 |> type_to_string}; else-branch: {t2 |> type_to_string})" )                                                  
         Initial  = fun (f, xs) (sign, tyenv) ->
                     match fct_type f sign with
                     |   (f_dom, f_ran) ->  match_fct_type f (xs >>| type_of_value) (f_dom, f_ran);
-        // VarTerm  = fun v -> fun (_, tyenv) -> try Map.find v tyenv with _ -> failwith (sprintf "variable '%s' not defined" v);
+        // VarTerm  = fun v -> fun (_, tyenv) -> try Map.find v tyenv with _ -> failwith $"variable '{v}' not defined";
         // LetTerm  = fun (x, t1, t2) -> fun (sign, tyenv) ->
         //                 let t1 = t1 (sign, tyenv)
         //                 t2 (sign, Map.add x t1 tyenv)
@@ -160,11 +159,11 @@ let typecheck_rule (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TY
                             failwith (sprintf "error: function %s on the left-hand of update rule is of the wrong kind (it should be 'controlled', 'shared' or 'out')" f);
         CondRule   = fun (G, R1, R2) (sign, tyenv) -> 
                         if G (sign, tyenv) <> Boolean
-                        then failwith (sprintf "type of guard in conditional rule must be Boolean)")
+                        then failwith "type of guard in conditional rule must be Boolean)"
                         else
                         (   let (R1, R2) = (R1 (sign, tyenv), R2 (sign, tyenv))
                             if R1 = R2 then Rule
-                            else failwith (sprintf "typecheck_rule: CondRule: this should not happen")  );
+                            else failwith "typecheck_rule: CondRule: this should not happen" );
         ParRule    = fun Rs (sign, tyenv) -> let _ = Rs >>| fun R -> R (sign, tyenv) in Rule;
         SeqRule    = fun Rs (sign, tyenv) -> let _ = Rs >>| fun R -> R (sign, tyenv) in Rule;
         IterRule   = fun R (sign, tyenv) -> let _ = R (sign, tyenv) in Rule;
@@ -201,7 +200,7 @@ let rec operator_parser (parse_elem : SIGNATURE -> Parser<'elem>, app_cons : NAM
                 ( (((op_name_ : Parser<string>) ++ (elem_ : Parser<'elem>))
                         >>= (fun (op2, t3 : 'elem) ->
                             match infix_status op2 sign with
-                            |   NonInfix -> failwith (sprintf "operator parsing: infix operator expected, '%s' found instead" op2)
+                            |   NonInfix -> failwith (sprintf "operator parsing: infix operator expected, '%s' " op2)
                             |   Infix (assoc2, prec2) -> 
                                     if (prec1 < prec2) || (prec1 = prec2 && assoc1 = RightAssoc && assoc2 = RightAssoc)
                                     then F ((Opnd t3)::(Optr (Infix (assoc2, prec2), op2))::stack)
@@ -218,12 +217,12 @@ let mkAppTerm sign = function
 |   (FctName f, ts) ->
         if arity f sign = List.length ts
         then AppTerm (FctName f, ts)
-        else failwith (sprintf "function '%s' with arity %d applied to %d arguments" f (arity f sign) (List.length ts))
+        else failwith $"function '{f}' with arity {arity f sign} applied to {List.length ts} arguments"
 |   (UndefConst,    []) -> AppTerm (UndefConst, [])
 |   (BoolConst b,   []) -> AppTerm (BoolConst b, [])
 |   (IntConst i,    []) -> AppTerm (IntConst i, [])
 |   (StringConst s, []) -> AppTerm (StringConst s, [])
-|   (_, ts) -> failwith (sprintf "constant / 0-ary function applied to %d arguments" (List.length ts))
+|   (_, ts) -> failwith $"constant / 0-ary function applied to {List.length ts} arguments"
 
 
 let rec simple_term (sign : SIGNATURE) (s : ParserInput) : ParserResult<TERM> = 

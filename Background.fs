@@ -18,9 +18,9 @@ let FALSE = BOOL false
 
 let value_to_string = function
 |   UNDEF -> "undef"
-|   BOOL b -> sprintf "%b" b
-|   INT i -> sprintf "%i" i
-|   STRING s -> sprintf "\"%s\"" s    //!!!! no quoting yet
+|   BOOL b -> if b then "true" else "false"
+|   INT i -> i.ToString ()
+|   STRING s -> "\"" + s + "\""
 
 let type_of_value = function
 |   UNDEF    -> Undef

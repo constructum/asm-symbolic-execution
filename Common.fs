@@ -6,6 +6,12 @@ let (>>|) xs f = List.map f xs
 let explode (s:string) : char list = [for c in s -> c]
 let implode (xs : char list) : string = System.String.Concat xs
 
+let write s = printf "%s" s
+let writeln s = printf "%s\n" s
+
+let write_err s = fprintf stderr "%s" s
+let writeln_err s = fprintf stderr "%s\n" s
+
 let map_override m1 m2 =
     Map.fold (fun m k v -> Map.add k v m) m1 m2
 

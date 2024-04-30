@@ -7,6 +7,11 @@ open State
 
 type LOCATION = string * VALUE list
 
+let location_to_string : LOCATION -> string = function
+    (f, xs) -> sprintf "%s (%s)" f (String.concat ", " (List.map value_to_string xs))
+
+//--------------------------------------------------------------------
+
 type UPDATE = LOCATION * VALUE
 
 type UPDATE_SET = Set<UPDATE>
@@ -20,7 +25,7 @@ let add_update (U : UPDATE_MAP) (u as (loc as (f, args), value): UPDATE) =
         ( function None -> Some (Map.add args value Map.empty)
                  | Some table -> Some ( if Map.containsKey args table
                                         then if value <> Map.find args table  // deal with conflicting updates
-                                             then failwith (sprintf "update set inconsistent at location %A" loc)
+                                             then failwith (sprintf "update set inconsistent at location %s" (loc |> location_to_string))
                                              else table
                                         else Map.add args value table ) )
         U

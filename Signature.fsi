@@ -26,6 +26,8 @@ type FCT_KIND =
 | Out 
 | Derived
 
+val fct_kind_to_string : FCT_KIND -> string
+
 type TYPE =
 | TypeParam of string
 | Undef

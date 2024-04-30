@@ -28,6 +28,14 @@ type FCT_KIND =
 | Out 
 | Derived
 
+let fct_kind_to_string = function
+| Static -> "static"
+| Monitored -> "monitored"
+| Controlled -> "controlled"
+| Shared -> "shared"
+| Out -> "out"
+| Derived -> "derived"
+
 type TYPE =
 | TypeParam of string
 | Undef
@@ -37,7 +45,7 @@ type TYPE =
 | Rule
 
 let type_to_string = function
-|   TypeParam a -> sprintf "'%s" a
+|   TypeParam a -> "'" ^ a
 |   Undef -> "Undef"
 |   Boolean -> "Boolean"
 |   Integer -> "Integer"

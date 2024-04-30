@@ -85,7 +85,7 @@ let fct_name_interpretation (S : S_STATE) (f : string) (args : VALUE list) =
         (   try Map.find args (Map.find f (S._dynamic))
             with _ -> Initial (f, args)     )
     |   _ ->
-        failwith (sprintf "unsupported function kind '%A' for function name '%s'" kind f)
+        failwith (sprintf "unsupported function kind '%s' for function name '%s'" (fct_kind_to_string kind) f)
 
 let interpretation (S : S_STATE) (name : NAME) =
     match name with

@@ -148,10 +148,10 @@ let rec pp_list sep = function
 let pp_name (name : NAME) =
     (   match name with
     |   UndefConst -> "undef"
-    |   BoolConst b -> sprintf "%b" b
-    |   IntConst i -> sprintf "%d" i
-    |   StringConst s -> sprintf "\"%s\"" s   //!!!! quoting to be done
-    |   FctName f -> sprintf "%s" f ) |> str
+    |   BoolConst b -> if b then "true" else "false"
+    |   IntConst i -> i.ToString()
+    |   StringConst s -> "\"" + s + "\""
+    |   FctName f -> f ) |> str
 
 let pp_app_term sign = function
     |   (FctName f, [t1; t2]) when infix_status f sign <> NonInfix ->
@@ -163,7 +163,7 @@ let pp_app_term sign = function
 let pp_location_term sign prefix = function
     |   (f : string, xs : VALUE list) when xs <> [] ->
             blo0 [ str (prefix+"["); str f; str ", "; str "("; blo0 (pp_list [str",";brk 1] (List.map (fun x -> str (value_to_string x)) xs)); str ")]" ]
-    |   (f, _) -> blo0 [ str (sprintf "%s[%s]" prefix f) ]
+    |   (f, _) -> blo0 [ str $"{prefix}[{f}]" ]
 
 let rec pp_term (sign : SIGNATURE) (t : TERM) =
     let (pp_app_term, pp_location_term) = (pp_app_term sign, pp_location_term sign)

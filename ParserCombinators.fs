@@ -41,8 +41,9 @@ let combine_failures (failures1 : Set<FailedAt>, failures2 : Set<FailedAt>) =
 let parser_msg = function
 |   ParserSuccess _ -> "parsing succeeded"
 |   ParserFailure failures ->
-        sprintf "parsing failed:\n%s"
-            (String.concat "\n" (Set.toList failures >>| fun (pos, msg) -> sprintf "[%d:%d] %s" pos.line pos.col msg))
+        let output_failures = String.concat "\n" (Set.toList failures >>| fun (pos, msg) -> $"[{pos.line}:{pos.col}] {msg}")
+        sprintf $"parsing failed:\n{output_failures}"
+            
 
 let preturn x : 'a Parser = fun input -> ParserSuccess (x, input)
 let pfail     : 'a Parser = fun input -> ParserFailure (combine_failures (Set.singleton (get_pos input, "always failing parser"), get_failures input))   // !!!! ?????
@@ -55,10 +56,10 @@ let pcharsat c_pred expected : char Parser =
         |   (Some c, input') ->
                 if c_pred c
                 then ParserSuccess (c, input')
-                else //ParserFailure (combine_failures (Set.singleton (get_pos input, sprintf "character did not match: %s expected, '%c' found" expected c), get_failures input))
+                else //ParserFailure (combine_failures (Set.singleton (get_pos input, $"character did not match: {expected} expected, '{c}' found"), get_failures input))
                      ParserFailure (combine_failures (Set.empty, get_failures input))
         |   (None, _) ->
-                ParserFailure (combine_failures (Set.empty, (*Set.singleton (get_pos input, sprintf "%s expected, end-of-stream found." expected),*) get_failures input))
+                ParserFailure (combine_failures (Set.empty, (*Set.singleton (get_pos input, $"{expected} expected, end-of-stream found."),*) get_failures input))
 
 let pchar c0 = pcharsat (fun c -> c = c0) ("\""+(c0.ToString())+"\"")
 let pdigit = pcharsat (fun c -> System.Char.IsDigit c) "digit"
