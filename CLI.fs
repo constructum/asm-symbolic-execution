@@ -45,7 +45,7 @@ let exec_nonsymbolic () =
     printfn "%s\n\n  -->\n" (R |> AST.pp_rule (!TopLevel.signature) |> PrettyPrinting.toString 80)
     Updates.show_update_set sign (Eval.eval_rule R (!TopLevel.initial_state, Map.empty)) |> printfn "%s\n"
 
-let CLI(args) =
+let CLI_with_ex(args) =
     let n = Array.length args
     if n = 0
     then usage (); 0
@@ -76,3 +76,9 @@ let CLI(args) =
         then exec_symbolic SymbEval.symbolic_execution
         else exec_nonsymbolic ()
         0
+
+let CLI(args) =
+    try
+        CLI_with_ex(args)
+    with
+        Failure s -> fprintfn stderr "exception:\n%s" s; 1

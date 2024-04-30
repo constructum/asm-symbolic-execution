@@ -12,7 +12,7 @@ open AST
 let pcharf c = pcharsat c ""
 
 let one_line_comment :Parser<char list> =
-    (pchar '/' << pchar '/' << pmany (pcharf (fun c -> c <> '\r' && c <> '\n')) << pmany (pchar '\r') << pchar '\n' |>> fun _ -> [])
+    (pstring "//" << pmany (pcharf (fun c -> c <> '\r' && c <> '\n')) << pmany (pchar '\r') << pchar '\n' |>> fun _ -> [])
 
 let rec multiline_comment s : ParserResult<char list> =
     let open_ = pstring "(*"
@@ -47,7 +47,11 @@ let symb_ident_char = (pcharsat (fun c -> is_symb_ident_char c) "symbolic identi
 /// Parse keywords
 let kw kw_name =
     (   (ws_or_comment << (pmany1 pletter))
-    <|> (ws_or_comment << (pmany1 symb_ident_char)) ) >>= fun s -> if s = explode kw_name then preturn s else pfail
+    <|> (ws_or_comment << (pmany1 symb_ident_char)) )
+            >>= fun s ->
+                if s = explode kw_name
+                then preturn s
+                else pfail_msg "keyword" (sprintf "keyword '%s' expected, '%s' found" kw_name (implode s))
 
 //--------------------------------------------------------------------
 
@@ -62,19 +66,25 @@ let symbolic_identifier =
 // non-infix function name
 let fct_name (sign : SIGNATURE) =
     (alphanumeric_identifier <|> symbolic_identifier)
-        >>= (fun s -> if is_function_name s sign && not (is_infix s sign) then preturn s else pfail)
+        >>= (fun s ->
+                if is_function_name s sign && not (is_infix s sign)
+                then preturn s
+                else pfail_msg "fct_name" (sprintf "function name expected, '%s' found" s))
 
 let variable (sign : SIGNATURE) =
     alphanumeric_identifier
         >>= (fun s ->
                 if s = "true" || s = "false" || s = "undef" || is_function_name s sign
-                then failwith (sprintf "'%s' is not a variable (instead, it is a constant or function name)" s)
+                then pfail_msg "variable" (sprintf "variable expected, '%s' found" s)
                 else preturn s)
 
 // infix operator (function name)
 let op_name (sign : SIGNATURE) =
     (alphanumeric_identifier <|> symbolic_identifier)
-        >>= (fun s -> if is_function_name s sign && is_infix s sign then preturn s else pfail)
+        >>= (fun s ->
+                if is_function_name s sign && is_infix s sign
+                then preturn s
+                else pfail_msg "op_name" (sprintf "infix operator expected, '%s' found" s))
 
 // 'new_fct_name' is for use in function definitions, differs from 'fct_name' in that it must be not be in the signature
 // !!! add syntax for user-defined infix operators at some point
@@ -182,8 +192,7 @@ let rec operator_parser (parse_elem : SIGNATURE -> Parser<'elem>, app_cons : NAM
     |   [Opnd t] -> t
     |   stack -> extract (reduce stack)
     let rec F (stack : 'elem STACK_ELEM list) (s : ParserInput) : ParserResult<'elem> = 
-      ( (* printf "F %A %A\n" stack s *)
-        match stack with
+      ( match stack with
         |   [Opnd t1] ->
                 ( ((op_name_ : Parser<string>) ++ (elem_ : Parser<'elem>)) 
                         >>= (fun (op, t2 : 'elem) -> F ([ Opnd t2; Optr (infix_status op sign, op); Opnd t1 ] : 'elem STACK_ELEM list)) )
@@ -263,7 +272,6 @@ let rec rule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE> =
                 |>> function  (G, r_then, opt_R_else) -> CondRule (G, r_then, match opt_R_else with Some r_else -> r_else | None -> skipRule) )
         <|> ( kw "iterate" << rule_ >> poption (kw "enditerate") |>> fun R -> IterRule R )
         <|> ( (kw "while" << lit "(" << term_ >> lit ")") ++ rule_ >> poption (kw "endwhile") |>> fun (G, R) -> IterRule (CondRule (G, R, skipRule)) )
-        <|> ( pfail_msg "rule" "rule expected" )
     ) s
 
 //--------------------------------------------------------------------
@@ -335,26 +343,28 @@ let definition (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResul
                         (   add_rule_name rule_name [] Signature.empty_signature,
                             empty_state,
                             add_rule rule_name R empty_rules_db ) )   // parameterless rule: empty type list
+        <|> ( ws_or_comment >> peos |>> fun _ -> (empty_signature, empty_state, empty_rules_db) )
     ) s
 
 let rec definitions (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNATURE * STATE * RULES_DB>  =
     match definition (sign, state) s with 
     |   ParserSuccess ((sign', state', rules_db'), s') ->
-        (   match definitions (signature_override sign sign', state_override state state') s' with
-            |   ParserSuccess ((sign'', state'', rules_db''), s'') ->
-                    ParserSuccess ((signature_override sign' sign'', state_override state' state'', rules_db_override rules_db' rules_db''), s'')
-            |   ParserFailure ("rule", s'', msg) ->
-                    ParserFailure ("rule", s'', msg)
-            |   ParserFailure (name, s'', msg) ->
-                    ParserSuccess ((sign', state', rules_db'), s') )
-    | ParserFailure (name, s', msg) -> ParserFailure (name, s', msg)
+            if sign' = empty_signature
+            then ParserSuccess ((sign', state', rules_db'), s')
+            else 
+            (   match definitions (signature_override sign sign', state_override state state') s' with
+                |   ParserSuccess ((sign'', state'', rules_db''), s'') ->
+                        ParserSuccess ((signature_override sign' sign'', state_override state' state'', rules_db_override rules_db' rules_db''), s'')
+                |   ParserFailure errors ->
+                        ParserFailure errors )
+    | ParserFailure errors -> ParserFailure errors
 
 //--------------------------------------------------------------------
 
 let make_parser parse_fct sign s =
     match (parse_fct sign >> ws_or_comment) (parser_input_from_string s) with
     |   ParserSuccess (r, _) -> r
-    |   ParserFailure (name, s', msg) -> failwith (parser_msg (ParserFailure (name, s', msg)))
+    |   ParserFailure errors -> failwith (parser_msg (ParserFailure errors))
 
 //--------------------------------------------------------------------
 // parser "API"
