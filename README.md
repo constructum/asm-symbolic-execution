@@ -32,13 +32,21 @@ dotnet run [OPTION]...
 ```
 
 ```
+Usage: dotnet run [OPTION]...
+
 Options:
   -str <strg>   load definitions specified in string <strg>
                   into the top-level environment
   -file <file>  load definitions contained in file <filename>
                   into top-level environment
 
-  -symbolic         symbolic execution of 'Main' rule (default)
-  -nonsymbolic      execute 'Main' rule non-symbolically
+  -symbolic     symbolic execution of 'Main' rule (default)
+  -nonsymbolic  execute 'Main' rule non-symbolically
 
-  -nosmt            do not use SMT solver
+  -turbo2basic  turbo ASM to basic ASM transformation
+                (all non-static functions are uninterpreted)
+
+  -nosmt        do not use SMT solver
+
+  -license      display license information
+```
