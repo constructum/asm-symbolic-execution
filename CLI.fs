@@ -17,6 +17,8 @@ let usage () =
             "  -file <file>  load definitions contained in file <filename>"
             "                  into top-level environment"
             ""
+            "  -asmeta       use AsmetaL as input language"
+            ""
             "  -symbolic     symbolic execution of 'Main' rule (default)"
             "  -nonsymbolic  execute 'Main' rule non-symbolically"
             ""
@@ -103,6 +105,7 @@ let CLI_with_ex(args) =
     else
         let symbolic = ref true
         let turbo2basic = ref false
+        let asmeta_flag = ref false
         let rec parse_arguments i = 
             let load option_str load_fct s =
                 if i + 1 < n
@@ -114,12 +117,13 @@ let CLI_with_ex(args) =
             if i < n then 
                 match args[i] with
                 |   "-license"         -> license (); exit 0
+                |   "-asmeta"          -> asmeta_flag := true;      parse_arguments (i+1)
                 |   "-symbolic"        -> symbolic := true;    parse_arguments (i+1)
                 |   "-nonsymbolic"     -> symbolic := false;   parse_arguments (i+1)
                 |   "-turbo2basic"     -> turbo2basic := true; parse_arguments (i+1)
                 |   "-nosmt"           -> SymbEval.use_smt_solver := false; parse_arguments (i+1)
-                |   "-str"  -> load "-str"  TopLevel.loadstr  (args[i+1]); parse_arguments (i+2)
-                |   "-file" -> load "-file" TopLevel.loadfile (args[i+1]); parse_arguments (i+2)
+                |   "-str"  -> load "-str"  (TopLevel.loadstr !asmeta_flag) (args[i+1]); parse_arguments (i+2)
+                |   "-file" -> load "-file" (TopLevel.loadfile !asmeta_flag) (args[i+1]); parse_arguments (i+2)
                 |   s -> writeln_err $"unknown option: {s}"; exit 1
         parse_arguments 0
         if !turbo2basic

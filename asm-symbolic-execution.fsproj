@@ -21,6 +21,7 @@
     <Compile Include="Eval.fsi" />
     <Compile Include="Eval.fs" />
     <Compile Include="Parser.fs" />
+    <Compile Include="AsmetaL.fs" />
     <Compile Include="SmtInterface.fs" />
     <Compile Include="TopLevel.fs" />
     <Compile Include="SymbEval.fs" />

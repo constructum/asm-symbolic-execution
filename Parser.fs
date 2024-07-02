@@ -14,15 +14,23 @@ let pcharf c = pcharsat c ""
 let one_line_comment :Parser<char list> =
     (pstring "//" << pmany (pcharf (fun c -> c <> '\r' && c <> '\n')) << pmany (pchar '\r') << pchar '\n' |>> fun _ -> [])
 
-let rec multiline_comment s : ParserResult<char list> =
+// ML style multiline comments
+let rec ML_multiline_comment s : ParserResult<char list> =
     let open_ = pstring "(*"
     let rest_ = pmany ( pmany (pcharf (fun c -> c <> '*'))
                        ++ ( pmany1 ( ( pchar '*' << pcharf (fun c -> c <> ')') )
                                 <|>   pchar '*') ) ) ++ (pchar ')') |>> fun _ -> []
     in ( open_ << rest_ ) s
+// C style multiline comments
+let rec C_multiline_comment s : ParserResult<char list> =
+    let open_ = pstring "/*"
+    let rest_ = pmany ( pmany (pcharf (fun c -> c <> '*'))
+                       ++ ( pmany1 ( ( pchar '*' << pcharf (fun c -> c <> '/') )
+                                <|>   pchar '*') ) ) ++ (pchar '/') |>> fun _ -> []
+    in ( open_ << rest_ ) s
 
 let comment =
-    one_line_comment <|> multiline_comment
+    one_line_comment <|> ML_multiline_comment <|> C_multiline_comment
 
 let ws_or_comment =
     pwhitespace << pmany (comment << pwhitespace) |>> List.concat             // for the moment only one-line comments are implemented
