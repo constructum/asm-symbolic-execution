@@ -32,13 +32,13 @@ dotnet run [OPTION]...
 ```
 
 ```
-Usage: dotnet run [OPTION]...
-
 Options:
   -str <strg>   load definitions specified in string <strg>
                   into the top-level environment
   -file <file>  load definitions contained in file <filename>
                   into top-level environment
+
+  -asmeta       use AsmetaL as input language
 
   -symbolic     symbolic execution of 'Main' rule (default)
   -nonsymbolic  execute 'Main' rule non-symbolically
