@@ -9,3 +9,5 @@
 bin
 
 examples/asmeta/STDL/.project
+examples-asmeta/.project
+.project
