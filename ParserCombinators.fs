@@ -80,6 +80,7 @@ let R2 p1 p2 : ('a * 'b) Parser = p1 >>= (fun x -> p2 >>= (fun y -> preturn (x, 
 let R3 p1 p2 p3 : ('a * 'b * 'c) Parser = p1 >>= (fun x1 -> p2 >>= (fun x2 -> p3 >>= (fun x3 -> preturn (x1, x2, x3))))
 let R4 p1 p2 p3 p4 : ('a * 'b * 'c * 'd) Parser = p1 >>= (fun x1 -> p2 >>= (fun x2 -> p3 >>= (fun x3 -> p4 >>= (fun x4 -> preturn (x1, x2, x3, x4)))))
 let R5 p1 p2 p3 p4 p5: ('a * 'b * 'c * 'd * 'e) Parser = p1 >>= (fun x1 -> p2 >>= (fun x2 -> p3 >>= (fun x3 -> p4 >>= (fun x4 -> p5 >>= (fun x5 -> preturn (x1, x2, x3, x4, x5))))))
+let R6 p1 p2 p3 p4 p5 p6: ('a * 'b * 'c * 'd * 'e * 'f) Parser = p1 >>= (fun x1 -> p2 >>= (fun x2 -> p3 >>= (fun x3 -> p4 >>= (fun x4 -> p5 >>= (fun x5 -> p6 >>= (fun x6 -> preturn (x1, x2, x3, x4, x5, x6)))))))
 
 
 

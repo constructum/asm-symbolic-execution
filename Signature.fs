@@ -43,16 +43,19 @@ type TYPE =
 | Integer
 | String
 | Rule
+| Prod of TYPE list
 
-let type_to_string = function
-|   TypeParam a -> "'" ^ a
-|   Undef -> "Undef"
-|   Boolean -> "Boolean"
-|   Integer -> "Integer"
-|   String -> "String"
-|   Rule -> "<Rule>"
+let rec type_to_string ty =
+    match ty with
+    |   TypeParam a -> "'" ^ a
+    |   Undef -> "Undef"
+    |   Boolean -> "Boolean"
+    |   Integer -> "Integer"
+    |   String -> "String"
+    |   Rule -> "<Rule>"
+    |   Prod tys -> "Prod(" ^ (tys |> type_list_to_string) ^ ")"
 
-let type_list_to_string tys =
+and type_list_to_string tys =
     tys >>| type_to_string |> String.concat ", "
 
 exception TypeMismatch of TYPE * TYPE
