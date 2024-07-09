@@ -12,7 +12,7 @@ signature:
 
 
 definitions:
-	function n = 5
+	function n = 3
 
 	main rule r_Main = seq
 		//--- sorting algorithm
@@ -38,6 +38,8 @@ definitions:
 	    endpar
 	endseq
 
+/*
+// some initialization for the simulator, to be commented out for symbolic execution
 
 default init s0:
 	function a($i in Integer) =
@@ -48,3 +50,4 @@ default init s0:
 			case 3 : 7
 			case 4 : 4
 		endswitch
+*/

@@ -66,6 +66,9 @@ let Term = Parser.term
 let popt_bool p =
     poption p |>> function None -> false | Some _ -> true
 
+let psep0 p sep =
+    poption (p ++ pmany (sep << p)) |>> function Some (x, xs) -> x::xs | None -> []
+
 let psep1 p sep =
     p ++ pmany (sep << p) |>> fun (x, xs) -> x::xs
 
@@ -113,10 +116,10 @@ let id_domain_to_type id_dom =
 
 let rec getDomainByID (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE>  =
         (   let StructuredTD = StructuredTD sign
-            (   (ID_DOMAIN |>> fun s -> id_domain_to_type s)
-            <|> (StructuredTD |>> fun _-> failwith "not implemented: structured type domain")) ) s
-    and StructuredTD (sign : SIGNATURE (*, state : STATE*) ) (s : ParserInput) : ParserResult<TYPE>  =
-        (   let getDomainByID  = getDomainByID (sign (* , state *) )
+            (   StructuredTD
+            <|> (ID_DOMAIN |>> fun s -> id_domain_to_type s)) ) s
+    and StructuredTD (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE>  =
+        (   let getDomainByID  = getDomainByID sign
             let RuleDomain     = kw "Rule" << opt_psep1 "(" getDomainByID "," ")" |>> fun _ -> failwith "RuleDomain not implemented"
             let ProductDomain  = kw "Prod" << opt_psep2 "(" getDomainByID "," ")" |>> Prod
             let SequenceDomain = kw "Seq"  << lit "(" << getDomainByID >> lit ")" |>> fun _ -> failwith "SequenceDomain not implemented"
@@ -175,6 +178,7 @@ let Function (sign : SIGNATURE, state : STATE) : Parser<FCT_NAME * FCT_INFO>  =
 let rec BasicRule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE>  =
     let Rule = Rule sign
     let Term = Term sign
+    let MacroCallRule = MacroCallRule sign
     let BlockRule = kw "par" << pmany1 Rule >> kw "endpar" |>> ParRule
     let ConditionalRule = R3 (kw "if" << Term) (kw "then" << Rule) (poption (kw "else" << Rule) |>> Option.defaultValue skipRule) >> kw "endif" |>> CondRule
     let ChooseRule = R4 (kw "choose" << psep1_lit ((ID_VARIABLE >> kw "in") ++ Term) ",") (kw "with" << Term) (kw "do" << Rule) (poption (kw "ifnone" << Rule))
@@ -182,7 +186,7 @@ let rec BasicRule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE>  =
     let ForallRule = R3 (kw "forall" << psep1_lit ((ID_VARIABLE >> kw "in") ++ Term) ",") (kw "with" << Term) (kw "do" << Rule)
                         |>> fun _ -> failwith "not implemented: forall rule"
     (   kw "skip" |>> fun _ -> skipRule
-//  <|> MacroCallRule
+    <|> MacroCallRule
     <|> BlockRule
     <|> ConditionalRule
     <|> ChooseRule
@@ -190,6 +194,10 @@ let rec BasicRule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE>  =
     // <|> LetRule
     // <|> ExtendRule
     ) s
+
+and MacroCallRule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE>  =
+    (   (ID_RULE >> lit "[") ++ (psep0 (Term sign) (lit ",") >> lit "]")
+            |>> fun _ -> failwith "not implemented: macro call rule" ) s
 
 and TurboRule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE>  =
     let Rule = Rule sign
@@ -250,7 +258,7 @@ let Asm (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNA
                 (   (pmany Domain) ++
                     (pmany Function)    )   ) 
                         |>> fun (_, fcts) ->
-                            List.fold (fun sign (f, fi) -> add_function_name f (fi.fct_kind, fi.fct_type, fi.infix_status) sign) sign fcts
+                            List.fold (fun sign (f, fi) -> add_function_name f (fi.fct_kind, fi.fct_type, fi.infix_status) sign) empty_signature fcts
     let Header = R3
                     (pmany ImportClause)
                     (pmany ExportClause)
@@ -261,20 +269,31 @@ let Asm (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNA
     match parse_asm_with_header s with
     |   ParserFailure x -> ParserFailure x
     |   ParserSuccess (((asyncr, modul, asm_name), (imports, exports, sign')), s') ->
-
-            let Term = Term sign'
-            let Rule = Rule sign'
+            let sign = signature_override sign sign'
+            let Term = Term sign
+            let Rule = Rule sign
+            let MacroCallRule = MacroCallRule sign
         
             let VariableTerm = ID_VARIABLE
             let parameter_list = opt_psep1 "(" ((VariableTerm >> (kw "in")) ++ getDomainByID) "," ")"
             let DomainDefinition = (kw "domain" << ID_DOMAIN) ++ (lit "=" << Term)
                                             |>> fun _ -> ()
             let FunctionDefinition = R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
-                                                |>> fun _ -> ()
-            let MacroDeclaration = R3 (poption (kw "macro") << kw "rule" << ID_RULE) parameter_list (lit "=" << Rule) |>> fun _ -> ()
-            let TurboDeclaration = R4 (kw "turbo" << kw "rule" << ID_RULE) parameter_list (poption (kw "in" << getDomainByID)) (lit "=" << Rule) |>> fun _ -> ()
+                                                |>> fun (f, param_list, t) ->
+                                                        //!!!! no type checking
+                                                        if List.length param_list > 0
+                                                        then failwith "not implemented: definition of function with arity > 0"
+                                                        else let fct = function [] -> Eval.eval_term t (State.background_state, Map.empty) | _ -> UNDEF
+                                                             fun state -> state_override_static state (Map.add f fct Map.empty)
+                                                        
+            let MacroDeclaration = R3 (poption (kw "macro") << kw "rule" << ID_RULE) parameter_list (lit "=" << Rule)
+                                        |>> fun (rname, param_list, r) ->
+                                                if List.length param_list > 0
+                                                then failwith "not implemented: definition of rule macros with arity > 0"
+                                                else (rname, r)
+            let TurboDeclaration = R4 (kw "turbo" << kw "rule" << ID_RULE) parameter_list (poption (kw "in" << getDomainByID)) (lit "=" << Rule)
+                                        |>> fun _ -> failwith "not implemented: turbo rule declaration"
             let RuleDeclaration = (MacroDeclaration <|> TurboDeclaration)
-                                                |>> fun _ -> ()
             let InvarConstraint = (kw "INVAR" << Term) |>> fun _ -> ()
             let JusticeConstraint = (kw "JUSTICE" << Term) |>> fun _ -> ()
             let CompassionConstraint = (kw "COMPASSION" << lit "(" << Term >> lit "," << Term >> lit ",") |>> fun _ -> ()
@@ -299,20 +318,30 @@ let Asm (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNA
                             (pmany InvarConstraint)
                             (pmany FairnessConstraint)
                             (pmany Property)       )
+            let DomainInitialization = (kw "domain" << ID_DOMAIN) ++ (lit "=" << Term)
+                                            |>> fun _ -> failwith "not implemented: initialization of domains"
+            let FunctionInitialization = R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
+                                            |>> fun _ -> failwith "not implemented: initialization of dynamic functions"
+            let AgentInitialization = (kw "agent" << ID_DOMAIN) ++ (lit ":" << MacroCallRule)
+                                            |>> fun _ -> failwith "not implemented: initialization of agents"
+            let Initialization = R4 (kw "init" << identifier >> lit ":")
+                                    (pmany DomainInitialization)
+                                    (pmany FunctionInitialization)
+                                    (pmany AgentInitialization) |>> fun _ -> ()
             let parse_asm_rest = 
-                Body >>
-                poption (kw "main" << MacroDeclaration) ++
-                skip_to_eos
-            // let initial_state = preturn ()
-            // let default_initial_state = preturn ()
-            // let parse_asm_with_header = asm_name ++ Header
+                R3
+                    Body
+                    (poption (kw "main" << MacroDeclaration))
+                    (poption (pmany Initialization ++ (kw "default" >> (pmany1 Initialization))))
+                >>  skip_to_eos
 
             match parse_asm_rest s' with
             |   ParserFailure x -> ParserFailure x
-            |   ParserSuccess ((_, _, _, _, _, _), s'') ->
-                    ParserSuccess ((sign', state, empty_rules_db), s'')
-                    //ParserSuccess (sign', state, empty_rules_db) s''
-
+            |   ParserSuccess (((_, function_definitions, rule_declarations, _, _, _), opt_main_rule_decl, opt_init), s'') ->
+                    let rule_declarations = rule_declarations @ (Option.fold (fun _ x -> [x]) [] opt_main_rule_decl)
+                    let rdb' = List.fold (fun rdb (rname, r) -> Map.add rname r rdb) empty_rules_db rule_declarations
+                    let state' = List.fold (fun state fct_def -> fct_def state) empty_state function_definitions
+                    ParserSuccess ( (sign', state', rdb'), s'')
 
 
 

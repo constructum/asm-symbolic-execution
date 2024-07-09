@@ -75,8 +75,8 @@ let license () =
             "" ]  |> String.concat "\n" )
 
 
-let exec_symbolic symb_exec_fct =
-    let R_in = try AST.get_rule "Main" (!TopLevel.rules) with _ -> failwith "rule 'Main' not defined"
+let exec_symbolic symb_exec_fct main_rule_name =
+    let R_in = try AST.get_rule main_rule_name (!TopLevel.rules) with _ -> failwith $"rule '{main_rule_name}' not defined"
     let print_time (cpu, usr, sys) =
         writeln $"\n--- CPU time: {((float cpu) / 1000.0)}s (usr: {((float usr) / 1000.0)}s, sys: {((float sys) / 1000.0)}s)"
     match Common.time symb_exec_fct R_in with
@@ -92,8 +92,8 @@ let exec_symbolic symb_exec_fct =
             raise ex
     |   _ -> failwith "Failure: no result and no exception"
 
-let exec_nonsymbolic () =
-    let R = try AST.get_rule "Main" (!TopLevel.rules) with _ -> failwith "rule 'Main' not defined"
+let exec_nonsymbolic main_rule_name =
+    let R = try AST.get_rule main_rule_name (!TopLevel.rules) with _ -> failwith $"rule '{main_rule_name}' not defined"
     let R_pretty = R |> AST.pp_rule (!TopLevel.signature) |> PrettyPrinting.toString 80
     writeln $"{R_pretty}\n\n  -->\n"
     Updates.show_update_set sign (Eval.eval_rule R (!TopLevel.initial_state, Map.empty)) |> writeln
@@ -106,6 +106,7 @@ let CLI_with_ex(args) =
         let symbolic = ref true
         let turbo2basic = ref false
         let asmeta_flag = ref false
+        let main_rule_name = ref "Main"
         let rec parse_arguments i = 
             let load option_str load_fct s =
                 if i + 1 < n
@@ -117,7 +118,7 @@ let CLI_with_ex(args) =
             if i < n then 
                 match args[i] with
                 |   "-license"         -> license (); exit 0
-                |   "-asmeta"          -> asmeta_flag := true;      parse_arguments (i+1)
+                |   "-asmeta"          -> asmeta_flag := true; main_rule_name := "r_Main"; parse_arguments (i+1)
                 |   "-symbolic"        -> symbolic := true;    parse_arguments (i+1)
                 |   "-nonsymbolic"     -> symbolic := false;   parse_arguments (i+1)
                 |   "-turbo2basic"     -> turbo2basic := true; parse_arguments (i+1)
@@ -127,10 +128,10 @@ let CLI_with_ex(args) =
                 |   s -> writeln_err $"unknown option: {s}"; exit 1
         parse_arguments 0
         if !turbo2basic
-        then exec_symbolic SymbEval.symbolic_execution_for_turbo_asm_to_basic_asm_transformation
+        then exec_symbolic SymbEval.symbolic_execution_for_turbo_asm_to_basic_asm_transformation (!main_rule_name)
         else if !symbolic
-        then exec_symbolic SymbEval.symbolic_execution
-        else exec_nonsymbolic ()
+        then exec_symbolic SymbEval.symbolic_execution (!main_rule_name)
+        else exec_nonsymbolic (!main_rule_name)
         0
 
 let CLI(args) =

@@ -1,4 +1,4 @@
-asm matrixmult
+asm matrixmult2
 
 import ../STDL/StandardLibrary.asm
 
@@ -9,7 +9,7 @@ signature:
 	static p : Integer
 	controlled a : Prod(Integer, Integer) -> Integer
 	controlled b : Prod(Integer, Integer) -> Integer
-	controlled c : Prod(Integer, Integer) -> Integer
+	controlled c : Prod(Integer, Integer) -> Prod(Integer, Integer)
 	controlled ii : Integer
 	controlled j : Integer
 	controlled k : Integer
@@ -27,11 +27,11 @@ definitions:
 		        j := 1
 		        while (j <= p) do seq
 		            par
-		            	c(ii, j) := 0
+		            	c(ii, j) := (0, 0)
 		            	k := 1
 		            endpar
 		            while (k <= n) do par
-		                c (ii, j) := c (ii, j) + a (ii, k) * b (k, j)
+		                c (ii, j) := (first (c (ii, j)) + a (ii, k) * b (k, j), second( c(ii, j) ) + 1)
 		                k := k + 1
 		            endpar
 		            j := j + 1
@@ -69,4 +69,4 @@ default init s0:
 			case (3, 3) : 11
 			case (3, 4) : 12
 		endswitch
-*/
+ */
