@@ -1,1 +1,1 @@
-time dotnet run -asmeta -symbolic $4 -str "static m : Integer = $1" -str "static n : Integer = $2" -str "static p : Integer = $3" -file examples/matrixmult/matrixmult.asm
+time dotnet run -asmeta -turbo2basic -file examples-asmeta/matrixmult/matrixmult.asm

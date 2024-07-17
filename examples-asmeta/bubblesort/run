@@ -1,1 +1,1 @@
-time dotnet run -asmeta -symbolic $2 -str "static n : Integer = $1" -file examples/bubblesort/bubblesort.asm
+time dotnet run -asmeta -turbo2basic $2 -file examples-asmeta/bubblesort/bubblesort.asm
