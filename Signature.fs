@@ -43,6 +43,7 @@ type TYPE =
 | Integer
 | String
 | Rule
+| BaseType of string
 | Prod of TYPE list
 
 let rec type_to_string ty =
@@ -53,6 +54,7 @@ let rec type_to_string ty =
     |   Integer -> "Integer"
     |   String -> "String"
     |   Rule -> "<Rule>"
+    |   BaseType s -> s
     |   Prod tys -> "Prod(" ^ (tys |> type_list_to_string) ^ ")"
 
 and type_list_to_string tys =

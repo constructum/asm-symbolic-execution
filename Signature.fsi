@@ -35,6 +35,7 @@ type TYPE =
 | Integer
 | String
 | Rule
+| BaseType of string
 | Prod of TYPE list
 
 val type_to_string : TYPE -> string

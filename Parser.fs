@@ -9,28 +9,41 @@ open AST
 
 //--------------------------------------------------------------------
 
+let trace = ref 0
+
+//--------------------------------------------------------------------
+
 let pcharf c = pcharsat c ""
 
-let one_line_comment :Parser<char list> =
-    (pstring "//" << pmany (pcharf (fun c -> c <> '\r' && c <> '\n')) << pmany (pchar '\r') << pchar '\n' |>> fun _ -> [])
+let one_line_comment :Parser<string> =
+    R4  (pstring "//" |>> implode)
+        (pmany (pcharf (fun c -> c <> '\r' && c <> '\n')) |>> implode)
+        (pmany (pchar '\r') |>> implode)
+        (pchar '\n' |>> fun c -> implode [c]) |>> fun (s1, s2, s3, s4) -> s1 + s2 + s3 + s4
 
 // ML style multiline comments
-let rec ML_multiline_comment s : ParserResult<char list> =
+let rec ML_multiline_comment (s : ParserInput) : ParserResult<string> =
     let open_ = pstring "(*"
-    let rest_ = pmany ( pmany (pcharf (fun c -> c <> '*'))
-                       ++ ( pmany1 ( ( pchar '*' << pcharf (fun c -> c <> ')') )
-                                <|>   pchar '*') ) ) ++ (pchar ')') |>> fun _ -> []
-    in ( open_ << rest_ ) s
-// C style multiline comments
-let rec C_multiline_comment s : ParserResult<char list> =
+    let close_ = pstring "*)"
+    let inside = pmany (    ( pcharf (fun c -> c <> '*' && c <> ')') |>> fun c -> [c])
+                        <|> ((pchar '(') ++ pcharf (fun c -> c <> '*') |>> fun (c1,c2) -> [c1;c2])
+                        <|> ((pchar '*') ++ pcharf (fun c -> c <> ')') |>> fun (c1,c2) -> [c1;c2])
+                        <|> (fun input -> (ML_multiline_comment |>> explode) input) )  |>> List.concat
+    in ( R3 open_ inside close_ |>> fun (s1, s2, s3) ->  (implode s1 + implode s2 + implode s3) ) s
+
+let rec C_multiline_comment (s : ParserInput) : ParserResult<string> =
     let open_ = pstring "/*"
-    let rest_ = pmany ( pmany (pcharf (fun c -> c <> '*'))
-                       ++ ( pmany1 ( ( pchar '*' << pcharf (fun c -> c <> '/') )
-                                <|>   pchar '*') ) ) ++ (pchar '/') |>> fun _ -> []
-    in ( open_ << rest_ ) s
+    let close_ = pstring "*/"
+    let inside = pmany (    ( pcharf (fun c -> c <> '*' && c <> '/') |>> fun c -> [c])
+                        <|> ((pchar '/') ++ pcharf (fun c -> c <> '*') |>> fun (c1,c2) -> [c1;c2])
+                        <|> ((pchar '*') ++ pcharf (fun c -> c <> '/') |>> fun (c1,c2) -> [c1;c2])
+                        <|> (fun input -> (C_multiline_comment |>> explode) input) )  |>> List.concat
+    in ( R3 open_ inside close_ |>> fun (s1, s2, s3) ->  (implode s1 + implode s2 + implode s3) ) s
 
 let comment =
-    one_line_comment <|> ML_multiline_comment <|> C_multiline_comment
+    (   ( one_line_comment <|> ML_multiline_comment <|> C_multiline_comment )
+    |>> fun s -> ( (if !trace > 0 then fprintf stderr "comment:\n%s\n" s else ());
+                    s )   )    
 
 let ws_or_comment =
     pwhitespace << pmany (comment << pwhitespace) |>> List.concat             // for the moment only one-line comments are implemented

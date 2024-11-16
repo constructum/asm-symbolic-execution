@@ -9,6 +9,10 @@ open AST
 
 //--------------------------------------------------------------------
 
+let trace = ref 0
+
+//--------------------------------------------------------------------
+
 type ASM_Content = {
     asyncr_module_name : bool * bool * string;
     imports : (string * string list option) list;
@@ -53,6 +57,7 @@ let kw kw_name =
     (   (ws_or_comment << (pmany1 pletter)) )
             >>= fun s -> if s = explode kw_name then preturn s
                          else pfail_msg "keyword" ($"keyword '{kw_name}' expected, '{implode s}' found")
+
 
 let alphanumeric_identifier =
     ws_or_comment << (pletter ++ (pmany palphanum_))
@@ -112,7 +117,8 @@ let id_domain_to_type id_dom =
     |   "Integer" -> Integer
     |   "String" -> String
     |   "Undef" -> Undef
-    |   _ -> failwith $"id_domain_to_type: unknown type {id_dom}"
+    |   _ -> BaseType id_dom        // !!! should check that it is indeed declared as a domain
+//  !!!!    |   _ -> failwith $"id_domain_to_type: unknown type {id_dom}"
 
 let rec getDomainByID (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE>  =
         (   let StructuredTD = StructuredTD sign
@@ -176,21 +182,29 @@ let Function (sign : SIGNATURE, state : STATE) : Parser<FCT_NAME * FCT_INFO>  =
 
 
 let rec BasicRule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE>  =
+    if (!trace > 0) then fprintf stderr "BasicRule: " // "BasicRule: %s" (ParserInput.to_string s)
     let Rule = Rule sign
     let Term = Term sign
-    let MacroCallRule = MacroCallRule sign
     let BlockRule = kw "par" << pmany1 Rule >> kw "endpar" |>> ParRule
     let ConditionalRule = R3 (kw "if" << Term) (kw "then" << Rule) (poption (kw "else" << Rule) |>> Option.defaultValue skipRule) >> kw "endif" |>> CondRule
+    let VariableTerm = ID_VARIABLE
+    let LetRule    = R2 (kw "let" << lit "(" << (psep1_lit (VariableTerm >> lit "=" << Term) ",") >> lit ")")
+                        (kw "in" << Rule)
+                        |>> fun _ -> failwith "not implemented: let rule"
     let ChooseRule = R4 (kw "choose" << psep1_lit ((ID_VARIABLE >> kw "in") ++ Term) ",") (kw "with" << Term) (kw "do" << Rule) (poption (kw "ifnone" << Rule))
                         |>> fun _ -> failwith "not implemented: choose rule"
     let ForallRule = R3 (kw "forall" << psep1_lit ((ID_VARIABLE >> kw "in") ++ Term) ",") (kw "with" << Term) (kw "do" << Rule)
                         |>> fun _ -> failwith "not implemented: forall rule"
+    let MacroCallRule = MacroCallRule sign
+    
+    // /* AsmetaL grammar */    LetRule 	::= 	<LET> "(" VariableTerm "=" Term ( "," VariableTerm "=" Term )* ")" <IN> Rule <ENDLET> 
     (   kw "skip" |>> fun _ -> skipRule
-    <|> MacroCallRule
     <|> BlockRule
     <|> ConditionalRule
+    <|> LetRule
     <|> ChooseRule
     <|> ForallRule
+    <|> MacroCallRule
     // <|> LetRule
     // <|> ExtendRule
     ) s
@@ -309,7 +323,7 @@ let Asm (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNA
             let CtlSpec = kw "CTLSPEC" << poption (ID_CTL >> lit ":") ++ Term   |>> fun _ -> ()
             let LtlSpec = kw "LTLSPEC" << poption (ID_LTL >> lit ":") ++ Term   |>> fun _ -> ()
             let TemporalProperty = CtlSpec <|> LtlSpec
-            let Property = Invariant <|> TemporalProperty
+            let Property = (Invariant <|> TemporalProperty)
             let Body =
                     (   (kw "definitions" >> lit ":") <<
                         R6  (pmany DomainDefinition)
