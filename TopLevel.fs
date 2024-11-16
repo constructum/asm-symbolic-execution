@@ -32,13 +32,17 @@ let reset () =
 //--------------------------------------------------------------------
 
 let loadstr (asmeta_flag : bool) contents =
-    let parse_definitions = if not asmeta_flag then Parser.parse_definitions else AsmetaL.parse_definitions
+    let parse_definitions s sign =
+        if not asmeta_flag
+        then Parser.parse_definitions s sign
+        else AsmetaL.parse_definitions s sign |> AsmetaL.extract_definitions_from_asmeta
     let (new_sign, new_state, new_rules_db) = parse_definitions (!signature, !initial_state) contents
     signature     := signature_override !signature new_sign
     initial_state := state_with_signature (state_override (!initial_state) new_state) !signature
     rules         := rules_db_override !rules new_rules_db
     smt_add_functions smt_ctx (new_sign, new_state)
 
-let loadfile (asmeta_flag : bool) filename = Common.readfile (filename) |> loadstr asmeta_flag
+let loadfile (asmeta_flag : bool) filename =
+    Common.readfile (filename) |> loadstr asmeta_flag
 
 //--------------------------------------------------------------------

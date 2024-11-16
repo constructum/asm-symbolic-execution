@@ -47,5 +47,7 @@ let time f args =
         (None, Some ex, elapsed_time, cpu, usr, sys)
 
 let readfile filename =
-    (System.IO.File.ReadAllText filename)
+    try System.IO.File.ReadAllText filename
+    with   :? System.IO.IOException as ex -> failwith (sprintf "error while trying to read file '%s'\nI/O error:\n%s\n" filename ex.Message)
+         | _ -> failwith (sprintf "readfile('%s'): unrecognized exception" filename)
 

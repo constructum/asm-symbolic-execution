@@ -9,36 +9,48 @@ open AST
 
 //--------------------------------------------------------------------
 
-let trace = ref 0
+let trace = ref 1
 
 //--------------------------------------------------------------------
 
-type ASM_Content = {
-    asyncr_module_name : bool * bool * string;
-    imports : (string * string list option) list;
-    exports : string list option;     // None means all are exported ("export*")
-    signature : unit;
-    definitions : unit;
+type ASM_Definitions = {
+    functions : STATE;
+    rules : RULES_DB;
 }
 
-type ASM = ASM of ASM_Content
+type ASM_Content = {
+    name : string;
+    is_module : bool;
+    is_asyncr : bool;
+    imports : (string * ASM * string list option) list;
+    exports : string list option;     // None means all are exported ("export*")
+    signature : SIGNATURE;
+    definitions : ASM_Definitions;
+}
+
+and ASM = ASM of ASM_Content   // "asm" or "module" content
 
 //--------------------------------------------------------------------
 
 let asm_content (asyncr_module_name as (asyncr : bool, modul : bool, name : string))
-                (imports : (string * string list option) list)
+                (imports : (string * ASM * string list option) list)
                 (exports : string list option)
-                (signature : unit)
-                (definitions : unit) : ASM_Content =
+                (signature : SIGNATURE)
+                (definitions : ASM_Definitions) : ASM_Content =
     {
-        asyncr_module_name = asyncr_module_name;
+        name = name;
+        is_module = modul;
+        is_asyncr = asyncr;
         imports = imports;
         exports = exports;
         signature = signature;
-        definitions = definitions;
+        definitions = {
+            functions = definitions.functions;
+            rules     = definitions.rules;
+        };
     }
 
-let mkAsm (asyncr : bool, modul : bool, name : string) (imports : (string * string list option) list) (exports : string list option) (signature : unit) (definitions : unit) : ASM =
+let mkAsm (asyncr : bool, modul : bool, name : string) (imports : (string * ASM * string list option) list) (exports : string list option) (signature : SIGNATURE) (definitions : ASM_Definitions) : ASM =
     ASM (asm_content (asyncr, modul, name) imports exports signature definitions)
 
 //--------------------------------------------------------------------
@@ -253,15 +265,32 @@ and Rule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE> =
 
 
 
-let Asm (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNATURE * STATE * RULES_DB>  =
+let rec Asm (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<ASM>  =
     let getDomainByID = getDomainByID (sign (*, state *) )
     let (Domain, Function) = (Domain (sign, state), Function (sign, state))
-    let asm_name =
+    let isAsyncr_isModule_name =
             (   ( (poption (kw "asyncr")) ++ (kw "asm" << identifier) |>> fun (asyncr, name) -> (asyncr.IsSome, false, name) )
             <|> ( (poption (kw "asyncr")) ++ (kw "module" << identifier) |>> fun (asyncr, name) -> (asyncr.IsSome, true, name) ) )
+    let parse_imported_module mod_id =
+        if (!trace > 0) then fprintf stderr "importing module: '%s'\n" mod_id
+        let saved_dir = System.IO.Directory.GetCurrentDirectory ()
+        let filename = mod_id + ".asm"
+        let full_path = System.IO.Path.GetFullPath filename
+        let new_dir = System.IO.Path.GetDirectoryName filename |> fun s -> if s = "" then "." else s
+        // move to directory where the imported file is located
+        // in order to correctly resolve the relative paths of modules
+        // that may be imported in the imported module
+        System.IO.Directory.SetCurrentDirectory new_dir
+        let text = Common.readfile full_path
+        let parse = Parser.make_parser Asm (sign, state)
+        let imported_module = parse text        // !!! checks missing (e.g. check that it is a 'module' and not an 'asm', etc.)
+        // move to original directory (where the importing file is located)
+        System.IO.Directory.SetCurrentDirectory saved_dir
+        imported_module
     let ImportClause = 
-            (   (kw "import" << MOD_ID (* or string, according to orig. grammar *)) ++ (poption (lit "(" << (psep1_lit identifier ",") >> lit ")"))
-            |>> fun (name, opt_names) -> (name, opt_names) )
+            (   (kw "import" << MOD_ID (* or string, according to orig. grammar *))
+                ++ (poption (lit "(" << (psep1_lit identifier ",") >> lit ")"))
+            |>> fun (mod_name, opt_imported_names) -> (mod_name, parse_imported_module mod_name, opt_imported_names) )     // !!! tbd: the 'opt_names' for the objects to import is not used
                     // imports : (string * string list option) list;
     let ExportClause =
             (   (kw "export" << (psep1_lit identifier ",")) |>> fun names -> Some names
@@ -275,10 +304,10 @@ let Asm (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNA
                             List.fold (fun sign (f, fi) -> add_function_name f (fi.fct_kind, fi.fct_type, fi.infix_status) sign) empty_signature fcts
     let Header = R3
                     (pmany ImportClause)
-                    (pmany ExportClause)
+                    (poption ExportClause |>> Option.defaultValue None)
                     Signature
     
-    let parse_asm_with_header = asm_name ++ Header
+    let parse_asm_with_header = isAsyncr_isModule_name ++ Header
 
     match parse_asm_with_header s with
     |   ParserFailure x -> ParserFailure x
@@ -355,13 +384,30 @@ let Asm (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNA
                     let rule_declarations = rule_declarations @ (Option.fold (fun _ x -> [x]) [] opt_main_rule_decl)
                     let rdb' = List.fold (fun rdb (rname, r) -> Map.add rname r rdb) empty_rules_db rule_declarations
                     let state' = List.fold (fun state fct_def -> fct_def state) empty_state function_definitions
-                    ParserSuccess ( (sign', state', rdb'), s'')
+                    let result = ASM {
+                        name      = asm_name;
+                        is_module = modul;
+                        is_asyncr = asyncr;
+                        imports   = imports;
+                        exports   = exports;
+                        signature = sign;
+                        definitions = {
+                            functions = state';
+                            rules = rdb';
+                        };
+                    }
+                    ParserSuccess ( result, s'')
+
+let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB =
+    match asm with
+    |   ASM (asm_content) ->
+            let sign  = asm_content.signature
+            let state = state_with_signature asm_content.definitions.functions sign
+            let rdb   = asm_content.definitions.rules
+            (sign, state, rdb)
 
 
-
-let make_parser = Parser.make_parser
-
-let parse_definitions (sign, S) s = make_parser Asm (sign, S) s
+let parse_definitions (sign, S) s = Parser.make_parser Asm (sign, S) s
 
 
 

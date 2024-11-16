@@ -98,6 +98,17 @@ let exec_nonsymbolic main_rule_name =
     writeln $"{R_pretty}\n\n  -->\n"
     Updates.show_update_set sign (Eval.eval_rule R (!TopLevel.initial_state, Map.empty)) |> writeln
 
+let loadfile (asmeta_flag : bool) relative_path_of_file =
+    let base_path = System.IO.Directory.GetCurrentDirectory ()
+    let full_path = System.IO.Path.GetFullPath (relative_path_of_file, base_path)
+    // move to directory where the loaded file is located
+    // in order to correctly resolve the relative paths of the imported modules
+    System.IO.Directory.SetCurrentDirectory (System.IO.Path.GetDirectoryName full_path)
+    let result = TopLevel.loadfile asmeta_flag full_path
+    // move to original directory (where the CLI was called)
+    System.IO.Directory.SetCurrentDirectory base_path
+    result
+
 let CLI_with_ex(args) =
     let n = Array.length args
     if n = 0
@@ -124,7 +135,7 @@ let CLI_with_ex(args) =
                 |   "-turbo2basic"     -> turbo2basic := true; parse_arguments (i+1)
                 |   "-nosmt"           -> SymbEval.use_smt_solver := false; parse_arguments (i+1)
                 |   "-str"  -> load "-str"  (TopLevel.loadstr !asmeta_flag) (args[i+1]); parse_arguments (i+2)
-                |   "-file" -> load "-file" (TopLevel.loadfile !asmeta_flag) (args[i+1]); parse_arguments (i+2)
+                |   "-file" -> load "-file" (loadfile !asmeta_flag) (args[i+1]); parse_arguments (i+2)
                 |   s -> writeln_err $"unknown option: {s}"; exit 1
         parse_arguments 0
         if !turbo2basic
