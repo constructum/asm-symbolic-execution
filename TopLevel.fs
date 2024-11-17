@@ -59,10 +59,10 @@ let reset asmeta_flag =
 //--------------------------------------------------------------------
 
 let loadstr (asmeta_flag : bool) contents =
-    let parse_definitions s sign =
+    let parse_definitions (sign, S) s =
         if not asmeta_flag
-        then Parser.parse_definitions s sign
-        else AsmetaL.parse_definitions s sign |> AsmetaL.extract_definitions_from_asmeta
+        then Parser.parse_definitions (sign, S) s
+        else AsmetaL.parse_definitions (sign, S) s |> AsmetaL.extract_definitions_from_asmeta
     // note: exceptions are thrown if the environment (signature, initial state, rules) is not initialised (by 'Option.get')
     let (new_sign, new_state, new_rules_db) = parse_definitions (signature (), initial_state ()) contents
     signature_    := Some (signature_override (signature ()) new_sign)  //

@@ -6,12 +6,13 @@ type Position = { abs : int; line : int; col : int; }
 let initial_position = { abs = 0; line = 1; col = 1; }
 
 type FailedAt = Position * string
-type 'user_state ParserInput = Set<FailedAt> * Position * 'user_state * char list             // position, stream
+type 'parser_state ParserInput = Set<FailedAt> * Position * 'parser_state * char list             // position, stream
 
 let parser_input_in_state_from_string state0 s = (Set.empty, initial_position, state0, explode s)
 let get_failures : 'a ParserInput -> Set<FailedAt> = fun (failures, _, _, _) -> failures
 let get_pos : 'a ParserInput -> Position = fun (_, pos, _, _) -> pos
-let get_user_state : 'a ParserInput -> 'a = fun (_, _, user_state, _) -> user_state
+let get_parser_state : 'a ParserInput -> 'a = fun (_, _, parser_state, _) -> parser_state
+let chg_parser_state : 'a ParserInput -> 'b -> 'b ParserInput = fun (failure, pos, _, stream) parser_state' -> (failure, pos, parser_state', stream)
 let get_stream : 'a ParserInput -> char list = fun (_, _, _,stream) -> stream
 
 let input_abs_pos (_, pos, _, _) = pos.abs
@@ -28,6 +29,20 @@ type ('result, 'state) ParserResult =
     
 type ('result, 'state) Parser = 'state ParserInput -> ParserResult<'result, 'state>
 
+
+let (>>=) (p: Parser<'a, 'state>) (f: 'a -> Parser<'b, 'state>) : Parser<'b, 'state> =
+    fun input ->
+        match p input with
+        |   ParserSuccess(x, rest) -> (f x) rest
+        |   ParserFailure failures -> ParserFailure failures
+
+
+// change parser state
+let (||>>) (p: Parser<'a, 'state1>) (f: 'state1 -> 'state2) (s : ParserInput<'state1>): ParserResult<'a, 'state2> =
+    match p s with
+    |   ParserSuccess (result, (failure', pos', state', stream')) -> ParserSuccess (result, (failure', pos', f state', stream'))
+    |   ParserFailure failures -> ParserFailure failures
+       
 let combine_failures (failures1 : Set<FailedAt>, failures2 : Set<FailedAt>) =
     if Set.isEmpty failures1 then failures2
     else if Set.isEmpty failures2 then failures1
@@ -68,12 +83,6 @@ let pletter s = pcharsat (fun c -> System.Char.IsLetter c) "letter" s
 let palphanum s = pcharsat (fun c -> System.Char.IsLetterOrDigit c) "alphanumeric character" s
 let palphanum_ s = pcharsat (fun c -> System.Char.IsLetterOrDigit c || c = '_') "alphanumeric character or '_'" s
     
-let (>>=) (p: Parser<'a, 'state>) (f: 'a -> Parser<'b, 'state>) : Parser<'b, 'state> =
-    fun input ->
-        match p input with
-        |   ParserSuccess(x, rest) -> (f x) rest
-        |   ParserFailure failures -> ParserFailure failures
-
 let (<<) p1 p2 : Parser<'b, 'state> = p1 >>= (fun _ -> p2)
 let (>>) (p1 : Parser<'a, 'state>) (p2 : Parser<'b, 'state>) : Parser<'a, 'state> = p1 >>= (fun x -> p2 >>= (fun y -> preturn x))
 let (++) p1 p2 : Parser<'a * 'b, 'state> = p1 >>= (fun x -> p2 >>= (fun y -> preturn (x, y)))
@@ -89,7 +98,7 @@ let (<|>) (p1: Parser<'a, 'state>) (p2: Parser<'a, 'state>) : Parser<'a, 'state>
     fun stream ->
         match p1 stream with
         |   ParserFailure failures1 ->
-                let stream' = (failures1, get_pos stream, get_user_state stream, get_stream stream)
+                let stream' = (failures1, get_pos stream, get_parser_state stream, get_stream stream)
                 (   match p2 stream' with
                     |   ParserFailure failures2 ->
                             ParserFailure (combine_failures (failures1, failures2))
