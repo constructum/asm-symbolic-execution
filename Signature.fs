@@ -93,6 +93,7 @@ type RULE_INFO = {
 }
 
 type NAME_INFO =
+|   TypeParamInfo of unit       // names used for type parameters (declared using 'anydomain' in AsmetaL)
 |   FctInfo of FCT_INFO
 |   RuleInfo of RULE_INFO
 
@@ -113,14 +114,23 @@ let add_rule_name rule_name rule_type (sign : SIGNATURE) =
 let is_name_defined name (sign : SIGNATURE) =
     Map.containsKey name sign
 
-let is_function_name fct_name (sign : SIGNATURE) =
-    try match (Map.find fct_name sign) with
+let is_type_param_name name (sign : SIGNATURE) =
+    try match (Map.find name sign) with
+        |   TypeParamInfo _ -> true
+        |   FctInfo fi  -> false
+        |   RuleInfo ri -> false
+    with _ -> false
+
+let is_function_name name (sign : SIGNATURE) =
+    try match (Map.find name sign) with
+        |   TypeParamInfo _ -> false
         |   FctInfo fi  -> true
         |   RuleInfo ri -> false
     with _ -> false
 
-let is_rule_name fct_name (sign : SIGNATURE) =
-    try match (Map.find fct_name sign) with
+let is_rule_name name (sign : SIGNATURE) =
+    try match (Map.find name sign) with
+        |   TypeParamInfo _ -> false
         |   FctInfo fi  -> false
         |   RuleInfo ri -> true
     with _ -> false
@@ -129,8 +139,9 @@ let fct_names sign  = Set.ofSeq (Map.keys sign) |> Set.filter (fun name -> is_fu
 let rule_names sign = Set.ofSeq (Map.keys sign) |> Set.filter (fun name -> is_rule_name name sign)
 
 // arity is for both function and rule names
-let arity fct_name (sign : SIGNATURE) =
-    match (Map.find fct_name sign) with
+let arity name (sign : SIGNATURE) =
+    match (Map.find name sign) with
+    |   TypeParamInfo _  -> failwith (sprintf "arity called for type parameter name '%s'" name)
     |   FctInfo fi  -> List.length (fst fi.fct_type)
     |   RuleInfo ri -> List.length ri.rule_type
 

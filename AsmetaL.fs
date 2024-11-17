@@ -150,7 +150,7 @@ let rec getDomainByID (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE> 
             kw "domain" << ID_DOMAIN >> kw "subsetof" << getDomainByID |>> fun _ -> failwith "not implemented: concrete domain" ) s
     and TypeDomain (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<TYPE>  =
         (   let StructuredTD = StructuredTD (sign (*, state *) )
-            let AnyDomain = kw "anydomain" >> ID_DOMAIN |>> fun _ -> failwith "not implemented: anydomain"
+            let AnyDomain = kw "anydomain" >> ID_DOMAIN |>> fun _ -> TypeParam "_"
             let EnumTD = (kw "enum" << kw "domain" << ID_DOMAIN) ++ (lit "=" << lit "{" << psep1 EnumElement (lit "," <|> lit "|") >> lit "}")
                                 |>> fun _ -> failwith "not implemented: enum type domain"
             let AbstractTD = (popt_bool (kw "dynamic") >> kw "abstract" >> kw "domain") ++ ID_DOMAIN

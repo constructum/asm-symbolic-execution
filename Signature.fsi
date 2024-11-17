@@ -52,6 +52,7 @@ type RULE_INFO = {
 }
 
 type NAME_INFO =
+|   TypeParamInfo of unit       // names used for type parameters (declared using 'anydomain' in AsmetaL)
 |   FctInfo of FCT_INFO
 |   RuleInfo of RULE_INFO
 

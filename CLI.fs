@@ -76,13 +76,13 @@ let license () =
 
 
 let exec_symbolic symb_exec_fct main_rule_name =
-    let R_in = try AST.get_rule main_rule_name (!TopLevel.rules) with _ -> failwith $"rule '{main_rule_name}' not defined"
+    let R_in = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
     let print_time (cpu, usr, sys) =
         writeln $"\n--- CPU time: {((float cpu) / 1000.0)}s (usr: {((float usr) / 1000.0)}s, sys: {((float sys) / 1000.0)}s)"
     match Common.time symb_exec_fct R_in with
     |   (Some (no_of_leaves, R_out), _, _, cpu, usr, sys) ->
             write "\n\n--- generated rule:\n"
-            PrettyPrinting.pr stdout 80 (AST.pp_rule (!TopLevel.signature) R_out)
+            PrettyPrinting.pr stdout 80 (AST.pp_rule (TopLevel.signature ()) R_out)
             write $"\n\n--- size of generated rule: {(AST.rule_size R_out)}\n"
             write $"\n--- number of leaves in decision tree: {no_of_leaves}\n" // (no_of_leaves)
             print_time (cpu, usr, sys)
@@ -93,10 +93,10 @@ let exec_symbolic symb_exec_fct main_rule_name =
     |   _ -> failwith "Failure: no result and no exception"
 
 let exec_nonsymbolic main_rule_name =
-    let R = try AST.get_rule main_rule_name (!TopLevel.rules) with _ -> failwith $"rule '{main_rule_name}' not defined"
-    let R_pretty = R |> AST.pp_rule (!TopLevel.signature) |> PrettyPrinting.toString 80
+    let R = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
+    let R_pretty = R |> AST.pp_rule (TopLevel.signature ()) |> PrettyPrinting.toString 80
     writeln $"{R_pretty}\n\n  -->\n"
-    Updates.show_update_set sign (Eval.eval_rule R (!TopLevel.initial_state, Map.empty)) |> writeln
+    Updates.show_update_set sign (Eval.eval_rule R (TopLevel.initial_state (), Map.empty)) |> writeln
 
 let loadfile (asmeta_flag : bool) relative_path_of_file =
     let base_path = System.IO.Directory.GetCurrentDirectory ()
@@ -109,6 +109,11 @@ let loadfile (asmeta_flag : bool) relative_path_of_file =
     System.IO.Directory.SetCurrentDirectory base_path
     result
 
+
+type ObjectToLoad =
+|   Str of string
+|   File of string
+
 let CLI_with_ex(args) =
     let n = Array.length args
     if n = 0
@@ -117,27 +122,28 @@ let CLI_with_ex(args) =
         let symbolic = ref true
         let turbo2basic = ref false
         let asmeta_flag = ref false
+        let objects_to_load = ref []
         let main_rule_name = ref "Main"
         let rec parse_arguments i = 
-            let load option_str load_fct s =
-                if i + 1 < n
-                then let s = args[i+1]
-                     let len = String.length s
-                     writeln_err $"{option_str} {s}"
-                     load_fct (args[i+1])
-                else writeln_err $"parameter missing after {option_str}"
             if i < n then 
                 match args[i] with
-                |   "-license"         -> license (); exit 0
-                |   "-asmeta"          -> asmeta_flag := true; main_rule_name := "r_Main"; parse_arguments (i+1)
-                |   "-symbolic"        -> symbolic := true;    parse_arguments (i+1)
-                |   "-nonsymbolic"     -> symbolic := false;   parse_arguments (i+1)
-                |   "-turbo2basic"     -> turbo2basic := true; parse_arguments (i+1)
-                |   "-nosmt"           -> SymbEval.use_smt_solver := false; parse_arguments (i+1)
-                |   "-str"  -> load "-str"  (TopLevel.loadstr !asmeta_flag) (args[i+1]); parse_arguments (i+2)
-                |   "-file" -> load "-file" (loadfile !asmeta_flag) (args[i+1]); parse_arguments (i+2)
+                |   "-license"     -> license (); exit 0
+                |   "-asmeta"      -> asmeta_flag := true; main_rule_name := "r_Main"; parse_arguments (i+1)
+                |   "-symbolic"    -> symbolic := true;    parse_arguments (i+1)
+                |   "-nonsymbolic" -> symbolic := false;   parse_arguments (i+1)
+                |   "-turbo2basic" -> turbo2basic := true; parse_arguments (i+1)
+                |   "-nosmt"       -> SymbEval.use_smt_solver := false; parse_arguments (i+1)
+                |   "-str"         -> fprintf stderr "-str %s " args[i+1]; objects_to_load := Str args[i+1] :: !objects_to_load; parse_arguments (i+2)
+                |   "-file"        -> fprintf stderr "-file %s " args[i+1]; objects_to_load := File args[i+1] :: !objects_to_load; parse_arguments (i+2)
                 |   s -> writeln_err $"unknown option: {s}"; exit 1
+        let rec load_everything L =
+            match L with
+            |   [] -> () 
+            |   (Str s) :: rest  -> writeln_err $"-str {s}"; TopLevel.loadstr !asmeta_flag s; load_everything rest
+            |   (File f) :: rest -> writeln_err $"-file {f}"; loadfile !asmeta_flag f; load_everything rest
         parse_arguments 0
+        let _ = TopLevel.init !asmeta_flag
+        load_everything (List.rev !objects_to_load)
         if !turbo2basic
         then exec_symbolic SymbEval.symbolic_execution_for_turbo_asm_to_basic_asm_transformation (!main_rule_name)
         else if !symbolic

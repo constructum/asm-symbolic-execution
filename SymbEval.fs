@@ -363,7 +363,7 @@ let count_s_updates = rule_induction (fun _ -> ()) {
 
 // first element of pair returned is the number of S_Updates rules, i.e. paths in the decision tree
 let symbolic_execution (R_in : RULE) : int * RULE =
-    let S0 = !TopLevel.initial_state
+    let S0 = TopLevel.initial_state ()
     let R_out = s_eval_rule R_in (state_to_s_state S0, Map.empty, Set.empty)
     (count_s_updates R_out, reconvert_rule R_out)
 
@@ -375,6 +375,6 @@ let symbolic_execution (R_in : RULE) : int * RULE =
 //
 // first element of pair returned is the number of S_Updates rules, i.e. paths in the decision tree
 let symbolic_execution_for_turbo_asm_to_basic_asm_transformation (R_in : RULE) : int * RULE =
-    let S0 = !TopLevel.initial_state
+    let S0 = TopLevel.initial_state ()
     let R_out = s_eval_rule R_in (state_to_s_state_only_static S0, Map.empty, Set.empty)
     (count_s_updates R_out, reconvert_rule R_out)
