@@ -66,6 +66,7 @@ type SIGNATURE = Map<FCT_NAME, NAME_INFO>
 val empty_signature : SIGNATURE
 val signature_override : SIGNATURE -> SIGNATURE -> SIGNATURE
 
+val add_type_name : string -> int * (TYPE list -> TYPE) option -> SIGNATURE -> SIGNATURE
 val add_function_name : string -> FCT_KIND * (TYPE list * TYPE) * INFIX_STATUS -> SIGNATURE -> SIGNATURE
 val add_rule_name : string -> TYPE list -> SIGNATURE -> SIGNATURE
 

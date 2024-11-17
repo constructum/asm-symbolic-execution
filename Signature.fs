@@ -110,6 +110,9 @@ let empty_signature : SIGNATURE = Map.empty
 
 let signature_override (sign0 : SIGNATURE) sign' = Common.map_override sign0 sign'
 
+let add_type_name type_name (arity, maps_to) (sign : SIGNATURE) =
+    Map.add type_name (TypeInfo { arity = arity; maps_to = maps_to }) sign
+
 let add_function_name fct_name (fct_kind, fct_type, infix_status) (sign : SIGNATURE) =
     Map.add fct_name (FctInfo { fct_kind = fct_kind; fct_type = fct_type; infix_status = infix_status }) sign
 
