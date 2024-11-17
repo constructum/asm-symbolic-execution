@@ -369,7 +369,7 @@ let definition (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResul
 let rec definitions (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNATURE * STATE * RULES_DB>  =
     match definition (sign, state) s with 
     |   ParserSuccess ((sign', state', rules_db'), s') ->
-            if sign' = empty_signature
+            if  Map.isEmpty sign'
             then ParserSuccess ((sign', state', rules_db'), s')
             else 
             (   match definitions (signature_override sign sign', state_override state state') s' with

@@ -41,6 +41,11 @@ type TYPE =
 val type_to_string : TYPE -> string
 val type_list_to_string : TYPE list -> string
 
+type TYPE_INFO = {
+    arity   : int;
+    maps_to : (TYPE list -> TYPE) option;    // None for user-defined types; Some ... for mapping type names to built-in types
+}
+
 type FCT_INFO = {
     fct_kind : FCT_KIND;
     fct_type : TYPE list * TYPE;
@@ -52,7 +57,7 @@ type RULE_INFO = {
 }
 
 type NAME_INFO =
-|   TypeParamInfo of unit       // names used for type parameters (declared using 'anydomain' in AsmetaL)
+|   TypeInfo of TYPE_INFO       // names used for type parameters (declared using 'anydomain' in AsmetaL)
 |   FctInfo of FCT_INFO
 |   RuleInfo of RULE_INFO
 

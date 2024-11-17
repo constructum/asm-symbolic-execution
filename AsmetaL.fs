@@ -112,7 +112,7 @@ let MOD_ID =
                 |>> function (None, path) -> implode path | (Some drive_letter, path) -> (implode (drive_letter :: ':' :: path)) ) )
 
 
-let ID_DOMAIN = identifier    //!!!! not exactly
+let ID_DOMAIN = identifier   //!!!! not exactly
 let ID_ENUM = identifier      //!!!! not exactly
 let ID_FUNCTION = identifier  //!!!! not exactly
 let ID_VARIABLE = pchar '$' ++ identifier |>> fun (c, s) -> c.ToString() + s
@@ -150,7 +150,7 @@ let rec getDomainByID (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE> 
             kw "domain" << ID_DOMAIN >> kw "subsetof" << getDomainByID |>> fun _ -> failwith "not implemented: concrete domain" ) s
     and TypeDomain (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<TYPE>  =
         (   let StructuredTD = StructuredTD (sign (*, state *) )
-            let AnyDomain = kw "anydomain" >> ID_DOMAIN |>> fun _ -> TypeParam "_"
+            let AnyDomain = kw "anydomain" << ID_DOMAIN |>> fun typename -> TypeParam typename
             let EnumTD = (kw "enum" << kw "domain" << ID_DOMAIN) ++ (lit "=" << lit "{" << psep1 EnumElement (lit "," <|> lit "|") >> lit "}")
                                 |>> fun _ -> failwith "not implemented: enum type domain"
             let AbstractTD = (popt_bool (kw "dynamic") >> kw "abstract" >> kw "domain") ++ ID_DOMAIN

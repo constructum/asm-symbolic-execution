@@ -82,6 +82,11 @@ let match_type (ty : TYPE) (ty_sign : TYPE) (ty_env : Map<string, TYPE>) : Map<s
                         else Map.add a ty ty_env
                 |   _ -> raise (TypeMismatch (ty, ty_sign))
 
+type TYPE_INFO = {
+    arity   : int;
+    maps_to : (TYPE list -> TYPE) option;    // None for user-defined types; Some ... for mapping type names to built-in types
+}
+
 type FCT_INFO = {
     fct_kind : FCT_KIND;
     fct_type : TYPE list * TYPE;
@@ -93,7 +98,7 @@ type RULE_INFO = {
 }
 
 type NAME_INFO =
-|   TypeParamInfo of unit       // names used for type parameters (declared using 'anydomain' in AsmetaL)
+|   TypeInfo of TYPE_INFO       // names used for type parameters (declared using 'anydomain' in AsmetaL)
 |   FctInfo of FCT_INFO
 |   RuleInfo of RULE_INFO
 
@@ -116,21 +121,21 @@ let is_name_defined name (sign : SIGNATURE) =
 
 let is_type_param_name name (sign : SIGNATURE) =
     try match (Map.find name sign) with
-        |   TypeParamInfo _ -> true
+        |   TypeInfo _ -> true
         |   FctInfo fi  -> false
         |   RuleInfo ri -> false
     with _ -> false
 
 let is_function_name name (sign : SIGNATURE) =
     try match (Map.find name sign) with
-        |   TypeParamInfo _ -> false
+        |   TypeInfo _ -> false
         |   FctInfo fi  -> true
         |   RuleInfo ri -> false
     with _ -> false
 
 let is_rule_name name (sign : SIGNATURE) =
     try match (Map.find name sign) with
-        |   TypeParamInfo _ -> false
+        |   TypeInfo _ -> false
         |   FctInfo fi  -> false
         |   RuleInfo ri -> true
     with _ -> false
@@ -141,7 +146,7 @@ let rule_names sign = Set.ofSeq (Map.keys sign) |> Set.filter (fun name -> is_ru
 // arity is for both function and rule names
 let arity name (sign : SIGNATURE) =
     match (Map.find name sign) with
-    |   TypeParamInfo _  -> failwith (sprintf "arity called for type parameter name '%s'" name)
+    |   TypeInfo _  -> failwith (sprintf "arity called for type parameter name '%s'" name)
     |   FctInfo fi  -> List.length (fst fi.fct_type)
     |   RuleInfo ri -> List.length ri.rule_type
 
