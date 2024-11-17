@@ -130,9 +130,10 @@ let is_type_name name (sign : SIGNATURE) =
     with _ -> false
 
 let get_type tyname tyargs (sign : SIGNATURE) : TYPE =
-    if tyname = "Complex" || tyname = "Real" || tyname = "Natural" || tyname = "Char"
-    then TypeCons (tyname, tyargs)  // !!! temporary for AsmetaL compatibility: non-implemented types seen as user-defined base types
-    else
+    if  // !!! temporary for AsmetaL compatibility: non-implemented types seen as user-defined base types
+        tyname = "Complex" || tyname = "Real" || tyname = "Natural" || tyname = "Char"    // AsmetaL predefined basic domains
+    then TypeCons (tyname, tyargs)
+    else // normal case
         try match (Map.find tyname sign) with
             |   TypeInfo { arity = n; maps_to = M } ->
                     if List.length tyargs <> n
