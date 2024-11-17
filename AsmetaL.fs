@@ -196,7 +196,7 @@ let Function (sign : SIGNATURE, state : STATE) s =
 let rec BasicRule (sign : SIGNATURE) s =
     if (!trace > 0) then fprintf stderr "BasicRule: " // "BasicRule: %s" (ParserInput.to_string s)
     let Rule = Rule sign
-    let Term s = Term (chg_parser_state s sign)
+    let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
     let BlockRule = kw "par" << pmany1 Rule >> kw "endpar" |>> ParRule
     let ConditionalRule = R3 (kw "if" << Term) (kw "then" << Rule) (poption (kw "else" << Rule) |>> Option.defaultValue skipRule) >> kw "endif" |>> CondRule
     let VariableTerm = ID_VARIABLE
@@ -222,13 +222,13 @@ let rec BasicRule (sign : SIGNATURE) s =
     ) s
 
 and MacroCallRule (sign : SIGNATURE) s =
-    let Term s = Term (chg_parser_state s sign)
+    let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
     (   (ID_RULE >> lit "[") ++ (psep0 Term (lit ",") >> lit "]")
             |>> fun _ -> failwith "not implemented: macro call rule" ) s
 
 and TurboRule (sign : SIGNATURE) s =
     let Rule = Rule sign
-    let Term s = Term (chg_parser_state s sign)
+    let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
     let SeqRule = kw "seq" << pmany1 Rule >> kw "endseq" |>> AST.SeqRule
     let IterateRule = kw "iterate" << Rule >> kw "enditerate" |>> IterRule
     (   SeqRule
@@ -239,7 +239,7 @@ and TurboRule (sign : SIGNATURE) s =
 
 and DerivedRule (sign : SIGNATURE) s =
     let Rule = Rule sign
-    let Term s = Term (chg_parser_state s sign)
+    let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
     let IterativeWhileRule = (kw "while" << Term) ++ (kw "do" << Rule)
                                 |>> fun (G, R) -> IterRule (CondRule (G, R, skipRule))
     let TurboDerivedRule =
@@ -252,7 +252,7 @@ and DerivedRule (sign : SIGNATURE) s =
 
 
 and Rule (sign : SIGNATURE) s =
-    let Term s = Term (chg_parser_state s sign)
+    let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
     let (BasicRule, TurboRule, DerivedRule) = (BasicRule sign, TurboRule sign, DerivedRule sign)
     let UpdateRule = (R3 (Term) (lit ":=") Term) |>> fun (t1,_,t2) -> Parser.mkUpdateRule sign (t1, t2)   // !!!! not exactly as in AsmetaL grammar
     (   UpdateRule
@@ -266,7 +266,7 @@ and Rule (sign : SIGNATURE) s =
 
 
 
-let rec Asm (sign : SIGNATURE, state : STATE) (s : ParserInput<SIGNATURE>) : ParserResult<ASM, SIGNATURE>  =
+let rec Asm (sign : SIGNATURE, state : STATE) (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PARSER_STATE>  =
     let getDomainByID = getDomainByID (sign (*, state *) )
     let (Domain, Function) = (Domain (sign, state), Function (sign, state))
     let isAsyncr_isModule_name =
@@ -283,7 +283,7 @@ let rec Asm (sign : SIGNATURE, state : STATE) (s : ParserInput<SIGNATURE>) : Par
         // that may be imported in the imported module
         System.IO.Directory.SetCurrentDirectory new_dir
         let text = Common.readfile full_path
-        let parse = Parser.make_parser (Asm (sign, state)) sign
+        let parse = Parser.make_parser (Asm (sign, state)) (sign, state)
         let imported_module = parse text        // !!! checks missing (e.g. check that it is a 'module' and not an 'asm', etc.)
         // move to original directory (where the importing file is located)
         System.IO.Directory.SetCurrentDirectory saved_dir
@@ -314,7 +314,7 @@ let rec Asm (sign : SIGNATURE, state : STATE) (s : ParserInput<SIGNATURE>) : Par
     |   ParserFailure x -> ParserFailure x
     |   ParserSuccess (((asyncr, modul, asm_name), (imports, exports, sign')), s') ->
             let sign = signature_override sign sign'
-            let Term s = Term (chg_parser_state s sign)
+            let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
             let Rule = Rule sign
             let MacroCallRule = MacroCallRule sign
         
@@ -408,7 +408,7 @@ let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB =
             (sign, state, rdb)
 
 
-let parse_definitions (sign, S) s = Parser.make_parser (Asm (sign, S)) sign s
+let parse_definitions (sign, S) s = Parser.make_parser (Asm (sign, S)) (sign, S) s
 
 
 

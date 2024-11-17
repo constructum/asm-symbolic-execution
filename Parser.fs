@@ -78,9 +78,13 @@ let kw kw_name s =
 
 //--------------------------------------------------------------------
 
-type PARSER_STATE = SIGNATURE
+type PARSER_STATE = SIGNATURE * STATE
 
-let get_signature (s : ParserInput<PARSER_STATE>) = get_parser_state s
+let get_signature (sign : SIGNATURE, state : STATE) = sign
+let get_state (sign : SIGNATURE, state : STATE) = state
+
+let get_signature_from_input (s : ParserInput<PARSER_STATE>) = get_parser_state s |> get_signature
+let get_state_from_input (s : ParserInput<PARSER_STATE>)     = get_parser_state s |> get_state
 
 //--------------------------------------------------------------------
 
@@ -93,8 +97,8 @@ let symbolic_identifier s =
             |>> (fun s -> new System.String(s |> List.toArray)) ) s
 
 // non-infix function name
-let fct_name s =
-    let sign = get_parser_state s
+let fct_name (s : ParserInput<PARSER_STATE>) =
+    let sign = get_signature_from_input s
     (   (alphanumeric_identifier <|> symbolic_identifier)
             >>= (fun s ->
                 if is_function_name s sign && not (is_infix s sign)
@@ -102,7 +106,7 @@ let fct_name s =
                 else pfail_msg "fct_name" ($"function name expected, '{s}' found")) ) s
 
 let variable s =
-    let sign = get_parser_state s
+    let sign = get_signature_from_input s
     (   alphanumeric_identifier
             >>= (fun s ->
                 if s = "true" || s = "false" || s = "undef" || is_function_name s sign
@@ -111,7 +115,7 @@ let variable s =
 
 // infix operator (function name)
 let op_name s =
-    let sign = get_parser_state s
+    let sign = get_signature_from_input s
     (   (alphanumeric_identifier <|> symbolic_identifier)
             >>= (fun s ->
                 if is_function_name s sign && is_infix s sign
@@ -121,12 +125,12 @@ let op_name s =
 // 'new_fct_name' is for use in function definitions, differs from 'fct_name' in that it must be not be in the signature
 // !!! add syntax for user-defined infix operators at some point
 let new_fct_name s =
-    let sign = get_parser_state s
+    let sign = get_signature_from_input s
     (   (alphanumeric_identifier)
             >>= (fun s -> if not (is_name_defined s sign) then preturn s else failwith ($"name '{s}' in function definition is already in use")) ) s
 
 let new_rule_name s =
-    let sign = get_parser_state s
+    let sign = get_signature_from_input s
     (   (alphanumeric_identifier)
             >>= (fun s -> if not (is_name_defined s sign) then preturn s else failwith ($"name '{s}' in rule definition is already in use")) ) s
 
@@ -256,7 +260,7 @@ let mkAppTerm sign = function
 |   (_, ts) -> failwith $"constant / 0-ary function applied to {List.length ts} arguments"
 
 let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_STATE> = 
-    let sign = get_signature s
+    let sign = get_signature_from_input s
     let mkAppTerm_ = mkAppTerm sign
     (       (* ( (kw "let" >>. variable_) .>>. (kw "=" >>. term_) .>> kw "in" .>>. (term_ .>> kw "endlet") |>> fun ((x, t1), t2) -> LetTerm (x, t1, t2) )
         <|>*)
@@ -272,7 +276,7 @@ let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_
     ) s
 
 and term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_STATE> = 
-    let sign = get_signature s
+    let sign = get_signature_from_input s
     operator_parser (simple_term, mkAppTerm sign) sign s
 
 //--------------------------------------------------------------------
@@ -290,7 +294,7 @@ let mkUpdateRule sign (t_lhs, t_rhs) =
     // |   LetTerm _  -> failwith (err_msg "'let'-")
 
 let rec rule (s : ParserInput<PARSER_STATE>) : ParserResult<RULE, PARSER_STATE> =
-    let sign = get_signature s
+    let sign = get_signature_from_input s
     (       ( (R3 term (kw ":=") term) |>> fun (t1,_,t2) -> mkUpdateRule sign (t1, t2) )
         <|> ( kw "skip" |>> fun _ -> skipRule )
         <|> ( kw "par" << pmany1 rule >> kw "endpar" |>> fun Rs -> ParRule Rs)
@@ -306,7 +310,7 @@ let rec rule (s : ParserInput<PARSER_STATE>) : ParserResult<RULE, PARSER_STATE> 
 //--------------------------------------------------------------------
 
 let type_ (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSER_STATE> =
-    let sign = get_signature s
+    let sign = get_signature_from_input s
     (       (*( kw "Any"     |>> fun _ -> Any )
         <|>*) ( kw "Undef"   |>> fun _ -> Undef)
         <|> ( kw "Boolean" |>> fun _ -> Boolean)
@@ -325,7 +329,7 @@ let fct_parameter_types (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE list
     ) s
 
 let fct_initially (state : STATE) (s : ParserInput<PARSER_STATE>) : ParserResult<Map<VALUE list, VALUE>, PARSER_STATE> =
-    let sign = get_signature s
+    let sign = get_signature_from_input s
     // for the time being, only 0-ary functions can be initialised
     (       ( ((kw "initially") << term)
                 |>> fun t -> let _ = typecheck_term t (sign, Map.empty)
@@ -333,7 +337,7 @@ let fct_initially (state : STATE) (s : ParserInput<PARSER_STATE>) : ParserResult
     ) s
 
 let fct_eqdef (state : STATE) (s : ParserInput<PARSER_STATE>) : ParserResult<VALUE list -> VALUE, PARSER_STATE> =
-    let sign = get_signature s
+    let sign = get_signature_from_input s
     // for the time being, only 0-ary functions can be initialised
     (       ( ((kw "=") << term)
                 |>> fun t -> let _ = typecheck_term t (sign, Map.empty)
@@ -391,20 +395,21 @@ let rec definitions (sign : SIGNATURE, state : STATE) (s : ParserInput<PARSER_ST
 
 //--------------------------------------------------------------------
 
-let make_parser parse_fct sign s =
-    match (parse_fct >> ws_or_comment) (parser_input_in_state_from_string sign s) with
+let make_parser parse_fct parser_state s =
+    match (parse_fct >> ws_or_comment) (parser_input_in_state_from_string parser_state s) with
     |   ParserSuccess (r, _) -> r
     |   ParserFailure errors -> failwith (parser_msg (ParserFailure errors))
 
 //--------------------------------------------------------------------
 // parser "API"
 
-let parse_and_typecheck (parsing_fct : Parser<'a, PARSER_STATE>) typechecking_fct sign (s : string) =
-    let ast = make_parser parsing_fct sign s
+let parse_and_typecheck (parsing_fct : Parser<'a, PARSER_STATE>) typechecking_fct parser_state (s : string) =
+    let sign = get_signature parser_state
+    let ast = make_parser parsing_fct parser_state s
     let _   = typechecking_fct ast (sign, Map.empty)   // function result is discarded, but exceptions are thrown on typing errors
     ast
 
-let parse_name sign s = parse_and_typecheck (name : Parser<NAME, PARSER_STATE>) typecheck_name sign s
+let parse_name sign s = parse_and_typecheck (name : Parser<NAME, PARSER_STATE>) typecheck_name (sign, empty_state) s
 let parse_term sign s = parse_and_typecheck term typecheck_term sign s
 let parse_rule sign s = parse_and_typecheck rule typecheck_rule sign s
-let parse_definitions (sign, S) s = make_parser (definitions (sign, S)) sign s
+let parse_definitions (sign, S) s = make_parser (definitions (sign, S)) (sign, S) s
