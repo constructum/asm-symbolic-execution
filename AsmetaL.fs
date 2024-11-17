@@ -129,11 +129,11 @@ let add_basic_domain s sign =
     then failwith (sprintf "not implemented: basic type domain '%s'" s)
     else sign   // nothing to add to the signature: basic domains are predefined, i.e. already in the signature
 
-let rec getDomainByID (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE>  =
+let rec getDomainByID (sign : SIGNATURE) s =
         (   let StructuredTD = StructuredTD sign
             (   StructuredTD
             <|> (ID_DOMAIN |>> fun s -> Signature.get_type s [] sign)) ) s
-    and StructuredTD (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE>  =
+    and StructuredTD (sign : SIGNATURE) s =
         (   let getDomainByID  = getDomainByID sign
             // !!! no longer mentioned in doc: let RuleDomain     = kw "Rule" << opt_psep1 "(" getDomainByID "," ")" |>> fun _ -> failwith "RuleDomain not implemented"
             let ProductDomain  = kw "Prod" << opt_psep2 "(" getDomainByID "," ")" |>> Prod
@@ -143,10 +143,10 @@ let rec getDomainByID (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE> 
             let MapDomain      = kw "Map"  << lit "(" << getDomainByID >> lit "," << getDomainByID >> lit ")" |>> fun _ -> failwith "MapDomain not implemented"
             // !!! no longer mentioned in doc: RuleDomain <|> 
             ProductDomain <|> SequenceDomain <|> PowersetDomain <|> BagDomain<|> MapDomain ) s
-    and ConcreteDomain (sign : SIGNATURE) (s : ParserInput) : ParserResult<SIGNATURE -> SIGNATURE> =
+    and ConcreteDomain (sign : SIGNATURE) s =
         (   let getDomainByID  = getDomainByID sign
             kw "domain" << ID_DOMAIN >> kw "subsetof" << getDomainByID |>> fun _ -> failwith "not implemented: concrete domain" ) s
-    and TypeDomain (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNATURE -> SIGNATURE>  =
+    and TypeDomain (sign : SIGNATURE, state : STATE) s =
         (   let StructuredTD = StructuredTD (sign (*, state *) )
             let AnyDomain = kw "anydomain" << ID_DOMAIN
                                 |>> fun tyname -> add_type_name tyname (0, Some (fun _ -> TypeParam tyname))
@@ -159,11 +159,11 @@ let rec getDomainByID (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE> 
             AnyDomain <|> EnumTD <|> AbstractTD <|> BasicTD
             (* <|> StructuredTD  (* not really a declaration *) *) ) s
 
-let Domain (sign : SIGNATURE, state : STATE) : Parser<SIGNATURE -> SIGNATURE>  =
+let Domain (sign : SIGNATURE, state : STATE) s =
     let (ConcreteDomain, TypeDomain) = (ConcreteDomain (sign (*, state*) ), TypeDomain (sign, state))
-    (ConcreteDomain <|> TypeDomain)
+    (ConcreteDomain <|> TypeDomain) s
 
-let Function (sign : SIGNATURE, state : STATE) : Parser<FCT_NAME * FCT_INFO>  =
+let Function (sign : SIGNATURE, state : STATE) s =
     let getDomainByID = getDomainByID (sign (*, state *) )
     let prod_to_type_list ty = List.map (function Prod _ -> failwith "not supported: nested Prod type" | ty_ -> ty_) ty
     let to_fct_type (tys : TYPE, ty_opt : TYPE option) =
@@ -189,11 +189,11 @@ let Function (sign : SIGNATURE, state : STATE) : Parser<FCT_NAME * FCT_INFO>  =
                                 |>> fun _ -> failwith "not implemented: local function"
     let DynamicFunction    = OutFunction <|> MonitoredFunction  <|> SharedFunction <|> ControlledFunction <|> LocalFunction
     let BasicFunction      = StaticFunction <|> DynamicFunction
-    (BasicFunction <|> DerivedFunction)
+    (BasicFunction <|> DerivedFunction) s
 
 
 
-let rec BasicRule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE>  =
+let rec BasicRule (sign : SIGNATURE) s =
     if (!trace > 0) then fprintf stderr "BasicRule: " // "BasicRule: %s" (ParserInput.to_string s)
     let Rule = Rule sign
     let Term = Term sign
@@ -221,11 +221,11 @@ let rec BasicRule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE>  =
     // <|> ExtendRule
     ) s
 
-and MacroCallRule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE>  =
+and MacroCallRule (sign : SIGNATURE) s =
     (   (ID_RULE >> lit "[") ++ (psep0 (Term sign) (lit ",") >> lit "]")
             |>> fun _ -> failwith "not implemented: macro call rule" ) s
 
-and TurboRule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE>  =
+and TurboRule (sign : SIGNATURE) s =
     let Rule = Rule sign
     let Term = Term sign
     let SeqRule = kw "seq" << pmany1 Rule >> kw "endseq" |>> AST.SeqRule
@@ -236,7 +236,7 @@ and TurboRule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE>  =
     // <|> TurboLocalStateRule
     ) s
 
-and DerivedRule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE>  =
+and DerivedRule (sign : SIGNATURE) s =
     let Rule = Rule sign
     let Term = Term sign
     let IterativeWhileRule = (kw "while" << Term) ++ (kw "do" << Rule)
@@ -250,7 +250,7 @@ and DerivedRule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE>  =
     ) s
 
 
-and Rule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE> =
+and Rule (sign : SIGNATURE) s =
     let Term = Term sign
     let (BasicRule, TurboRule, DerivedRule) = (BasicRule sign, TurboRule sign, DerivedRule sign)
     let UpdateRule = (R3 (Term) (lit ":=") Term) |>> fun (t1,_,t2) -> Parser.mkUpdateRule sign (t1, t2)   // !!!! not exactly as in AsmetaL grammar
@@ -265,7 +265,7 @@ and Rule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE> =
 
 
 
-let rec Asm (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<ASM>  =
+let rec Asm (sign : SIGNATURE, state : STATE) s =
     let getDomainByID = getDomainByID (sign (*, state *) )
     let (Domain, Function) = (Domain (sign, state), Function (sign, state))
     let isAsyncr_isModule_name =

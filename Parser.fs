@@ -15,14 +15,14 @@ let trace = ref 0
 
 let pcharf c = pcharsat c ""
 
-let one_line_comment :Parser<string> =
-    R4  (pstring "//" |>> implode)
-        (pmany (pcharf (fun c -> c <> '\r' && c <> '\n')) |>> implode)
-        (pmany (pchar '\r') |>> implode)
-        (pchar '\n' |>> fun c -> implode [c]) |>> fun (s1, s2, s3, s4) -> s1 + s2 + s3 + s4
+let one_line_comment (s : ParserInput<'state>) : ParserResult<string, 'state> =
+    (   R4  (pstring "//" |>> implode)
+            (pmany (pcharf (fun c -> c <> '\r' && c <> '\n')) |>> implode)
+            (pmany (pchar '\r') |>> implode)
+            (pchar '\n' |>> fun c -> implode [c]) |>> fun (s1, s2, s3, s4) -> s1 + s2 + s3 + s4 ) s
 
 // ML style multiline comments
-let rec ML_multiline_comment (s : ParserInput) : ParserResult<string> =
+let rec ML_multiline_comment (s : ParserInput<'state>) : ParserResult<string, 'state> =
     let open_ = pstring "(*"
     let close_ = pstring "*)"
     let inside = pmany (    ( pcharf (fun c -> c <> '*' && c <> ')') |>> fun c -> [c])
@@ -31,7 +31,7 @@ let rec ML_multiline_comment (s : ParserInput) : ParserResult<string> =
                         <|> (fun input -> (ML_multiline_comment |>> explode) input) )  |>> List.concat
     in ( R3 open_ inside close_ |>> fun (s1, s2, s3) ->  (implode s1 + implode s2 + implode s3) ) s
 
-let rec C_multiline_comment (s : ParserInput) : ParserResult<string> =
+let rec C_multiline_comment (s : ParserInput<'state>) : ParserResult<string, 'state> =
     let open_ = pstring "/*"
     let close_ = pstring "*/"
     let inside = pmany (    ( pcharf (fun c -> c <> '*' && c <> '/') |>> fun c -> [c])
@@ -40,17 +40,19 @@ let rec C_multiline_comment (s : ParserInput) : ParserResult<string> =
                         <|> (fun input -> (C_multiline_comment |>> explode) input) )  |>> List.concat
     in ( R3 open_ inside close_ |>> fun (s1, s2, s3) ->  (implode s1 + implode s2 + implode s3) ) s
 
-let comment =
+let comment (s : ParserInput<'state>) : ParserResult<string, 'state> =
     (   ( one_line_comment <|> ML_multiline_comment <|> C_multiline_comment )
-    |>> fun s -> ( (if !trace > 0 then fprintf stderr "comment:\n%s\n" s else ());
-                    s )   )    
+    |>> fun s' -> ( (if !trace > 0 then fprintf stderr "comment:\n%s\n" s' else ());
+                    s' )   )    s
 
-let ws_or_comment =
-    pwhitespace << pmany (comment << pwhitespace) |>> List.concat             // for the moment only one-line comments are implemented
+let ws_or_comment (s : ParserInput<'state>) : ParserResult<char list, 'state> =
+    ( pwhitespace() << pmany (comment << pwhitespace()) |>> List.concat ) s
 
-let skip_to_eos = ws_or_comment >> peos
-let lit arg = ws_or_comment << pstring arg
-let int = ws_or_comment << pint
+let skip_to_eos (s : ParserInput<'state>) : ParserResult<char list, 'state> =
+    ( ws_or_comment >> peos ) s
+
+let lit arg s = (ws_or_comment << pstring arg) s
+let int s = (ws_or_comment << pint) s
     
 let is_symb_ident_char c =
   match c with
@@ -61,68 +63,68 @@ let is_symb_ident_char c =
     | '`' -> true | '^' -> true | '|' -> true | '*' -> true
     | _ -> false
 
-let symb_ident_char = (pcharsat (fun c -> is_symb_ident_char c) "symbolic identifier character")
+let symb_ident_char s = (pcharsat (fun c -> is_symb_ident_char c) "symbolic identifier character") s
 
 //--------------------------------------------------------------------
 
 /// Parse keywords
-let kw kw_name =
-    (   (ws_or_comment << (pmany1 pletter))
-    <|> (ws_or_comment << (pmany1 symb_ident_char)) )
-            >>= fun s ->
-                if s = explode kw_name
-                then preturn s
-                else pfail_msg "keyword" ($"keyword '{kw_name}' expected, '{implode s}' found")
+let kw kw_name s =
+    (   (   (   (ws_or_comment << (pmany1 pletter)))
+            <|> (ws_or_comment << (pmany1 symb_ident_char)) )
+                    >>= fun s ->
+                        if s = explode kw_name
+                        then preturn s
+                        else pfail_msg "keyword" ($"keyword '{kw_name}' expected, '{implode s}' found") ) s
 
 //--------------------------------------------------------------------
 
-let alphanumeric_identifier =
-    ws_or_comment << (pletter ++ (pmany palphanum_))
-        |>> (fun (s, d) -> new System.String(s::d |> List.toArray))
+let alphanumeric_identifier s =
+    (   ws_or_comment << (pletter ++ (pmany palphanum_))
+            |>> (fun (s, d) -> new System.String(s::d |> List.toArray)) ) s
 
-let symbolic_identifier =
-    ws_or_comment << (pmany1 symb_ident_char)
-        |>> (fun s -> new System.String(s |> List.toArray))
+let symbolic_identifier s =
+    (   ws_or_comment << (pmany1 symb_ident_char)
+            |>> (fun s -> new System.String(s |> List.toArray)) ) s
 
 // non-infix function name
-let fct_name (sign : SIGNATURE) =
-    (alphanumeric_identifier <|> symbolic_identifier)
-        >>= (fun s ->
+let fct_name (sign : SIGNATURE) s =
+    (   (alphanumeric_identifier <|> symbolic_identifier)
+            >>= (fun s ->
                 if is_function_name s sign && not (is_infix s sign)
                 then preturn s
-                else pfail_msg "fct_name" ($"function name expected, '{s}' found"))
+                else pfail_msg "fct_name" ($"function name expected, '{s}' found")) ) s
 
-let variable (sign : SIGNATURE) =
-    alphanumeric_identifier
-        >>= (fun s ->
+let variable (sign : SIGNATURE) s =
+    (   alphanumeric_identifier
+            >>= (fun s ->
                 if s = "true" || s = "false" || s = "undef" || is_function_name s sign
                 then pfail_msg "variable" ($"variable expected, '{s}' found")
-                else preturn s)
+                else preturn s) ) s
 
 // infix operator (function name)
-let op_name (sign : SIGNATURE) =
-    (alphanumeric_identifier <|> symbolic_identifier)
-        >>= (fun s ->
+let op_name (sign : SIGNATURE) s =
+    (   (alphanumeric_identifier <|> symbolic_identifier)
+            >>= (fun s ->
                 if is_function_name s sign && is_infix s sign
                 then preturn s
-                else pfail_msg "op_name" ($"infix operator expected, '{s}' found"))
+                else pfail_msg "op_name" ($"infix operator expected, '{s}' found")) ) s
 
 // 'new_fct_name' is for use in function definitions, differs from 'fct_name' in that it must be not be in the signature
 // !!! add syntax for user-defined infix operators at some point
-let new_fct_name (sign : SIGNATURE) =
-    (alphanumeric_identifier)
-        >>= (fun s -> if not (is_name_defined s sign) then preturn s else failwith ($"name '{s}' in function definition is already in use"))
+let new_fct_name (sign : SIGNATURE) s =
+    (   (alphanumeric_identifier)
+            >>= (fun s -> if not (is_name_defined s sign) then preturn s else failwith ($"name '{s}' in function definition is already in use")) ) s
 
-let new_rule_name (sign : SIGNATURE) =
-    (alphanumeric_identifier)
-        >>= (fun s -> if not (is_name_defined s sign) then preturn s else failwith ($"name '{s}' in rule definition is already in use"))
+let new_rule_name (sign : SIGNATURE) s =
+    (   (alphanumeric_identifier)
+            >>= (fun s -> if not (is_name_defined s sign) then preturn s else failwith ($"name '{s}' in rule definition is already in use")) ) s
 
-let name (sign : SIGNATURE) =
-        ( kw "true"      |>> (fun _ -> BoolConst true) )
-    <|> ( kw "false"     |>> (fun _ -> BoolConst false) )
-    <|> ( kw "undef"     |>> (fun _ -> UndefConst) )
-    <|> ( int            |>> (fun i -> IntConst i) )
-    <|> ( fct_name sign  |>> (fun s -> FctName s) )
+let name (sign : SIGNATURE) s =
+    (   ( kw "true"      |>> (fun _ -> BoolConst true) )
+        <|> ( kw "false"     |>> (fun _ -> BoolConst false) )
+        <|> ( kw "undef"     |>> (fun _ -> UndefConst) )
+        <|> ( int            |>> (fun i -> IntConst i) )
+        <|> ( fct_name sign  |>> (fun s -> FctName s) ) ) s
     // !!!! StringConst still missing
 
 //--------------------------------------------------------------------
@@ -198,7 +200,7 @@ type 'a STACK_ELEM =
 | Optr of Signature.INFIX_STATUS * string      (* operator *)
 
 /// Parses terms with infix operators, according to specified associativity and precedence
-let rec operator_parser (parse_elem : SIGNATURE -> Parser<'elem>, app_cons : NAME * 'elem list -> 'elem) (sign : SIGNATURE) (s : ParserInput) : ParserResult<'elem> = 
+let rec operator_parser (parse_elem : SIGNATURE -> Parser<'elem, 'state>, app_cons : NAME * 'elem list -> 'elem) (sign : SIGNATURE) (s : ParserInput<'state>) : ParserResult<'elem, 'state> = 
     let elem_ s = parse_elem sign s
     let op_name_ s = op_name sign s
     let op_parse_ s = operator_parser (parse_elem, app_cons) sign s
@@ -211,14 +213,14 @@ let rec operator_parser (parse_elem : SIGNATURE -> Parser<'elem>, app_cons : NAM
     let rec extract = function
     |   [Opnd t] -> t
     |   stack -> extract (reduce stack)
-    let rec F (stack : 'elem STACK_ELEM list) (s : ParserInput) : ParserResult<'elem> = 
+    let rec F (stack : 'elem STACK_ELEM list) (s : ParserInput<'state>) : ParserResult<'elem, 'state> = 
       ( match stack with
         |   [Opnd t1] ->
-                ( ((op_name_ : Parser<string>) ++ (elem_ : Parser<'elem>)) 
+                ( ((op_name_ : Parser<string, 'state>) ++ (elem_ : Parser<'elem, 'state>)) 
                         >>= (fun (op, t2 : 'elem) -> F ([ Opnd t2; Optr (infix_status op sign, op); Opnd t1 ] : 'elem STACK_ELEM list)) )
                 <|> (preturn (extract stack)) 
         |   ((Opnd t2) :: (Optr (Infix (assoc1, prec1), op1)) :: stack_rest) ->
-                ( (((op_name_ : Parser<string>) ++ (elem_ : Parser<'elem>))
+                ( (((op_name_ : Parser<string, 'state>) ++ (elem_ : Parser<'elem, 'state>))
                         >>= (fun (op2, t3 : 'elem) ->
                             match infix_status op2 sign with
                             |   NonInfix -> failwith (sprintf "operator parsing: infix operator expected, '%s' " op2)
@@ -246,7 +248,7 @@ let mkAppTerm sign = function
 |   (_, ts) -> failwith $"constant / 0-ary function applied to {List.length ts} arguments"
 
 
-let rec simple_term (sign : SIGNATURE) (s : ParserInput) : ParserResult<TERM> = 
+let rec simple_term (sign : SIGNATURE) (s : ParserInput<'state>) : ParserResult<TERM, 'state> = 
     let (fct_name_, name_, variable_, mkAppTerm_) = (fct_name sign, name sign, variable sign, mkAppTerm sign)
     let term_ s = term sign s
     (       (* ( (kw "let" >>. variable_) .>>. (kw "=" >>. term_) .>> kw "in" .>>. (term_ .>> kw "endlet") |>> fun ((x, t1), t2) -> LetTerm (x, t1, t2) )
@@ -262,7 +264,7 @@ let rec simple_term (sign : SIGNATURE) (s : ParserInput) : ParserResult<TERM> =
         <|> ( lit "(" << term_ >> lit ")" )
     ) s
 
-and term (sign : SIGNATURE) (s : ParserInput) : ParserResult<TERM> = 
+and term (sign : SIGNATURE) (s : ParserInput<'state>) : ParserResult<TERM, 'state> = 
     operator_parser (simple_term, mkAppTerm sign) sign s
 
 //--------------------------------------------------------------------
@@ -279,7 +281,7 @@ let mkUpdateRule sign (t_lhs, t_rhs) =
     // |   VarTerm _  -> failwith (err_msg "variable")
     // |   LetTerm _  -> failwith (err_msg "'let'-")
 
-let rec rule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE> =
+let rec rule (sign : SIGNATURE) (s : ParserInput<'state>) : ParserResult<RULE, 'state> =
     let (fct_name_, name_, term_) = (fct_name sign, name sign, term sign)
     let rule_ s = rule sign s
     (       ( (R3 term_ (kw ":=") term_) |>> fun (t1,_,t2) -> mkUpdateRule sign (t1, t2) )
@@ -296,14 +298,14 @@ let rec rule (sign : SIGNATURE) (s : ParserInput) : ParserResult<RULE> =
 
 //--------------------------------------------------------------------
 
-let type_ (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE> =
+let type_ (sign : SIGNATURE) (s : ParserInput<'state>) : ParserResult<TYPE, 'state> =
     (       (*( kw "Any"     |>> fun _ -> Any )
         <|>*) ( kw "Undef"   |>> fun _ -> Undef)
         <|> ( kw "Boolean" |>> fun _ -> Boolean)
         <|> ( kw "Integer" |>> fun _ -> Integer)
         <|> ( kw "String " |>> fun _ -> String) ) s
 
-let fct_parameter_types (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE list * TYPE> =
+let fct_parameter_types (sign : SIGNATURE) (s : ParserInput<'state>) : ParserResult<TYPE list * TYPE, 'state> =
     let type_ = type_ sign
     (       ( R3 (poption (kw ":") << lit "(" << type_) (pmany (lit "," << type_)) (lit ")" << kw "->" << type_)
                 |>> fun (ty1, tys, ty_dom) -> (ty1 :: tys, ty_dom) )
@@ -315,7 +317,7 @@ let fct_parameter_types (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE
                 |>> fun ty_dom -> ([], ty_dom) )
     ) s
 
-let fct_initially (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<Map<VALUE list, VALUE>> =
+let fct_initially (sign : SIGNATURE, state : STATE) (s : ParserInput<'state>) : ParserResult<Map<VALUE list, VALUE>, 'state> =
     // for the time being, only 0-ary functions can be initialised
     let term = term sign
     (       ( ((kw "initially") << term)
@@ -323,7 +325,7 @@ let fct_initially (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserRe
                              Map.add [] (Eval.eval_term t (state, Map.empty)) Map.empty )
     ) s
 
-let fct_eqdef (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<VALUE list -> VALUE> =
+let fct_eqdef (sign : SIGNATURE, state : STATE) (s : ParserInput<'state>) : ParserResult<VALUE list -> VALUE, 'state> =
     // for the time being, only 0-ary functions can be initialised
     let term = term sign
     (       ( ((kw "=") << term)
@@ -333,7 +335,7 @@ let fct_eqdef (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult
 
     ) s
 
-let definition (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNATURE * STATE * RULES_DB> =
+let definition (sign : SIGNATURE, state : STATE) (s : ParserInput<'state>) : ParserResult<SIGNATURE * STATE * RULES_DB, 'state> =
     let (new_fct_name, fct_parameter_types, fct_initially, fct_eqdef, new_rule_name, rule) =
             (new_fct_name sign, fct_parameter_types sign, fct_initially (sign, state), fct_eqdef (sign, state), new_rule_name sign, rule sign)
     let opt_state_initialisation (kind : Signature.FCT_KIND) f (tys_ran, ty_dom) (opt_static_def, opt_initially) = 
@@ -366,7 +368,7 @@ let definition (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResul
         <|> ( ws_or_comment >> peos |>> fun _ -> (empty_signature, empty_state, empty_rules_db) )
     ) s
 
-let rec definitions (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNATURE * STATE * RULES_DB>  =
+let rec definitions (sign : SIGNATURE, state : STATE) (s : ParserInput<'state>) : ParserResult<SIGNATURE * STATE * RULES_DB, 'state>  =
     match definition (sign, state) s with 
     |   ParserSuccess ((sign', state', rules_db'), s') ->
             if  Map.isEmpty sign'
@@ -382,7 +384,7 @@ let rec definitions (sign : SIGNATURE, state : STATE) (s : ParserInput) : Parser
 //--------------------------------------------------------------------
 
 let make_parser parse_fct sign s =
-    match (parse_fct sign >> ws_or_comment) (parser_input_from_string s) with
+    match (parse_fct sign >> ws_or_comment) (parser_input_in_state_from_string sign s) with
     |   ParserSuccess (r, _) -> r
     |   ParserFailure errors -> failwith (parser_msg (ParserFailure errors))
 
