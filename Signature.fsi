@@ -29,13 +29,13 @@ type FCT_KIND =
 val fct_kind_to_string : FCT_KIND -> string
 
 type TYPE =
-| TypeParam of string
-| Undef
 | Boolean
 | Integer
 | String
+| Undef
 | Rule
-| BaseType of string
+| TypeParam of string
+| TypeCons of string * TYPE list
 | Prod of TYPE list
 
 val type_to_string : TYPE -> string
@@ -74,8 +74,13 @@ val fct_names  : SIGNATURE -> Set<string>
 val rule_names : SIGNATURE -> Set<string>
 
 val is_name_defined : string -> SIGNATURE -> bool
-val is_function_name : string -> SIGNATURE -> bool
+
+val is_type_name : string -> SIGNATURE -> bool
+val get_type : string -> TYPE list -> SIGNATURE -> TYPE
+
 val is_rule_name : string -> SIGNATURE -> bool
+
+val is_function_name : string -> SIGNATURE -> bool
 val fct_kind : string -> SIGNATURE -> FCT_KIND
 val fct_type : string -> SIGNATURE -> TYPE list * TYPE
 val arity : string -> SIGNATURE -> int

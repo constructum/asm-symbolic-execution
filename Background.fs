@@ -115,6 +115,17 @@ let const_static_fct (const_val : VALUE) (args : VALUE list) = const_val
 
 //--------------------------------------------------------------------
 
+let background_types = 
+    [
+        ("Boolean", 0, Some (function [] -> Boolean | _ -> failwith "Boolean type has no parameters"));
+        ("Integer", 0, Some (function [] -> Integer | _ -> failwith "Integer type has no parameters"));
+        ("String",  0, Some (function [] -> String  | _ -> failwith "String type has no parameters"));
+        ("Undef",   0, Some (function [] -> Undef   | _ -> failwith "Undef type has no parameters"));
+        ("Rule",    0, Some (function [] -> Rule    | _ -> failwith "Rule type has no parameters"));
+            // note (!!!): this implies that 'undef' is not really practically usable, because it is of type 'Undef', which is not compatible with any other types
+        // !!! Asmeta note: Complex, Real, Natural, Char not implemented
+    ]
+
 let background_functions = 
     [
         ("not",     _not,       ([Boolean], Boolean), NonInfix);
@@ -135,8 +146,12 @@ let background_functions =
     ]
 
 let signature =
-    List.fold (fun sign (f, _, f_type, f_infix) -> add_function_name f (Static, f_type, f_infix) sign)
-        Map.empty background_functions
+    let sign0 = Map.empty
+    let add_fct sign (f, _, f_type, f_infix) = add_function_name f (Static, f_type, f_infix) sign
+    let add_typ sign (t, arity, maps_to) = add_type_name t (arity, maps_to) sign
+    let sign1 = List.fold add_typ sign0 background_types
+    let sign2 = List.fold add_fct sign1 background_functions   //(fun sign (f, _, f_type, f_infix) -> add_function_name f (Static, f_type, f_infix) sign)
+    sign2
 
 let state =
     Map.ofList

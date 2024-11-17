@@ -18,8 +18,8 @@ let rules_0_default         = Map.empty
 // Note: the AsmetaL signature mostly defined in imported files,
 //   such as 'StandardLibrary.asm'
 
-let signature_0_asmeta     = Signature.empty_signature
-let initial_state_0_asmeta = State.empty_state
+let signature_0_asmeta     = Background.signature
+let initial_state_0_asmeta = State.background_state
 let rules_0_asmeta         = Map.empty
 
 //--------------------------------------------------------------------

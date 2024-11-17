@@ -123,19 +123,10 @@ let ID_LTL = identifier
 let EnumElement = ID_ENUM
 
 
-let id_domain_to_type id_dom =
-    match id_dom with
-    |   "Boolean" -> Boolean
-    |   "Integer" -> Integer
-    |   "String" -> String
-    |   "Undef" -> Undef
-    |   _ -> BaseType id_dom        // !!! should check that it is indeed declared as a domain
-//  !!!!    |   _ -> failwith $"id_domain_to_type: unknown type {id_dom}"
-
 let rec getDomainByID (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE>  =
         (   let StructuredTD = StructuredTD sign
             (   StructuredTD
-            <|> (ID_DOMAIN |>> fun s -> id_domain_to_type s)) ) s
+            <|> (ID_DOMAIN |>> fun s -> Signature.get_type s [] sign)) ) s
     and StructuredTD (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE>  =
         (   let getDomainByID  = getDomainByID sign
             let RuleDomain     = kw "Rule" << opt_psep1 "(" getDomainByID "," ")" |>> fun _ -> failwith "RuleDomain not implemented"
@@ -155,8 +146,13 @@ let rec getDomainByID (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE> 
                                 |>> fun _ -> failwith "not implemented: enum type domain"
             let AbstractTD = (popt_bool (kw "dynamic") >> kw "abstract" >> kw "domain") ++ ID_DOMAIN
                                 |>> fun _ -> failwith "not implemented: abstract type domain"
-            let BasicTD = (kw "basic" << kw "domain" << ID_DOMAIN) |>> fun _ -> ()
-                                |>> fun _ -> failwith "not implemented: basic type domain"
+            let BasicTD = (kw "basic" << kw "domain" << ID_DOMAIN)
+                                |>> fun s ->
+                                    if s <> "Boolean" && s <> "Integer" && s <> "String" && s <> "Undef" && s <> "Rule"
+                                        && s <> "Complex" && s <> "Real" && s <> "Natural" && s <> "Char"   // !!! last four are not yet implemented
+                                    then failwith (sprintf "not implemented: basic type domain '%s'" s)
+                                    else Signature.get_type s [] sign
+                                //|>> fun _ -> failwith "not implemented: basic type domain"
             AnyDomain <|> StructuredTD <|> EnumTD <|> AbstractTD <|> BasicTD ) s
 
 let Domain (sign : SIGNATURE, state : STATE) : Parser<unit>  =

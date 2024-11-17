@@ -36,14 +36,14 @@ let fct_kind_to_string = function
 | Out -> "out"
 | Derived -> "derived"
 
-type TYPE =
-| TypeParam of string
-| Undef
+type TYPE =         // !!! AsmetaL note: Complex, Real, Natural, Char not implemented
 | Boolean
 | Integer
 | String
+| Undef
 | Rule
-| BaseType of string
+| TypeParam of string
+| TypeCons of string * TYPE list
 | Prod of TYPE list
 
 let rec type_to_string ty =
@@ -53,8 +53,8 @@ let rec type_to_string ty =
     |   Boolean -> "Boolean"
     |   Integer -> "Integer"
     |   String -> "String"
-    |   Rule -> "<Rule>"
-    |   BaseType s -> s
+    |   Rule -> "Rule"
+    |   TypeCons (s, tys)  -> if List.isEmpty tys then s else s ^ "(" ^ (tys |> type_list_to_string) ^ ")"
     |   Prod tys -> "Prod(" ^ (tys |> type_list_to_string) ^ ")"
 
 and type_list_to_string tys =
@@ -98,7 +98,7 @@ type RULE_INFO = {
 }
 
 type NAME_INFO =
-|   TypeInfo of TYPE_INFO       // names used for type parameters (declared using 'anydomain' in AsmetaL)
+|   TypeInfo of TYPE_INFO
 |   FctInfo of FCT_INFO
 |   RuleInfo of RULE_INFO
 
@@ -122,12 +122,27 @@ let add_rule_name rule_name rule_type (sign : SIGNATURE) =
 let is_name_defined name (sign : SIGNATURE) =
     Map.containsKey name sign
 
-let is_type_param_name name (sign : SIGNATURE) =
+let is_type_name name (sign : SIGNATURE) =
     try match (Map.find name sign) with
         |   TypeInfo _ -> true
         |   FctInfo fi  -> false
         |   RuleInfo ri -> false
     with _ -> false
+
+let get_type tyname tyargs (sign : SIGNATURE) : TYPE =
+    if tyname = "Complex" || tyname = "Real" || tyname = "Natural" || tyname = "Char"
+    then TypeCons (tyname, tyargs)  // !!! temporary for AsmetaL compatibility: non-implemented types seen as user-defined base types
+    else
+        try match (Map.find tyname sign) with
+            |   TypeInfo { arity = n; maps_to = M } ->
+                    if List.length tyargs <> n
+                    then failwith (sprintf "type '%s' instantiated with %d arguments, but its arity is %d" tyname (List.length tyargs) n)            
+                    else
+                        match M with
+                        |   Some f -> f tyargs
+                        |   None -> TypeCons (tyname, tyargs)
+            |   _ -> failwith (sprintf "unknown type '%s'" tyname)
+        with _ -> failwith (sprintf "unknown type '%s'" tyname)
 
 let is_function_name name (sign : SIGNATURE) =
     try match (Map.find name sign) with
