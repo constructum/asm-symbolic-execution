@@ -123,11 +123,11 @@ let ID_LTL = identifier
 let EnumElement = ID_ENUM
 
 
-let type_of_basic_domain sign s =
+let add_basic_domain s sign =
     if s <> "Boolean" && s <> "Integer" && s <> "String" && s <> "Undef" && s <> "Rule"
         && s <> "Complex" && s <> "Real" && s <> "Natural" && s <> "Char"   // !!! last four are not yet implemented
     then failwith (sprintf "not implemented: basic type domain '%s'" s)
-    else Signature.get_type s [] sign
+    else sign   // nothing to add to the signature: basic domains are predefined, i.e. already in the signature
 
 let rec getDomainByID (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE>  =
         (   let StructuredTD = StructuredTD sign
@@ -143,22 +143,25 @@ let rec getDomainByID (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE> 
             let MapDomain      = kw "Map"  << lit "(" << getDomainByID >> lit "," << getDomainByID >> lit ")" |>> fun _ -> failwith "MapDomain not implemented"
             // !!! no longer mentioned in doc: RuleDomain <|> 
             ProductDomain <|> SequenceDomain <|> PowersetDomain <|> BagDomain<|> MapDomain ) s
-    and ConcreteDomain (sign : SIGNATURE) (s : ParserInput) : ParserResult<TYPE> =
+    and ConcreteDomain (sign : SIGNATURE) (s : ParserInput) : ParserResult<SIGNATURE -> SIGNATURE> =
         (   let getDomainByID  = getDomainByID sign
             kw "domain" << ID_DOMAIN >> kw "subsetof" << getDomainByID |>> fun _ -> failwith "not implemented: concrete domain" ) s
-    and TypeDomain (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<TYPE>  =
+    and TypeDomain (sign : SIGNATURE, state : STATE) (s : ParserInput) : ParserResult<SIGNATURE -> SIGNATURE>  =
         (   let StructuredTD = StructuredTD (sign (*, state *) )
-            let AnyDomain = kw "anydomain" << ID_DOMAIN |>> fun typename -> TypeParam typename
+            let AnyDomain = kw "anydomain" << ID_DOMAIN
+                                |>> fun tyname -> add_type_name tyname (0, Some (fun _ -> TypeParam tyname))
             let EnumTD = (kw "enum" << kw "domain" << ID_DOMAIN) ++ (lit "=" << lit "{" << psep1 EnumElement (lit "," <|> lit "|") >> lit "}")
                                 |>> fun _ -> failwith "not implemented: enum type domain"
             let AbstractTD = (popt_bool (kw "dynamic") >> kw "abstract" >> kw "domain") ++ ID_DOMAIN     // !!! what about 'dynamic'?
-                                |>> fun (is_dynamic, s) -> TypeCons (s, []) 
-            let BasicTD = (kw "basic" << kw "domain" << ID_DOMAIN) |>> type_of_basic_domain sign
-            AnyDomain <|> StructuredTD <|> EnumTD <|> AbstractTD <|> BasicTD ) s
+                                |>> fun (is_dynamic, tyname) -> add_type_name tyname (0, Some (fun _ -> TypeCons (tyname, [])))
+                                //|>> fun (is_dynamic, s) -> TypeCons (s, []) 
+            let BasicTD = (kw "basic" << kw "domain" << ID_DOMAIN) |>> fun tyname -> add_basic_domain tyname
+            AnyDomain <|> EnumTD <|> AbstractTD <|> BasicTD
+            (* <|> StructuredTD  (* not really a declaration *) *) ) s
 
-let Domain (sign : SIGNATURE, state : STATE) : Parser<unit>  =
+let Domain (sign : SIGNATURE, state : STATE) : Parser<SIGNATURE -> SIGNATURE>  =
     let (ConcreteDomain, TypeDomain) = (ConcreteDomain (sign (*, state*) ), TypeDomain (sign, state))
-    (ConcreteDomain <|> TypeDomain)  |>> fun _ -> ()
+    (ConcreteDomain <|> TypeDomain)
 
 let Function (sign : SIGNATURE, state : STATE) : Parser<FCT_NAME * FCT_INFO>  =
     let getDomainByID = getDomainByID (sign (*, state *) )

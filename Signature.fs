@@ -111,13 +111,19 @@ let empty_signature : SIGNATURE = Map.empty
 let signature_override (sign0 : SIGNATURE) sign' = Common.map_override sign0 sign'
 
 let add_type_name type_name (arity, maps_to) (sign : SIGNATURE) =
-    Map.add type_name (TypeInfo { arity = arity; maps_to = maps_to }) sign
+    if Map.containsKey type_name sign
+    then failwith (sprintf "type name '%s' already defined" type_name)
+    else Map.add type_name (TypeInfo { arity = arity; maps_to = maps_to }) sign
 
 let add_function_name fct_name (fct_kind, fct_type, infix_status) (sign : SIGNATURE) =
-    Map.add fct_name (FctInfo { fct_kind = fct_kind; fct_type = fct_type; infix_status = infix_status }) sign
+    if Map.containsKey fct_name sign
+    then failwith (sprintf "function name '%s' already defined" fct_name)
+    else Map.add fct_name (FctInfo { fct_kind = fct_kind; fct_type = fct_type; infix_status = infix_status }) sign
 
 let add_rule_name rule_name rule_type (sign : SIGNATURE) =
-    Map.add rule_name (RuleInfo { rule_type = rule_type }) sign
+    if Map.containsKey rule_name sign
+    then failwith (sprintf "rule name '%s' already defined" rule_name)
+    else Map.add rule_name (RuleInfo { rule_type = rule_type }) sign
 
 let is_name_defined name (sign : SIGNATURE) =
     Map.containsKey name sign
