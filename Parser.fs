@@ -328,28 +328,25 @@ let fct_parameter_types (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE list
                 |>> fun ty_dom -> ([], ty_dom) )
     ) s
 
-let fct_initially (state : STATE) (s : ParserInput<PARSER_STATE>) : ParserResult<Map<VALUE list, VALUE>, PARSER_STATE> =
-    let sign = get_signature_from_input s
+let fct_initially (s : ParserInput<PARSER_STATE>) : ParserResult<Map<VALUE list, VALUE>, PARSER_STATE> =
+    let (sign, state) = get_parser_state s
     // for the time being, only 0-ary functions can be initialised
     (       ( ((kw "initially") << term)
                 |>> fun t -> let _ = typecheck_term t (sign, Map.empty)
                              Map.add [] (Eval.eval_term t (state, Map.empty)) Map.empty )
     ) s
 
-let fct_eqdef (state : STATE) (s : ParserInput<PARSER_STATE>) : ParserResult<VALUE list -> VALUE, PARSER_STATE> =
+let fct_eqdef (s : ParserInput<PARSER_STATE>) : ParserResult<VALUE list -> VALUE, PARSER_STATE> =
     let sign = get_signature_from_input s
     // for the time being, only 0-ary functions can be initialised
     (       ( ((kw "=") << term)
                 |>> fun t -> let _ = typecheck_term t (sign, Map.empty)
                              let t_val = Eval.eval_term t (State.background_state  (* !!! use only background !!! *), Map.empty)
                              (function [] -> t_val | _ -> UNDEF) )
-
     ) s
 
-let definition (sign : SIGNATURE, state : STATE) (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE * RULES_DB, PARSER_STATE> =
-    // let (new_fct_name, fct_parameter_types, fct_initially, fct_eqdef, new_rule_name, rule) =
-    //         (new_fct_name sign, fct_parameter_types sign, fct_initially (sign, state), fct_eqdef (sign, state), new_rule_name sign, rule sign)
-    let (fct_eqdef, fct_initially) = (fct_eqdef state, fct_initially state)
+let definition (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE * RULES_DB, PARSER_STATE> =
+    let (sign, state) = get_parser_state s
     let opt_state_initialisation (kind : Signature.FCT_KIND) f (tys_ran, ty_dom) (opt_static_def, opt_initially) = 
             match (opt_static_def, opt_initially) with
                 |   (Some static_def, _) ->
@@ -380,13 +377,15 @@ let definition (sign : SIGNATURE, state : STATE) (s : ParserInput<PARSER_STATE>)
         <|> ( ws_or_comment >> peos |>> fun _ -> (empty_signature, empty_state, empty_rules_db) )
     ) s
 
-let rec definitions (sign : SIGNATURE, state : STATE) (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE * RULES_DB, PARSER_STATE>  =
-    match definition (sign, state) s with 
+let rec definitions (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE * RULES_DB, PARSER_STATE>  =
+    let (sign, state) = get_parser_state s
+    match definition s with 
     |   ParserSuccess ((sign', state', rules_db'), s') ->
             if  Map.isEmpty sign'
             then ParserSuccess ((sign', state', rules_db'), s')
             else 
-            (   match definitions (signature_override sign sign', state_override state state') s' with
+            (   let s'' = chg_parser_state s' (signature_override sign sign', state_override state state')
+                match definitions s'' with
                 |   ParserSuccess ((sign'', state'', rules_db''), s'') ->
                         ParserSuccess ((signature_override sign' sign'', state_override state' state'', rules_db_override rules_db' rules_db''), s'')
                 |   ParserFailure errors ->
@@ -410,6 +409,6 @@ let parse_and_typecheck (parsing_fct : Parser<'a, PARSER_STATE>) typechecking_fc
     ast
 
 let parse_name sign s = parse_and_typecheck (name : Parser<NAME, PARSER_STATE>) typecheck_name (sign, empty_state) s
-let parse_term sign s = parse_and_typecheck term typecheck_term sign s
-let parse_rule sign s = parse_and_typecheck rule typecheck_rule sign s
-let parse_definitions (sign, S) s = make_parser (definitions (sign, S)) (sign, S) s
+let parse_term sign s = parse_and_typecheck term typecheck_term (sign, empty_state) s
+let parse_rule sign s = parse_and_typecheck rule typecheck_rule (sign, empty_state) s
+let parse_definitions (sign, S) s = make_parser definitions (sign, S) s
