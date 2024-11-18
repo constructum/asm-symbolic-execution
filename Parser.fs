@@ -72,9 +72,10 @@ let kw kw_name s =
     (   (   (   (ws_or_comment << (pmany1 pletter)))
             <|> (ws_or_comment << (pmany1 symb_ident_char)) )
                     >>= fun s ->
-                        if s = explode kw_name
+                        let s = implode s
+                        if s = kw_name
                         then preturn s
-                        else pfail_msg "keyword" ($"keyword '{kw_name}' expected, '{implode s}' found") ) s
+                        else pfail_msg "keyword" ($"keyword '{kw_name}' expected, '{s}' found") ) s
 
 //--------------------------------------------------------------------
 

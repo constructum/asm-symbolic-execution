@@ -45,6 +45,10 @@ type TYPE =         // !!! AsmetaL note: Complex, Real, Natural, Char not implem
 | TypeParam of string
 | TypeCons of string * TYPE list
 | Prod of TYPE list
+| Seq of TYPE
+| Powerset of TYPE
+| Bag of TYPE
+| Map of TYPE * TYPE
 
 let rec type_to_string ty =
     match ty with
@@ -56,6 +60,10 @@ let rec type_to_string ty =
     |   Rule -> "Rule"
     |   TypeCons (s, tys)  -> if List.isEmpty tys then s else s ^ "(" ^ (tys |> type_list_to_string) ^ ")"
     |   Prod tys -> "Prod(" ^ (tys |> type_list_to_string) ^ ")"
+    |   Seq ty -> "Seq(" ^ (type_to_string ty) ^ ")"
+    |   Powerset ty -> "Powerset(" ^ (type_to_string ty) ^ ")"
+    |   Bag ty -> "Bag(" ^ (type_to_string ty) ^ ")"
+    |   Map (ty1, ty2) -> "Map(" ^ (type_to_string ty1) ^ ", " ^ (type_to_string ty2) ^ ")"
 
 and type_list_to_string tys =
     tys >>| type_to_string |> String.concat ", "
@@ -135,21 +143,24 @@ let is_type_name name (sign : SIGNATURE) =
         |   RuleInfo ri -> false
     with _ -> false
 
-let construct_type tyname tyargs (sign : SIGNATURE) : TYPE =
+let construct_type (sign : SIGNATURE) (tyname, tyargs) : TYPE =
     if  // !!! temporary for AsmetaL compatibility: non-implemented types seen as user-defined base types
         tyname = "Complex" || tyname = "Real" || tyname = "Natural" || tyname = "Char"    // AsmetaL predefined basic domains
-    then TypeCons (tyname, tyargs)
-    else // normal case
-        try match (Map.find tyname sign) with
-            |   TypeInfo { arity = n; maps_to = M } ->
-                    if List.length tyargs <> n
-                    then failwith (sprintf "type '%s' instantiated with %d arguments, but its arity is %d" tyname (List.length tyargs) n)            
-                    else
-                        match M with
-                        |   Some f -> f tyargs
-                        |   None -> TypeCons (tyname, tyargs)
-            |   _ -> failwith (sprintf "unknown type '%s'" tyname)
-        with _ -> failwith (sprintf "unknown type '%s'" tyname)
+    then if List.isEmpty tyargs then TypeCons (tyname, tyargs) else failwith (sprintf "type '%s' does not expect type arguments" tyname)
+    else // !!! another special case for AsmetaL: Prod can have any number of type arguments
+        if tyname = "Prod"
+        then Prod tyargs
+        else // normal case
+            try match (Map.find tyname sign) with
+                |   TypeInfo { arity = n; maps_to = M } ->
+                        if List.length tyargs <> n
+                        then failwith (sprintf "type '%s' instantiated with %d arguments, but its arity is %d" tyname (List.length tyargs) n)            
+                        else
+                            match M with
+                            |   Some f -> f tyargs
+                            |   None -> TypeCons (tyname, tyargs)
+                |   _ -> failwith (sprintf "unknown type '%s'" tyname)
+            with _ -> failwith (sprintf "unknown type '%s'" tyname)
 
 let is_function_name name (sign : SIGNATURE) =
     try match (Map.find name sign) with

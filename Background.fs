@@ -116,14 +116,17 @@ let const_static_fct (const_val : VALUE) (args : VALUE list) = const_val
 //--------------------------------------------------------------------
 
 let background_types = 
+    let fail type_ arity args = failwith (sprintf "%s type expects %d type parameter(s), but %d were given" type_ arity (List.length args))
     [
-        ("Boolean", 0, Some (function [] -> Boolean | _ -> failwith "Boolean type has no parameters"));
-        ("Integer", 0, Some (function [] -> Integer | _ -> failwith "Integer type has no parameters"));
-        ("String",  0, Some (function [] -> String  | _ -> failwith "String type has no parameters"));
-        ("Undef",   0, Some (function [] -> Undef   | _ -> failwith "Undef type has no parameters"));
-        ("Rule",    0, Some (function [] -> Rule    | _ -> failwith "Rule type has no parameters"));
-            // note (!!!): this implies that 'undef' is not really practically usable, because it is of type 'Undef', which is not compatible with any other types
-        // !!! Asmeta note: Complex, Real, Natural, Char not implemented
+        ("Boolean",  0, Some (function [] -> Integer | args -> fail "Boolean" 0 args));
+        ("Integer",  0, Some (function [] -> Integer | args -> fail "Integer" 0 args));
+        ("String",   0, Some (function [] -> String  | args -> fail "String"  0 args));
+        ("Undef",    0, Some (function [] -> Undef   | args -> fail "Undef"   0 args));
+        ("Rule",     0, Some (function [] -> Rule    | args -> fail "Rule"    0 args));
+        ("Seq",      1, Some (function [ty] -> Seq ty      | args -> fail "Seq"      1 args));
+        ("Powerset", 1, Some (function [ty] -> Powerset ty | args -> fail "Powerset" 1 args));
+        ("Bag",      1, Some (function [ty] -> Bag ty      | args -> fail "Bag"      1 args));
+        ("Map",      2, Some (function [ty1; ty2] -> Map (ty1, ty2) | args -> fail "Map" 2 args));
     ]
 
 let background_functions = 

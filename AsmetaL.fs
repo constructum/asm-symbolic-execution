@@ -87,8 +87,10 @@ let int = Parser.int
 
 let kw kw_name =
     (   (ws_or_comment << (pmany1 pletter)) )
-            >>= fun s -> if s = explode kw_name then preturn s
-                         else pfail_msg "keyword" ($"keyword '{kw_name}' expected, '{implode s}' found")
+            >>= fun s ->
+                    let s = implode s 
+                    if s = kw_name then preturn s
+                    else pfail_msg "keyword" ($"keyword '{kw_name}' expected, '{s}' found")
 
 let alphanumeric_identifier =
     ws_or_comment << (pletter ++ (pmany palphanum_))
@@ -151,16 +153,14 @@ let add_basic_domain s sign =
 let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSER_STATE> =
         let sign = get_signature_from_input s
         (   (   StructuredTD
-            <|> (ID_DOMAIN |>> fun s -> Signature.construct_type s [] sign)) ) s
+            <|> (ID_DOMAIN |>> fun s -> construct_type sign (s, []))) ) s
     and StructuredTD  (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSER_STATE> =
-        // let sign = get_signature_from_input s
-        (   // !!! no longer mentioned in doc: let RuleDomain     = kw "Rule" << opt_psep1 "(" getDomainByID "," ")" |>> fun _ -> failwith "RuleDomain not implemented"
-            let ProductDomain  = kw "Prod" << opt_psep2 "(" getDomainByID "," ")" |>> Prod
-            let SequenceDomain = kw "Seq"  << lit "(" << getDomainByID >> lit ")" |>> fun _ -> failwith "SequenceDomain not implemented"
-            let PowersetDomain = kw "Powerset" << lit "(" << getDomainByID >> lit ")" |>> fun _ -> failwith "PowersetDomain not implemented"
-            let BagDomain      = kw "Bag"  << lit "(" << getDomainByID >> lit ")" |>> fun _ -> failwith "BagDomain not implemented"
-            let MapDomain      = kw "Map"  << lit "(" << getDomainByID >> lit "," << getDomainByID >> lit ")" |>> fun _ -> failwith "MapDomain not implemented"
-            // !!! no longer mentioned in doc: RuleDomain <|> 
+        let sign = get_signature_from_input s
+        (   let ProductDomain  = kw "Prod"     ++ (opt_psep2 "(" getDomainByID "," ")") |>> construct_type sign
+            let SequenceDomain = kw "Seq"      ++ (lit "(" << (getDomainByID |>> fun t->[t]) >> lit ")") |>> construct_type sign
+            let PowersetDomain = kw "Powerset" ++ (lit "(" << (getDomainByID |>> fun t->[t]) >> lit ")") |>> construct_type sign
+            let BagDomain      = kw "Bag"      ++ (lit "(" << (getDomainByID |>> fun t->[t]) >> lit ")") |>> construct_type sign
+            let MapDomain      = kw "Map"      ++ (lit "(" << (R3 getDomainByID (lit ",") getDomainByID |>> fun (t1,_,t2) -> [t1;t2]) >> lit ")")  |>> construct_type sign
             ProductDomain <|> SequenceDomain <|> PowersetDomain <|> BagDomain<|> MapDomain ) s
     and ConcreteDomain (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
         // let sign = get_signature_from_input s

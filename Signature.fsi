@@ -37,6 +37,10 @@ type TYPE =
 | TypeParam of string
 | TypeCons of string * TYPE list
 | Prod of TYPE list
+| Seq of TYPE
+| Powerset of TYPE
+| Bag of TYPE
+| Map of TYPE * TYPE
 
 val type_to_string : TYPE -> string
 val type_list_to_string : TYPE list -> string
@@ -75,9 +79,9 @@ val rule_names : SIGNATURE -> Set<string>
 
 val is_name_defined : string -> SIGNATURE -> bool
 
-val is_type_name : string -> SIGNATURE -> bool
-val construct_type : string -> TYPE list -> SIGNATURE -> TYPE
+val construct_type : SIGNATURE -> (string * TYPE list) -> TYPE
 
+val is_type_name : string -> SIGNATURE -> bool
 val is_rule_name : string -> SIGNATURE -> bool
 
 val is_function_name : string -> SIGNATURE -> bool
