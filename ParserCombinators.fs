@@ -38,11 +38,18 @@ let (>>=) (p: Parser<'a, 'state>) (f: 'a -> Parser<'b, 'state>) : Parser<'b, 'st
 
 
 // change parser state
-let (||>>) (p: Parser<'a, 'state1>) (f: 'state1 -> 'state2) (s : ParserInput<'state1>): ParserResult<'a, 'state2> =
+let (||>>) (p: Parser<'a, 'state>) (f: 'state -> 'a -> 'state) (s : ParserInput<'state>): ParserResult<'a, 'state> =
     match p s with
-    |   ParserSuccess (result, (failure', pos', state', stream')) -> ParserSuccess (result, (failure', pos', f state', stream'))
+    |   ParserSuccess (result, (failure', pos', state', stream')) -> ParserSuccess (result, (failure', pos', f state' result, stream'))
     |   ParserFailure failures -> ParserFailure failures
        
+(*
+val ( |>> ):
+   p: Parser<'a,'state> ->
+   f: ('a -> 'b)
+   -> Parser<'b,'state>
+*)
+
 let combine_failures (failures1 : Set<FailedAt>, failures2 : Set<FailedAt>) =
     if Set.isEmpty failures1 then failures2
     else if Set.isEmpty failures2 then failures1

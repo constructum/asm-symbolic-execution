@@ -284,7 +284,7 @@ let rec Asm (sign : SIGNATURE, state : STATE) (s : ParserInput<Parser.PARSER_STA
         System.IO.Directory.SetCurrentDirectory new_dir
         let text = Common.readfile full_path
         let parse = Parser.make_parser (Asm (sign, state)) (sign, state)
-        let imported_module = parse text        // !!! checks missing (e.g. check that it is a 'module' and not an 'asm', etc.)
+        let imported_module = fst (parse text)        // !!! checks missing (e.g. check that it is a 'module' and not an 'asm', etc.)
         // move to original directory (where the importing file is located)
         System.IO.Directory.SetCurrentDirectory saved_dir
         imported_module
@@ -408,7 +408,7 @@ let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB =
             (sign, state, rdb)
 
 
-let parse_definitions (sign, S) s = Parser.make_parser (Asm (sign, S)) (sign, S) s
+let parse_definitions (sign, S) s = fst (Parser.make_parser (Asm (sign, S)) (sign, S) s)
 
 
 

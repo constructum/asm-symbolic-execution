@@ -358,7 +358,7 @@ let definition (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE 
                                     else ()) initial_values
                         state_override_dynamic empty_state (Map.add f initial_values Map.empty)
                 |   _ -> empty_state
-    (   (   ( ((kw "static" >> poption (kw "function")) << new_fct_name ++ fct_parameter_types) ++ (poption fct_eqdef) )
+    ( ( (   ( ((kw "static" >> poption (kw "function")) << new_fct_name ++ fct_parameter_types) ++ (poption fct_eqdef) )
                 |>> fun ((f, (tys_ran, ty_dom)), opt_fct_def) ->
                         (   add_function_name f (Static, (tys_ran, ty_dom), NonInfix) Map.empty,
                             opt_state_initialisation (Signature.Static) f (tys_ran, ty_dom) (opt_fct_def, None),
@@ -374,29 +374,21 @@ let definition (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE 
                         (   add_rule_name rule_name [] Signature.empty_signature,
                             empty_state,
                             add_rule rule_name R empty_rules_db ) )   // parameterless rule: empty type list
-        <|> ( ws_or_comment >> peos |>> fun _ -> (empty_signature, empty_state, empty_rules_db) )
-    ) s
+        (*<|> ( ws_or_comment >> peos |>> fun _ -> (empty_signature, empty_state, empty_rules_db) ) *)
+    ) ||>> fun (sign, state) (sign', state', _) -> (signature_override sign sign', state_override state state' ) ) s
 
 let rec definitions (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE * RULES_DB, PARSER_STATE>  =
-    let (sign, state) = get_parser_state s
-    match definition s with 
-    |   ParserSuccess ((sign', state', rules_db'), s') ->
-            if  Map.isEmpty sign'
-            then ParserSuccess ((sign', state', rules_db'), s')
-            else 
-            (   let s'' = chg_parser_state s' (signature_override sign sign', state_override state state')
-                match definitions s'' with
-                |   ParserSuccess ((sign'', state'', rules_db''), s'') ->
-                        ParserSuccess ((signature_override sign' sign'', state_override state' state'', rules_db_override rules_db' rules_db''), s'')
-                |   ParserFailure errors ->
-                        ParserFailure errors )
-    | ParserFailure errors -> ParserFailure errors
+    (   ( definition >> skip_to_eos )
+    <|> ( definition ++ definitions
+            |>> fun ((sign', state', rules_db'), (sign'', state'', rules_db'')) -> 
+                    (signature_override sign' sign'', state_override state' state'', rules_db_override rules_db' rules_db'') )   // !!! inefficient, should be changed
+    ) s
 
 //--------------------------------------------------------------------
 
 let make_parser parse_fct parser_state s =
     match (parse_fct >> ws_or_comment) (parser_input_in_state_from_string parser_state s) with
-    |   ParserSuccess (r, _) -> r
+    |   ParserSuccess (result, parser_state) -> (result, parser_state)
     |   ParserFailure errors -> failwith (parser_msg (ParserFailure errors))
 
 //--------------------------------------------------------------------
@@ -404,11 +396,15 @@ let make_parser parse_fct parser_state s =
 
 let parse_and_typecheck (parsing_fct : Parser<'a, PARSER_STATE>) typechecking_fct parser_state (s : string) =
     let sign = get_signature parser_state
-    let ast = make_parser parsing_fct parser_state s
+    let (ast, parser_state') = make_parser parsing_fct parser_state s
     let _   = typechecking_fct ast (sign, Map.empty)   // function result is discarded, but exceptions are thrown on typing errors
     ast
 
 let parse_name sign s = parse_and_typecheck (name : Parser<NAME, PARSER_STATE>) typecheck_name (sign, empty_state) s
 let parse_term sign s = parse_and_typecheck term typecheck_term (sign, empty_state) s
 let parse_rule sign s = parse_and_typecheck rule typecheck_rule (sign, empty_state) s
-let parse_definitions (sign, S) s = make_parser definitions (sign, S) s
+//let parse_definitions (sign, S) s = get_state_from_input (snd (make_parser definitions (sign, S) s))
+let parse_definitions (sign, S) s =
+    let defs = fst (make_parser definitions (sign, S) s)
+    fprintf stderr "parse_definitions: %A\n" defs
+    defs
