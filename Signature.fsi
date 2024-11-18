@@ -76,7 +76,7 @@ val rule_names : SIGNATURE -> Set<string>
 val is_name_defined : string -> SIGNATURE -> bool
 
 val is_type_name : string -> SIGNATURE -> bool
-val get_type : string -> TYPE list -> SIGNATURE -> TYPE
+val construct_type : string -> TYPE list -> SIGNATURE -> TYPE
 
 val is_rule_name : string -> SIGNATURE -> bool
 

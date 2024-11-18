@@ -151,7 +151,7 @@ let add_basic_domain s sign =
 let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSER_STATE> =
         let sign = get_signature_from_input s
         (   (   StructuredTD
-            <|> (ID_DOMAIN |>> fun s -> Signature.get_type s [] sign)) ) s
+            <|> (ID_DOMAIN |>> fun s -> Signature.construct_type s [] sign)) ) s
     and StructuredTD  (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSER_STATE> =
         // let sign = get_signature_from_input s
         (   // !!! no longer mentioned in doc: let RuleDomain     = kw "Rule" << opt_psep1 "(" getDomainByID "," ")" |>> fun _ -> failwith "RuleDomain not implemented"
@@ -179,7 +179,7 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
             (* <|> StructuredTD  (* not really a declaration *) *) ) s
 
 let Domain (s : ParserInput<PARSER_STATE>) =
-    (ConcreteDomain <|> TypeDomain) s
+    ((ConcreteDomain <|> TypeDomain) ||>> fun (sign, state) update_sign_fct -> (update_sign_fct sign, state)) s
 
 let Function (s : ParserInput<PARSER_STATE>) =
     let prod_to_type_list ty = List.map (function Prod _ -> failwith "not supported: nested Prod type" | ty_ -> ty_) ty

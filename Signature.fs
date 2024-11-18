@@ -135,7 +135,7 @@ let is_type_name name (sign : SIGNATURE) =
         |   RuleInfo ri -> false
     with _ -> false
 
-let get_type tyname tyargs (sign : SIGNATURE) : TYPE =
+let construct_type tyname tyargs (sign : SIGNATURE) : TYPE =
     if  // !!! temporary for AsmetaL compatibility: non-implemented types seen as user-defined base types
         tyname = "Complex" || tyname = "Real" || tyname = "Natural" || tyname = "Char"    // AsmetaL predefined basic domains
     then TypeCons (tyname, tyargs)
