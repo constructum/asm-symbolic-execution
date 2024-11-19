@@ -182,13 +182,11 @@ let Domain (s : ParserInput<PARSER_STATE>) =
     ((ConcreteDomain <|> TypeDomain) ||>> fun (sign, state) update_sign_fct -> (update_sign_fct sign, state)) s
 
 let Function (s : ParserInput<PARSER_STATE>) =
-    let prod_to_type_list ty = List.map (function Prod _ -> failwith "not supported: nested Prod type" | ty_ -> ty_) ty
+    // any function f : Prod(T1,...,Tn) -> T is converted into an n-ary function f : T1,...,Tn -> T  [n >= 0]
     let to_fct_type (tys : TYPE, ty_opt : TYPE option) =
         match (tys, ty_opt) with
-        |   (Prod tys, None)    -> failwith "not supported: nullary function of Prod type"
         |   (ty, None)          -> ([], ty)
-        |   (_, Some (Prod _))  -> failwith "not supported: Prod type as range of function"
-        |   (Prod tys, Some ty) -> (prod_to_type_list tys, ty)
+        |   (Prod tys, Some ty) -> (tys, ty)
         |   (ty, Some ty')      -> ([ty], ty')
     let StaticFunction     = R3 (kw "static"  << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
                                 |>> fun (f, tys, opt_ty) -> (f, { fct_kind = Static; fct_type = to_fct_type(tys, opt_ty); infix_status = NonInfix })
