@@ -164,7 +164,7 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
             ProductDomain <|> SequenceDomain <|> PowersetDomain <|> BagDomain<|> MapDomain ) s
     and ConcreteDomain (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
         // let sign = get_signature_from_input s
-        (   kw "domain" << ID_DOMAIN >> kw "subsetof" << getDomainByID |>> fun _ -> failwith "not implemented: concrete domain" ) s
+        (   (kw "domain" << ID_DOMAIN) ++ (kw "subsetof" << getDomainByID) |>> fun (a, b) -> failwith (sprintf "not implemented: concrete domain %A %A" a b) ) s
     and TypeDomain (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
         let sign = get_signature_from_input s
         (   let AnyDomain = kw "anydomain" << ID_DOMAIN
@@ -181,7 +181,7 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
 let Domain (s : ParserInput<PARSER_STATE>) =
     ((ConcreteDomain <|> TypeDomain) ||>> fun (sign, state) update_sign_fct -> (update_sign_fct sign, state)) s
 
-let Function (s : ParserInput<PARSER_STATE>) =
+let Function (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
     // any function f : Prod(T1,...,Tn) -> T is converted into an n-ary function f : T1,...,Tn -> T  [n >= 0]
     let to_fct_type (tys : TYPE, ty_opt : TYPE option) =
         match (tys, ty_opt) with
@@ -189,7 +189,7 @@ let Function (s : ParserInput<PARSER_STATE>) =
         |   (Prod tys, Some ty) -> (tys, ty)
         |   (ty, Some ty')      -> ([ty], ty')
     let StaticFunction     = R3 (kw "static"  << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
-                                |>> fun (f, tys, opt_ty) -> (f, { fct_kind = Static; fct_type = to_fct_type(tys, opt_ty); infix_status = NonInfix })
+                                |>> fun (f, tys, opt_ty) -> add_function_name f (Static, NonInfix, to_fct_type(tys, opt_ty))
     let DerivedFunction    = R3 (kw "derived" << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
                                 |>> fun _ -> failwith "not implemented: derived function"
     let OutFunction        = R3 (poption (kw "dynamic") << kw "out"        << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
@@ -199,12 +199,12 @@ let Function (s : ParserInput<PARSER_STATE>) =
     let SharedFunction     = R3 (poption (kw "dynamic") << kw "shared"     << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
                                 |>> fun _ -> failwith "not implemented: shared function"
     let ControlledFunction = R3 (poption (kw "dynamic") << kw "controlled" << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
-                                |>> fun (f, tys, opt_ty) -> (f, { fct_kind = Controlled; fct_type = to_fct_type(tys, opt_ty); infix_status = NonInfix })
+                                |>> fun (f, tys, opt_ty) -> add_function_name f (Controlled, NonInfix, to_fct_type(tys, opt_ty))
     let LocalFunction      = R3 (poption (kw "dynamic") << kw "local"  << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
                                 |>> fun _ -> failwith "not implemented: local function"
     let DynamicFunction    = OutFunction <|> MonitoredFunction  <|> SharedFunction <|> ControlledFunction <|> LocalFunction
     let BasicFunction      = StaticFunction <|> DynamicFunction
-    (BasicFunction <|> DerivedFunction) s
+    ((BasicFunction <|> DerivedFunction)  ||>> fun (sign, state) update_sign_fct -> (update_sign_fct sign, state)) s
 
 
 
@@ -311,10 +311,12 @@ let rec Asm (sign : SIGNATURE, state : STATE) (s : ParserInput<Parser.PARSER_STA
             (   (kw "signature" >> lit ":") <<
                 (   (pmany Domain) ++
                     (pmany Function)    )   ) 
-                        |>> fun (_, fcts) ->
-                            List.fold (fun sign (f, fi) -> add_function_name f (fi.fct_kind, fi.fct_type, fi.infix_status) sign) empty_signature fcts
+                        |>> fun (domain_declarations, function_declarations) ->
+                            let signature_with_domains   = List.fold (fun sign add_one_domain -> add_one_domain sign) empty_signature domain_declarations
+                            let signature_with_functions = List.fold (fun sign add_one_function -> add_one_function sign) signature_with_domains function_declarations
+                            signature_with_functions
     let Header = R3
-                    (pmany ImportClause)
+                    (pmany (ImportClause ||>> fun (sign, state) (_, ASM { signature = new_sign }, _) -> (signature_override sign new_sign, state)(* !!! replace with some proper function to load module at some point *)))
                     (poption ExportClause |>> Option.defaultValue None)
                     Signature
     

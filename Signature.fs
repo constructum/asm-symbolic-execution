@@ -36,6 +36,11 @@ let fct_kind_to_string = function
 | Out -> "out"
 | Derived -> "derived"
 
+let infix_status_to_string = function
+| NonInfix -> "non-infix"
+| Infix (LeftAssoc, n) -> sprintf "infix left-associative with precedence %d" n
+| Infix (RightAssoc, n) -> sprintf "infix right-associative with precedence %d" n
+
 type TYPE =         // !!! AsmetaL note: Complex, Real, Natural, Char not implemented
 | Boolean
 | Integer
@@ -68,6 +73,9 @@ let rec type_to_string ty =
 and type_list_to_string tys =
     tys >>| type_to_string |> String.concat ", "
 
+and fct_type_to_string (args_type, res_type) =
+    sprintf "%s -> %s" (args_type |> type_list_to_string) (res_type |> type_to_string)
+
 exception TypeMismatch of TYPE * TYPE
 
 let match_type (ty : TYPE) (ty_sign : TYPE) (ty_env : Map<string, TYPE>) : Map<string, TYPE> =
@@ -92,13 +100,13 @@ let match_type (ty : TYPE) (ty_sign : TYPE) (ty_env : Map<string, TYPE>) : Map<s
 
 type TYPE_INFO = {
     arity   : int;
-    maps_to : (TYPE list -> TYPE) option;    // None for user-defined types; Some ... for mapping type names to built-in types
+    maps_to : (TYPE list -> TYPE) option;    // None for user-declared types; Some ... for mapping type names to built-in types
 }
 
 type FCT_INFO = {
     fct_kind : FCT_KIND;
-    fct_type : TYPE list * TYPE;
-    infix_status : INFIX_STATUS
+    infix_status : INFIX_STATUS;
+    fct_types : (TYPE list * TYPE) list;      // it is a list due to function overloading in AsmetaL
 }
 
 type RULE_INFO = {
@@ -120,17 +128,32 @@ let signature_override (sign0 : SIGNATURE) sign' = Common.map_override sign0 sig
 
 let add_type_name type_name (arity, maps_to) (sign : SIGNATURE) =
     if Map.containsKey type_name sign
-    then failwith (sprintf "type name '%s' already defined" type_name)
+    then failwith (sprintf "type name '%s' already declared" type_name)
     else Map.add type_name (TypeInfo { arity = arity; maps_to = maps_to }) sign
 
-let add_function_name fct_name (fct_kind, fct_type, infix_status) (sign : SIGNATURE) =
-    if Map.containsKey fct_name sign
-    then failwith (sprintf "function name '%s' already defined" fct_name)
-    else Map.add fct_name (FctInfo { fct_kind = fct_kind; fct_type = fct_type; infix_status = infix_status }) sign
+let add_function_name fct_name (fct_kind, infix_status, new_fct_type) (sign : SIGNATURE) =
+    let existing_fct_types =
+        try
+            match Map.find fct_name sign with
+            |   FctInfo { fct_kind = existing_fct_kind; infix_status = existing_infix_status; fct_types = fct_types } ->
+                    if fct_kind <> existing_fct_kind
+                    then failwith (sprintf "function '%s' already declared with kind %s, but now being declared with kind %s" fct_name (existing_fct_kind |> fct_kind_to_string) (fct_kind |> fct_kind_to_string))
+                    if infix_status <> NonInfix && existing_infix_status <> NonInfix
+                    then failwith (sprintf "function '%s' already declared as infix %s, but now being declared as %s" fct_name (existing_infix_status |> infix_status_to_string) (infix_status |> infix_status_to_string))
+                    if List.exists (fun (args_type, res_type) -> args_type = fst new_fct_type && res_type = snd new_fct_type) fct_types
+                    then fprintf stderr "warning: function name '%s : %s' already declared\n" fct_name (new_fct_type |> fct_type_to_string)
+                    fct_types
+            |   TypeInfo _ -> failwith (sprintf "function name '%s' already declared as a type name" fct_name)
+            |   RuleInfo _ -> failwith (sprintf "function name '%s' already declared as a rule name" fct_name)
+        with _ -> []
+    let arity = new_fct_type |> fst |> List.length
+    if infix_status <> NonInfix && arity <> 2
+    then failwith (sprintf "infix notation only allowed for binary functions, but arity of '%s' is %d" fct_name arity)
+    else Map.add fct_name (FctInfo { fct_kind = fct_kind; fct_types = existing_fct_types @ [new_fct_type]; infix_status = infix_status }) sign
 
 let add_rule_name rule_name rule_type (sign : SIGNATURE) =
     if Map.containsKey rule_name sign
-    then failwith (sprintf "rule name '%s' already defined" rule_name)
+    then failwith (sprintf "rule name '%s' already declared" rule_name)
     else Map.add rule_name (RuleInfo { rule_type = rule_type }) sign
 
 let is_name_defined name (sign : SIGNATURE) =
@@ -179,13 +202,6 @@ let is_rule_name name (sign : SIGNATURE) =
 let fct_names sign  = Set.ofSeq (Map.keys sign) |> Set.filter (fun name -> is_function_name name sign)
 let rule_names sign = Set.ofSeq (Map.keys sign) |> Set.filter (fun name -> is_rule_name name sign)
 
-// arity is for both function and rule names
-let arity name (sign : SIGNATURE) =
-    match (Map.find name sign) with
-    |   TypeInfo _  -> failwith (sprintf "arity called for type parameter name '%s'" name)
-    |   FctInfo fi  -> List.length (fst fi.fct_type)
-    |   RuleInfo ri -> List.length ri.rule_type
-
 let get_fct_info msg fct_name (sign : SIGNATURE) f = 
     assert is_function_name fct_name sign
     (Map.find fct_name sign)
@@ -194,8 +210,13 @@ let get_fct_info msg fct_name (sign : SIGNATURE) f =
 let fct_kind fct_name (sign : SIGNATURE) = 
     get_fct_info "fct_kind" fct_name sign (fun fi -> fi.fct_kind)
 
+let fct_types fct_name (sign : SIGNATURE) = 
+    get_fct_info "fct_type" fct_name sign (fun fi -> fi.fct_types)
+
 let fct_type fct_name (sign : SIGNATURE) = 
-    get_fct_info "fct_type" fct_name sign (fun fi -> fi.fct_type)
+    match fct_types fct_name sign with
+    |   [fct_type] -> fct_type
+    |   _ -> failwith (sprintf "Signature.fct_type: overloaded function '%s'" fct_name)
 
 let infix_status fct_name (sign : SIGNATURE) =
     get_fct_info "infix_status" fct_name sign (fun fi -> fi.infix_status)
@@ -214,7 +235,27 @@ let precedence fct_name (sign : SIGNATURE) =
 
 //--------------------------------------------------------------------
 
-let match_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_type : TYPE list * TYPE) : TYPE =
+exception FunctionCallTypeMismatch of (string * TYPE list * TYPE) * TYPE list
+exception TypeOfResultUnknown of string * TYPE list * TYPE
+
+let type_error_msg (e : exn) =
+    match e with
+    |   TypeMismatch (ty, ty_sign) ->
+            sprintf "type mismatch: %s does not match %s" (ty |> type_to_string) (ty_sign |> type_to_string)
+    |   FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types) ->
+            sprintf "function '%s : %s -> %s' called with arguments of type(s) %s"
+                fct_name (sign_args_types |> type_list_to_string) (sign_res_type |> type_to_string) (args_types |> type_list_to_string)
+    |   TypeOfResultUnknown (fct_name, sign_args_types, sign_res_type) ->
+            sprintf "type of result of function %s : %s -> %s is unknown (type parameter '%s cannot be instantiated)"
+                fct_name (sign_args_types |> type_list_to_string) (sign_res_type |> type_to_string) (sign_res_type |> type_to_string)
+    |   _ -> "unknown type error"
+
+let type_error_fail (e : exn) =
+    try let msg = type_error_msg e 
+        failwith msg
+    with _ -> raise e
+
+let match_one_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_type : TYPE list * TYPE) : TYPE =
     let (sign_args_types, sign_res_type) = sign_fct_type
     let error_msg () =
         sprintf "function '%s : %s -> %s' called with arguments of type(s) %s"
@@ -223,8 +264,7 @@ let match_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_type :
         match sign_res_type with
         |   TypeParam a ->
                 try Map.find a ty_env
-                with _ -> failwith (sprintf "type of result of function %s : %s -> %s is unknown (type parameter '%s cannot be instantiated)"
-                                        fct_name (sign_args_types |> type_list_to_string) (sign_res_type |> type_to_string) a)
+                with _ -> raise (TypeOfResultUnknown (fct_name, sign_args_types, sign_res_type))
         |   _ -> sign_res_type
     let rec match_types = function
         |   ([], [], ty_env : Map<string, TYPE>) ->
@@ -232,11 +272,29 @@ let match_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_type :
         |   (arg_type :: args_types', sign_arg_type :: sign_arg_types', ty_env) -> 
                 let ty_env_1 =
                     try match_type arg_type sign_arg_type ty_env
-                    with _ -> failwith (error_msg ())
+                    with _ -> raise (FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types))
                 match_types (args_types', sign_arg_types', ty_env_1)
         |   (_, _, _) -> // arity does not match
-                failwith (error_msg ())
+                raise (FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types))
     let (_, result_type) = match_types (args_types, sign_args_types, Map.empty)
     result_type
+
+// let match_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_type : TYPE list * TYPE) : TYPE =
+//     try match_one_fct_type fct_name args_types sign_fct_type
+//     with ex -> type_error_fail ex  
+
+let match_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_types : list<TYPE list * TYPE>) : TYPE =
+    let rec matching_types results candidates =
+        match candidates with
+        |   [] -> results
+        |   sign_fct_type :: candidates' ->
+                try match match_one_fct_type fct_name args_types sign_fct_type with
+                    |   ty -> matching_types (ty :: results) candidates'
+                with ex -> matching_types results candidates'
+    let results = List.rev (matching_types [] sign_fct_types)
+    match results with
+    |   [] -> failwith (sprintf "no matching function type found for '%s' with arguments of type(s) %s" fct_name (args_types |> type_list_to_string))
+    |   [ty] -> ty
+    |   _ -> failwith (sprintf "ambiguous function call: multiple matching function types found for '%s' with arguments of type(s) %s" fct_name (args_types |> type_list_to_string))
 
 //--------------------------------------------------------------------

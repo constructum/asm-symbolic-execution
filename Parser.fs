@@ -147,11 +147,11 @@ let name s =
 
 let typecheck_name name (sign : SIGNATURE, _ : Map<string, TYPE>) =
     match name with
-    |   UndefConst      -> (UndefConst,    ([], Undef))
-    |   BoolConst b     -> (BoolConst b,   ([], Boolean))
-    |   IntConst i      -> (IntConst i,    ([], Integer))
-    |   StringConst s   -> (StringConst s, ([], String))
-    |   FctName f       -> (FctName f,     fct_type f sign)
+    |   UndefConst      -> (UndefConst,    [([], Undef)])
+    |   BoolConst b     -> (BoolConst b,   [([], Boolean)])
+    |   IntConst i      -> (IntConst i,    [([], Integer)])
+    |   StringConst s   -> (StringConst s, [([], String)])
+    |   FctName f       -> (FctName f,     fct_types f sign)
 
 let typecheck_app_term sign = function
     |   (fct_name, ts)  -> failwith ""
@@ -161,9 +161,10 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
         Value    = fun x _ -> type_of_value x;
         AppTerm  = fun (f, ts) (sign, tyenv) ->
                         match f (sign, tyenv) with
-                        |   (FctName f, (f_dom, f_ran)) ->  // fprintf stderr "typecheck_term %A\n" (f, (ts >>| fun t -> t (sign, tyenv)))
-                                                            match_fct_type f (ts >>| fun t -> t (sign, tyenv)) (f_dom, f_ran)
-                        |   (_, (_, f_ran)) -> f_ran    // special constants UndefConst, BoolConst b, etc.
+                        |   (FctName f, f_sign_types) ->  // fprintf stderr "typecheck_term %A\n" (f, (ts >>| fun t -> t (sign, tyenv)))
+                                                            match_fct_type f (ts >>| fun t -> t (sign, tyenv)) f_sign_types
+                        |   (_, [(_, f_ran)]) -> f_ran    // special constants UndefConst, BoolConst b, etc.
+                        |   _ -> failwith "typecheck_term: AppTerm: this should not happen";
         CondTerm = fun (G, t1, t2) (sign, tyenv) ->
                         if G (sign, tyenv) <> Boolean
                         then failwith "type of guard in conditional term must be Boolean)"
@@ -172,8 +173,26 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
                             if t1 = t2 then t1
                             else failwith $"branches of conditional term have different types (then-branch: {t1 |> type_to_string}; else-branch: {t2 |> type_to_string})" )                                                  
         Initial  = fun (f, xs) (sign, tyenv) ->
-                    match fct_type f sign with
+                        match_fct_type f (xs >>| type_of_value) (fct_types f sign)
+                    (* ??????????????????
+                        !!!!!!!!!!!!!!
+                                            
+                        match f (sign, tyenv) with
+                        |   (FctName f, f_sign_types) ->  // fprintf stderr "typecheck_term %A\n" (f, (ts >>| fun t -> t (sign, tyenv)))
+                                                            match_fct_type f (ts >>| fun t -> t (sign, tyenv)) f_sign_types
+                        |   (_, [(_, f_ran)]) -> f_ran    // special constants UndefConst, BoolConst b, etc.
+                        |   _ -> failwith "typecheck_term: AppTerm: this should not happen";
+                        ----------------------
+                        match f (sign, tyenv) with
+                        |   (FctName f, f_sign_types) ->  // fprintf stderr "typecheck_term %A\n" (f, (ts >>| fun t -> t (sign, tyenv)))
+                                                            match_fct_type f (xs >>| fun x -> x (sign, tyenv)) f_sign_types
+                        |   (_, [(_, f_ran)]) -> f_ran    // special constants UndefConst, BoolConst b, etc.
+                        |   _ -> failwith "typecheck_term: Initial: this should not happen";
+                    *)
+                    (*  !!!! old:
+                    match fct_types f sign with
                     |   (f_dom, f_ran) ->  match_fct_type f (xs >>| type_of_value) (f_dom, f_ran);
+                    *)
         // VarTerm  = fun v -> fun (_, tyenv) -> try Map.find v tyenv with _ -> failwith $"variable '{v}' not defined";
         // LetTerm  = fun (x, t1, t2) -> fun (sign, tyenv) ->
         //                 let t1 = t1 (sign, tyenv)
@@ -186,10 +205,9 @@ let typecheck_rule (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TY
                         let kind = fct_kind f sign
                         if kind = Controlled || kind = Shared || kind = Out
                         then
-                            let (f_dom, f_ran) = fct_type f sign
                             let ts = ts >>| fun t -> t (sign, tyenv)
                             let t_type  = t (sign, tyenv)
-                            let f_res_type = match_fct_type f ts (f_dom, f_ran)
+                            let f_res_type = match_fct_type f ts (fct_types f sign)
                             if t_type <> f_res_type
                             then failwith (sprintf "type of right-hand side of update rule (%s) does not match type of function %s : %s -> %s"
                                                 (t_type |> type_to_string) f (ts |> type_list_to_string) (f_res_type |> type_to_string))
@@ -250,10 +268,7 @@ let rec operator_parser (elem : Parser<'elem, PARSER_STATE>, app_cons : NAME * '
 //--------------------------------------------------------------------
 
 let mkAppTerm sign = function
-|   (FctName f, ts) ->
-        if arity f sign = List.length ts
-        then AppTerm (FctName f, ts)
-        else failwith $"function '{f}' with arity {arity f sign} applied to {List.length ts} arguments"
+|   (FctName f, ts) -> AppTerm (FctName f, ts)
 |   (UndefConst,    []) -> AppTerm (UndefConst, [])
 |   (BoolConst b,   []) -> AppTerm (BoolConst b, [])
 |   (IntConst i,    []) -> AppTerm (IntConst i, [])
@@ -361,12 +376,12 @@ let definition (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE 
                 |   _ -> empty_state
     ( ( (   ( ((kw "static" >> poption (kw "function")) << new_fct_name ++ fct_parameter_types) ++ (poption fct_eqdef) )
                 |>> fun ((f, (tys_ran, ty_dom)), opt_fct_def) ->
-                        (   add_function_name f (Static, (tys_ran, ty_dom), NonInfix) Map.empty,
+                        (   add_function_name f (Static, NonInfix, (tys_ran, ty_dom)) Map.empty,
                             opt_state_initialisation (Signature.Static) f (tys_ran, ty_dom) (opt_fct_def, None),
                             empty_rules_db ) )
         <|> (   ( ((kw "controlled" <|> kw "function" <|> (kw "controlled" >> kw "function")) << new_fct_name ++ fct_parameter_types) ++ (poption fct_initially) )
                 |>> fun ((f, (tys_ran, ty_dom)), opt_initially) ->
-                        (   add_function_name f (Controlled, (tys_ran, ty_dom), NonInfix) Map.empty,
+                        (   add_function_name f (Controlled, NonInfix, (tys_ran, ty_dom)) Map.empty,
                             opt_state_initialisation (Signature.Controlled) f (tys_ran, ty_dom) (None, opt_initially),
                             empty_rules_db ) )
         <|> ( ((kw "rule" << new_rule_name) ++ (kw "=" << rule))

@@ -145,12 +145,16 @@ let term_type sign =
                 |   INT _   -> Integer
                 |   STRING _ -> String;
         Initial  = fun (f, ts) -> let (_, T_ran) = fct_type f sign in T_ran;
+                        // !!! (1) not very efficient due to unnecessarily calling fct_type every time - note: term is already been type checked!
+                        // !!! (2) does not work for overloaded functions
         AppTerm = function
                     |   (UndefConst, _)    -> Undef
                     |   (IntConst _, _)    -> Integer
                     |   (BoolConst _, _)   -> Boolean
                     |   (StringConst _, _) -> String
                     |   (FctName f, ts)    -> let (_, T_ran) = fct_type f sign in T_ran;
+                            // !!! (1) not very efficient due to unnecessarily calling fct_type every time - note: term is already been type checked!
+                            // !!! (2) does not work for overloaded functions
         CondTerm = function (G, t1, t2) -> t1;
     }
 
