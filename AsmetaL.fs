@@ -277,12 +277,12 @@ and Rule (s : ParserInput<PARSER_STATE>) =
     ) s
 
 
-let rec Asm (sign : SIGNATURE, state : STATE) (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PARSER_STATE>  =
-    let (sign, state) = get_parser_state s
+let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PARSER_STATE>  =
+    //let (sign, state) = get_parser_state s
     let isAsyncr_isModule_name =
             (   ( (poption (kw "asyncr")) ++ (kw "asm" << identifier) |>> fun (asyncr, name) -> (asyncr.IsSome, false, name) )
             <|> ( (poption (kw "asyncr")) ++ (kw "module" << identifier) |>> fun (asyncr, name) -> (asyncr.IsSome, true, name) ) )
-    let parse_imported_module mod_id =
+    let parse_imported_module mod_id (sign, state) =
         if (!trace > 0) then fprintf stderr "importing module: '%s'\n" mod_id
         let saved_dir = System.IO.Directory.GetCurrentDirectory ()
         let filename = mod_id + ".asm"
@@ -293,16 +293,18 @@ let rec Asm (sign : SIGNATURE, state : STATE) (s : ParserInput<Parser.PARSER_STA
         // that may be imported in the imported module
         System.IO.Directory.SetCurrentDirectory new_dir
         let text = Common.readfile full_path
-        let parse = Parser.make_parser (Asm (sign, state)) (sign, state)
+        let parse = Parser.make_parser Asm (sign, state)
         let imported_module = fst (parse text)        // !!! checks missing (e.g. check that it is a 'module' and not an 'asm', etc.)
         // move to original directory (where the importing file is located)
         System.IO.Directory.SetCurrentDirectory saved_dir
         imported_module
-    let ImportClause = 
-            (   (kw "import" << MOD_ID (* or string, according to orig. grammar *))
+    let ImportClause s = 
+        let (sign, state) = get_parser_state s
+        (   (   (kw "import" << MOD_ID (* or string, according to orig. grammar *))
                 ++ (poption (lit "(" << (psep1_lit identifier ",") >> lit ")"))
-            |>> fun (mod_name, opt_imported_names) -> (mod_name, parse_imported_module mod_name, opt_imported_names) )     // !!! tbd: the 'opt_names' for the objects to import is not used
+            |>> fun (mod_name, opt_imported_names) -> (mod_name, parse_imported_module mod_name (sign, state), opt_imported_names) )     // !!! tbd: the 'opt_names' for the objects to import is not used
                     // imports : (string * string list option) list;
+        ) s
     let ExportClause =
             (   (kw "export" << (psep1_lit identifier ",")) |>> fun names -> Some names
             <|> (kw "export" << (lit "*") |>> fun _ -> None ) )
@@ -325,7 +327,8 @@ let rec Asm (sign : SIGNATURE, state : STATE) (s : ParserInput<Parser.PARSER_STA
     match parse_asm_with_header s with
     |   ParserFailure x -> ParserFailure x
     |   ParserSuccess (((asyncr, modul, asm_name), (imports, exports, sign')), s') ->
-            let sign = signature_override sign sign'
+            //let sign = signature_override sign sign'
+            let (sign, state) = get_parser_state s'
             let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
         
             let VariableTerm = ID_VARIABLE
@@ -418,4 +421,4 @@ let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB =
             (sign, state, rdb)
 
 
-let parse_definitions (sign, S) s = fst (Parser.make_parser (Asm (sign, S)) (sign, S) s)
+let parse_definitions (sign, S) s = fst (Parser.make_parser Asm (sign, S) s)

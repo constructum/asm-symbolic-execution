@@ -72,6 +72,9 @@ let preturn x : Parser<'a, 'state> = fun input -> ParserSuccess (x, input)
 let pfail     : Parser<'a, 'state> = fun input -> ParserFailure (combine_failures (Set.singleton (get_pos input, "always failing parser"), get_failures input))   // !!!! ?????
 let pfail_msg name msg : Parser<'a, 'state> = fun input -> ParserFailure (combine_failures (Set.singleton (get_pos input, msg), get_failures input))
 //msg
+    
+let (|>>) p f : Parser<'b, 'state> = p >>= (fun x -> preturn (f x))
+
 
 let pcharsat c_pred expected : Parser<char, 'state> =
     fun input ->
@@ -112,8 +115,6 @@ let (<|>) (p1: Parser<'a, 'state>) (p2: Parser<'a, 'state>) : Parser<'a, 'state>
                     |   ParserSuccess (result2, (failures2, pos2, state, stream2)) ->
                             ParserSuccess (result2, (combine_failures (failures1, failures2), pos2, state, stream2)) )
         |   res as ParserSuccess _ -> res
-    
-let (|>>) p f : Parser<'b, 'state> = p >>= (fun x -> preturn (f x))
 
 let rec pmany p : Parser<'a list, 'state> =
     let rec F (result, (input0 as (failures0, pos0, state0, stream0))) =
