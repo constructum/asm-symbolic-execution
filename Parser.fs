@@ -174,25 +174,6 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
                             else failwith $"branches of conditional term have different types (then-branch: {t1 |> type_to_string}; else-branch: {t2 |> type_to_string})" )                                                  
         Initial  = fun (f, xs) (sign, tyenv) ->
                         match_fct_type f (xs >>| type_of_value) (fct_types f sign)
-                    (* ??????????????????
-                        !!!!!!!!!!!!!!
-                                            
-                        match f (sign, tyenv) with
-                        |   (FctName f, f_sign_types) ->  // fprintf stderr "typecheck_term %A\n" (f, (ts >>| fun t -> t (sign, tyenv)))
-                                                            match_fct_type f (ts >>| fun t -> t (sign, tyenv)) f_sign_types
-                        |   (_, [(_, f_ran)]) -> f_ran    // special constants UndefConst, BoolConst b, etc.
-                        |   _ -> failwith "typecheck_term: AppTerm: this should not happen";
-                        ----------------------
-                        match f (sign, tyenv) with
-                        |   (FctName f, f_sign_types) ->  // fprintf stderr "typecheck_term %A\n" (f, (ts >>| fun t -> t (sign, tyenv)))
-                                                            match_fct_type f (xs >>| fun x -> x (sign, tyenv)) f_sign_types
-                        |   (_, [(_, f_ran)]) -> f_ran    // special constants UndefConst, BoolConst b, etc.
-                        |   _ -> failwith "typecheck_term: Initial: this should not happen";
-                    *)
-                    (*  !!!! old:
-                    match fct_types f sign with
-                    |   (f_dom, f_ran) ->  match_fct_type f (xs >>| type_of_value) (f_dom, f_ran);
-                    *)
         // VarTerm  = fun v -> fun (_, tyenv) -> try Map.find v tyenv with _ -> failwith $"variable '{v}' not defined";
         // LetTerm  = fun (x, t1, t2) -> fun (sign, tyenv) ->
         //                 let t1 = t1 (sign, tyenv)

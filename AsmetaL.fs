@@ -163,8 +163,11 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
             let MapDomain      = kw "Map"      ++ (lit "(" << (R3 getDomainByID (lit ",") getDomainByID |>> fun (t1,_,t2) -> [t1;t2]) >> lit ")")  |>> construct_type sign
             ProductDomain <|> SequenceDomain <|> PowersetDomain <|> BagDomain<|> MapDomain ) s
     and ConcreteDomain (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
-        // let sign = get_signature_from_input s
-        (   (kw "domain" << ID_DOMAIN) ++ (kw "subsetof" << getDomainByID) |>> fun (a, b) -> failwith (sprintf "not implemented: concrete domain %A %A" a b) ) s
+        let sign = get_signature_from_input s
+        (   (kw "domain" << ID_DOMAIN) ++ (kw "subsetof" << getDomainByID)          
+                |>> fun (tyname, T) ->
+                        // !!! for the moment, simply map to main type
+                        add_type_name tyname (0, Some (fun _ -> T)) ) s
     and TypeDomain (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
         let sign = get_signature_from_input s
         (   let AnyDomain = kw "anydomain" << ID_DOMAIN
