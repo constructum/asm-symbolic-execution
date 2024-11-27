@@ -240,7 +240,7 @@ let rec BasicRule (s : ParserInput<PARSER_STATE>) =
 and MacroCallRule (s : ParserInput<PARSER_STATE>) =
     //let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
     (   ((ID_RULE >> lit "[") ++ (psep0 Term (lit ",") >> lit "]"))
-            |>> fun _ -> failwith "not implemented: macro call rule" ) s
+            |>> fun (id, _) -> failwith (sprintf "not implemented: macro call rule ('%s')" id) ) s
 
 and TurboRule (s : ParserInput<PARSER_STATE>) =
     let sign = get_signature_from_input s
@@ -352,17 +352,17 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
                                                 |>> fun (f, param_list, t) ->
                                                         //!!!! no type checking
                                                         if List.length param_list > 0
-                                                        then failwith "not implemented: definition of function with arity > 0"
+                                                        then failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
                                                         else let fct = function [] -> Eval.eval_term t (State.background_state, Map.empty) | _ -> UNDEF
                                                              fun state -> state_override_static state (Map.add f fct Map.empty)
                                                         
             let MacroDeclaration = R3 (poption (kw "macro") << kw "rule" << ID_RULE) parameter_list (lit "=" << Rule)
                                         |>> fun (rname, param_list, r) ->
                                                 if List.length param_list > 0
-                                                then failwith "not implemented: definition of rule macros with arity > 0"
+                                                then failwith (sprintf "not implemented: definition of rule macro ('%s') with arity > 0" rname)
                                                 else (rname, r)
             let TurboDeclaration = R4 (kw "turbo" << kw "rule" << ID_RULE) parameter_list (poption (kw "in" << getDomainByID)) (lit "=" << Rule)
-                                        |>> fun _ -> failwith "not implemented: turbo rule declaration"
+                                        |>> fun (rname, _, _, _) -> failwith (sprintf "not implemented: turbo rule declaration ('%s')" rname)
             let RuleDeclaration = (MacroDeclaration <|> TurboDeclaration)
             let InvarConstraint = (kw "INVAR" << Term) |>> fun _ -> ()
             let JusticeConstraint = (kw "JUSTICE" << Term) |>> fun _ -> ()
@@ -389,11 +389,11 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
                             (pmany FairnessConstraint)
                             (pmany Property)       )
             let DomainInitialization = (kw "domain" << ID_DOMAIN) ++ (lit "=" << Term)
-                                            |>> fun _ -> failwith "not implemented: initialization of domains"
+                                            |>> fun (id, _) -> failwith (sprintf "not implemented: initialization of domains ('%s')" id)
             let FunctionInitialization = R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
-                                            |>> fun _ -> failwith "not implemented: initialization of dynamic functions"
+                                            |>> fun (id, _, _) -> failwith (sprintf "not implemented: initialization of dynamic function ('%s')" id)
             let AgentInitialization = (kw "agent" << ID_DOMAIN) ++ (lit ":" << MacroCallRule)
-                                            |>> fun _ -> failwith "not implemented: initialization of agents"
+                                            |>> fun (id, _) -> failwith (sprintf "not implemented: initialization of agent ('%s')" id)
             let Initialization = R4 (kw "init" << identifier >> lit ":")
                                     (pmany DomainInitialization)
                                     (pmany FunctionInitialization)
