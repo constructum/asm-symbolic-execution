@@ -156,6 +156,7 @@ let term_type sign =
                             // !!! (1) not very efficient due to unnecessarily calling fct_type every time - note: term is already been type checked!
                             // !!! (2) does not work for overloaded functions
         CondTerm = function (G, t1, t2) -> t1;
+        VarTerm  = fun _ -> failwith "term_type: VarTerm not implemented yet";
     }
 
 //---------------------------------------------------
@@ -209,7 +210,7 @@ let s_eval_term_ t : S_STATE * ENV * CONTEXT-> TERM =
         Initial  = fun (f, xs)  _ -> Initial (f, xs);
         AppTerm  = fun (f, ts) -> fun (S, env, C) -> eval_app_term (S, env, C) (f, ts);
         CondTerm = fun (G, t1, t2) -> fun (S, env, C) -> eval_cond_term (S, env, C) (G, t1, t2);
-        // VarTerm = fun v -> fun (S, env) -> get_env env v;
+        VarTerm  = fun v -> fun (S, env, _) -> get_env env v;
         // LetTerm = fun (v, t1, t2) -> fun (S, env) -> t2 (S, add_binding env (v, t1 (S, env)))
     } t
 
@@ -340,6 +341,7 @@ let reconvert_term t =
         Initial  = fun (f, xs) -> AppTerm (FctName f, xs >>| Value);
         AppTerm  = AppTerm;
         CondTerm = CondTerm;
+        VarTerm  = VarTerm;
     } t
 
 let reconvert_rule R = 

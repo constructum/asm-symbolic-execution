@@ -97,6 +97,10 @@ let symbolic_identifier s =
     (   ws_or_comment << (pmany1 symb_ident_char)
             |>> (fun s -> new System.String(s |> List.toArray)) ) s
 
+let variable_identifier s =
+    // starting with '$', AsmetaL-style
+    ((ws_or_comment << pchar '$' << (pletter ++ (pmany palphanum_)) |>> fun (id_1, id_rest) -> implode ('$' :: id_1 :: id_rest))) s
+
 // non-infix function name
 let fct_name (s : ParserInput<PARSER_STATE>) =
     let sign = get_signature_from_input s
@@ -167,14 +171,14 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
                         |   _ -> failwith "typecheck_term: AppTerm: this should not happen";
         CondTerm = fun (G, t1, t2) (sign, tyenv) ->
                         if G (sign, tyenv) <> Boolean
-                        then failwith "type of guard in conditional term must be Boolean)"
+                        then failwith "typecheck_term: type of guard in conditional term must be Boolean)"
                         else
                         (   let (t1, t2) = (t1 (sign, tyenv), t2 (sign, tyenv))
                             if t1 = t2 then t1
                             else failwith $"branches of conditional term have different types (then-branch: {t1 |> type_to_string}; else-branch: {t2 |> type_to_string})" )                                                  
         Initial  = fun (f, xs) (sign, tyenv) ->
                         match_fct_type f (xs >>| type_of_value) (fct_types f sign)
-        // VarTerm  = fun v -> fun (_, tyenv) -> try Map.find v tyenv with _ -> failwith $"variable '{v}' not defined";
+        VarTerm  = fun v -> fun (_, tyenv) -> try Map.find v tyenv with _ -> failwith $"variable '{v}' not defined";
         // LetTerm  = fun (x, t1, t2) -> fun (sign, tyenv) ->
         //                 let t1 = t1 (sign, tyenv)
         //                 t2 (sign, Map.add x t1 tyenv)
@@ -275,11 +279,11 @@ let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_
                 |>> fun (f, t, ts) -> mkAppTerm_ (FctName f, t :: ts) ) 
         <|> ( fct_name >> lit "(" >> lit ")" |>> fun f -> mkAppTerm_ (FctName f, []) )
         <|> ( name                           |>> fun nm -> mkAppTerm_ (nm, []) )  // 0-ary function names and special constants (int, string etc.)
-      (*<|> ( variable_                         |>> fun s -> VarTerm s ) *)
+        <|> ( variable_identifier            |>> fun id -> VarTerm id )
         <|> ( lit "{" >> lit "}" |>> fun _ -> mkAppTerm_ (FctName "emptyset", []) )
         <|> ( (lit "{" << term >> lit ":") ++ (term >> lit "}") |>> fun (t1, t2) -> mkAppTerm_ (FctName "set_interval", [ t1; t2; mkAppTerm_ (IntConst 1, []) ]) )
         <|> ( R3 (lit "{" << term >> lit ":") (term >> lit ",") (term >> lit "}") |>> fun (t1, t2, t3) -> mkAppTerm_ (FctName "set_interval", [ t1; t2; t3 ]) )
-        <|> ( R3 (kw "switch" << term) (pmany1 ((term >> lit ":") ++ term)) (kw "otherwise" << term) |>> switch_to_cond_term ) 
+        <|> ( R3 (kw "switch" << term) (pmany1 ((kw "case" << term >> lit ":") ++ term)) (kw "otherwise" << term >> kw "endswitch") |>> switch_to_cond_term ) 
                     // !!! note: 'otherwise' not optional to avoid 'undef' as default case
         <|> ( lit "(" << term >> lit ")" )
     ) s

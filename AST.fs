@@ -12,7 +12,7 @@ type TERM =
 | Initial of FCT_NAME * VALUE list   // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
 | AppTerm of NAME * TERM list
 | CondTerm of TERM * TERM * TERM
-//  | VarTerm of string
+| VarTerm of string
 //  | LetTerm of string * TERM * TERM
 //  | TupleTerm of TERM list
 
@@ -47,7 +47,7 @@ type TERM_INDUCTION<'name, 'term> = {
     Initial  : string * VALUE list -> 'term;
     AppTerm  : 'name * 'term list -> 'term;
     CondTerm : 'term * 'term * 'term -> 'term;
-    //  VarTerm  : string -> 'term;
+    VarTerm  : string -> 'term;
     //  LetTerm  : string * 'term * 'term -> 'term
 }
 
@@ -58,7 +58,7 @@ let rec term_induction (name : NAME -> 'name) (F : TERM_INDUCTION<'name, 'term>)
     |   Initial (f, xs) -> F.Initial (f, xs);
     |   AppTerm (f, ts) -> F.AppTerm (name f, List.map (fun t -> term_ind F t) ts)
     |   CondTerm (G, t1, t2) -> F.CondTerm (term_ind F G, term_ind F t1, term_ind F t2)
-    //  |   VarTerm v -> (((F.VarTerm :string -> 'term) (v : string)) :'term)
+    |   VarTerm v -> (((F.VarTerm :string -> 'term) (v : string)) :'term)
     //  |   LetTerm (x, t1, t2) -> F.LetTerm (x, term_ind F t1, term_ind F t2)
 
 //--------------------------------------------------------------------
@@ -96,7 +96,7 @@ let rec term_size t =
         AppTerm = fun (f, ts : int list) -> 1 + f + List.sum ts;
         CondTerm = fun (G, t1, t2) -> 1 + G + t1 + t2;
         Initial = fun _ -> 1;
-        //  VarTerm = fun _ -> 1;
+        VarTerm = fun _ -> 1;
         //  LetTerm = fun (x, t1, t2) -> 1 + t1 + t2;
     } t
 
@@ -172,7 +172,7 @@ let rec pp_term (sign : SIGNATURE) (t : TERM) =
         CondTerm = fun (G, t1, t2) -> blo0 [ str "if "; G; line_brk; str "then "; t1; line_brk; str "else "; t2; line_brk; str "endif" ];
         Value    = fun x -> str (value_to_string x);
         Initial  = fun (f, xs) -> pp_location_term "initial" (f, xs);
-        //  VarTerm = fun x -> str x;
+        VarTerm = fun x -> str x;
         //  LetTerm = fun (v, t1, t2) -> blo0 [ str "let "; str v; str " = "; t1; line_brk; str "in "; t2; line_brk; str "endlet" ];
     } t
 
