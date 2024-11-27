@@ -9,7 +9,7 @@ open AST
 
 //--------------------------------------------------------------------
 
-let trace = ref 1
+let trace = ref 0
 
 //--------------------------------------------------------------------
 
@@ -277,6 +277,9 @@ and Rule (s : ParserInput<PARSER_STATE>) =
     ) s
 
 
+// !!! temporary: global mutable variable to keep track of imported modules - to be replaced with 'modules' component of parser state
+let imported_modules = ref (Map.empty : Map<string, ASM>)
+
 let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PARSER_STATE>  =
     //let (sign, state) = get_parser_state s
     let isAsyncr_isModule_name =
@@ -287,17 +290,24 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
         let saved_dir = System.IO.Directory.GetCurrentDirectory ()
         let filename = mod_id + ".asm"
         let full_path = System.IO.Path.GetFullPath filename
-        let new_dir = System.IO.Path.GetDirectoryName filename |> fun s -> if s = "" then "." else s
-        // move to directory where the imported file is located
-        // in order to correctly resolve the relative paths of modules
-        // that may be imported in the imported module
-        System.IO.Directory.SetCurrentDirectory new_dir
-        let text = Common.readfile full_path
-        let parse = Parser.make_parser Asm (sign, state)
-        let imported_module = fst (parse text)        // !!! checks missing (e.g. check that it is a 'module' and not an 'asm', etc.)
-        // move to original directory (where the importing file is located)
-        System.IO.Directory.SetCurrentDirectory saved_dir
-        imported_module
+        if (!trace > 0) then fprintf stderr "  --> '%s'" full_path
+        if not (Map.containsKey full_path !imported_modules) then
+            if (!trace > 0) then fprintf stderr "\n"
+            let new_dir = System.IO.Path.GetDirectoryName filename |> fun s -> if s = "" then "." else s
+            // move to directory where the imported file is located
+            // in order to correctly resolve the relative paths of modules
+            // that may be imported in the imported module
+            System.IO.Directory.SetCurrentDirectory new_dir
+            let text = Common.readfile full_path
+            let parse = Parser.make_parser Asm (sign, state)
+            let imported_module = fst (parse text)        // !!! checks missing (e.g. check that it is a 'module' and not an 'asm', etc.)
+            // move to original directory (where the importing file is located)
+            System.IO.Directory.SetCurrentDirectory saved_dir
+            imported_modules := Map.add full_path imported_module !imported_modules
+            imported_module
+        else
+            if (!trace > 0) then fprintf stderr "  [skipped - already loaded]\n"
+            Map.find full_path !imported_modules
     let ImportClause s = 
         let (sign, state) = get_parser_state s
         (   (   (kw "import" << MOD_ID (* or string, according to orig. grammar *))
@@ -421,4 +431,6 @@ let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB =
             (sign, state, rdb)
 
 
-let parse_definitions (sign, S) s = fst (Parser.make_parser Asm (sign, S) s)
+let parse_definitions (sign, S) s =
+    imported_modules := Map.empty
+    fst (Parser.make_parser Asm (sign, S) s)
