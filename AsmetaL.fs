@@ -9,7 +9,7 @@ open AST
 
 //--------------------------------------------------------------------
 
-let trace = ref 0
+let trace = ref 1
 
 //--------------------------------------------------------------------
 
@@ -194,11 +194,11 @@ let Function (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATU
     let StaticFunction     = R3 (kw "static"  << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
                                 |>> fun (f, tys, opt_ty) -> add_function_name f (Static, NonInfix, to_fct_type(tys, opt_ty))
     let DerivedFunction    = R3 (kw "derived" << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
-                                |>> fun _ -> failwith "not implemented: derived function"
+                                |>> fun (f, tys, opt_ty) -> add_function_name f (Derived, NonInfix, to_fct_type(tys, opt_ty))
     let OutFunction        = R3 (poption (kw "dynamic") << kw "out"        << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
                                 |>> fun _ -> failwith "not implemented: out function"
     let MonitoredFunction  = R3 (poption (kw "dynamic") << kw "monitored"  << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
-                                |>> fun _ -> failwith "not implemented: monitored function"
+                                |>> fun (f, tys, opt_ty) -> add_function_name f (Monitored, NonInfix, to_fct_type(tys, opt_ty))
     let SharedFunction     = R3 (poption (kw "dynamic") << kw "shared"     << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
                                 |>> fun _ -> failwith "not implemented: shared function"
     let ControlledFunction = R3 (poption (kw "dynamic") << kw "controlled" << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
