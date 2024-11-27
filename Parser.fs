@@ -256,6 +256,13 @@ let mkAppTerm sign = function
 |   (StringConst s, []) -> AppTerm (StringConst s, [])
 |   (_, ts) -> failwith $"constant / 0-ary function applied to {List.length ts} arguments"
 
+let switch_to_cond_term (t, cases : (TERM * TERM) list, otherwise : TERM) =
+    let rec mk_cond_term = function
+    |   [] -> failwith "switch_to_cond_term: empty list of cases"
+    |   [(t1, t2)] -> CondTerm (AppTerm (FctName "=", [t; t1]), t2, otherwise)
+    |   (t1, t2) :: cases -> CondTerm (AppTerm (FctName "=", [t; t1]), t2, mk_cond_term cases)
+    in mk_cond_term cases
+
 let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_STATE> = 
     let sign = get_signature_from_input s
     let mkAppTerm_ = mkAppTerm sign
@@ -269,6 +276,11 @@ let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_
         <|> ( fct_name >> lit "(" >> lit ")" |>> fun f -> mkAppTerm_ (FctName f, []) )
         <|> ( name                           |>> fun nm -> mkAppTerm_ (nm, []) )  // 0-ary function names and special constants (int, string etc.)
       (*<|> ( variable_                         |>> fun s -> VarTerm s ) *)
+        <|> ( lit "{" >> lit "}" |>> fun _ -> mkAppTerm_ (FctName "emptyset", []) )
+        <|> ( (lit "{" << term >> lit ":") ++ (term >> lit "}") |>> fun (t1, t2) -> mkAppTerm_ (FctName "set_interval", [ t1; t2; mkAppTerm_ (IntConst 1, []) ]) )
+        <|> ( R3 (lit "{" << term >> lit ":") (term >> lit ",") (term >> lit "}") |>> fun (t1, t2, t3) -> mkAppTerm_ (FctName "set_interval", [ t1; t2; t3 ]) )
+        <|> ( R3 (kw "switch" << term) (pmany1 ((term >> lit ":") ++ term)) (kw "otherwise" << term) |>> switch_to_cond_term ) 
+                    // !!! note: 'otherwise' not optional to avoid 'undef' as default case
         <|> ( lit "(" << term >> lit ")" )
     ) s
 
