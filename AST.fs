@@ -29,12 +29,23 @@ let skipRule = ParRule []
 
 //--------------------------------------------------------------------
 
-type RULES_DB = Map<RULE_NAME, RULE>
-let empty_rules_db = Map.empty
-let rules_db_override db1 db' = Common.map_override db1 db'
-let add_rule R db = Map.add R db
-let exists_rule rule_name db = Map.containsKey rule_name db
-let get_rule rule_name db = Map.find rule_name db
+type RULES_DB = Map<RULE_NAME, string list * RULE>   // !!! what about types ?
+
+let empty_rules_db : RULES_DB = Map.empty
+let rules_db_override (db1 : RULES_DB) (db' : RULES_DB) = Common.map_override db1 db'
+let add_rule rule_name ((args, R) : string list * RULE) (db : RULES_DB) = Map.add rule_name (args, R) db
+let exists_rule rule_name (db : RULES_DB) = Map.containsKey rule_name db
+let get_rule rule_name (db : RULES_DB) = Map.find rule_name db
+
+//--------------------------------------------------------------------
+
+type MACRO_DB = Map<FCT_NAME, string list * TERM>   // for derived functions = macros !!! what about types ?
+
+let empty_macro_db : MACRO_DB = Map.empty
+let macro_db_override (db1 : MACRO_DB) (db' : MACRO_DB) = Common.map_override db1 db'
+let add_macro macro_name ((args, t) : string list * TERM) (db : MACRO_DB) = Map.add macro_name (args, t) db
+let exists_macro macro_name (db : MACRO_DB) = Map.containsKey macro_name db
+let get_macro macro_name (db : MACRO_DB) = Map.find macro_name db
 
 //--------------------------------------------------------------------
 

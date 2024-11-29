@@ -47,7 +47,7 @@ let empty_state = {
 let state_override S0 S' = {
     _signature  = Common.map_override (signature_of S0) (signature_of S');
     _static     = Common.map_override S0._static  S'._static;
-    _dynamic    = Common.map_override S0._dynamic S'._dynamic;     
+    _dynamic    = Common.map_override S0._dynamic S'._dynamic;
 }
 
 let show_s_state (S : S_STATE) =

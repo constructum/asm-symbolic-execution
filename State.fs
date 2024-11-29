@@ -45,7 +45,7 @@ let state_override_dynamic S0 f_table = {
 let state_override_static S0 f_def = {
     _signature  = S0._signature;
     _static     = Common.map_override S0._static f_def;
-    _dynamic    = S0._dynamic;     
+    _dynamic    = S0._dynamic;   
 }
 
 //--------------------------------------------------------------------

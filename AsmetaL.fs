@@ -15,7 +15,8 @@ let trace = ref 0
 
 type ASM_Definitions = {
     functions : STATE;
-    rules : RULES_DB;
+    rules  : RULES_DB;
+    macros : MACRO_DB;
 }
 
 type ASM_Content = {
@@ -47,6 +48,7 @@ let asm_content (asyncr_module_name as (asyncr : bool, modul : bool, name : stri
         definitions = {
             functions = definitions.functions;
             rules     = definitions.rules;
+            macros    = definitions.macros;
         };
     }
 
@@ -356,27 +358,39 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
             let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
             let parameter_list = opt_psep1 "(" ((ID_VARIABLE >> (kw "in")) ++ getDomainByID) "," ")"
             let DomainDefinition = (kw "domain" << ID_DOMAIN) ++ (lit "=" << Term)
-
+            
             let FunctionDefinition =
                 R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
                 |>> fun (f, param_list, t) ->
+                    //let (add_proper_functions_to_state, macro_list)
                     //!!!! no type checking
                     if List.length param_list > 0
                     then //!!! to do: proper handling of function overloading
-                         //!!! to do: this only makes sense for static function, check in signature that function is static
-                         let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
-                         let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) background_state, Map.ofList (List.zip parameters xs))
-                         //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
-                         fun state -> state_override_static state (Map.add f fct Map.empty)
-                    else let fct = function [] -> Eval.eval_term t (State.background_state, Map.empty) | _ -> UNDEF
-                         fun state -> state_override_static state (Map.add f fct Map.empty)
+                         // !!! types of parameters are currently ignored
+                         if not (is_function_name f sign) then
+                            failwith (sprintf "error in function definition: function '%s' is not declared in the signature" f)
+                         else if fct_kind f sign = Static then 
+                            let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
+                            let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) background_state, Map.ofList (List.zip parameters xs))
+                            //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
+                            ((fun (state : STATE) -> state_override_static state (Map.add f fct Map.empty)), (fun mdb -> mdb))
+                         else if fct_kind f sign = Derived then 
+                            let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
+                            let body = t
+                            //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
+                            ((fun state -> state), (fun (mdb : MACRO_DB) -> macro_db_override mdb (Map.add f (parameters, t) Map.empty)))
+                         else failwith (sprintf "error in function definition: function '%s' is not declared as static or derived in the signature" f)
+                    else if fct_kind f sign = Static then 
+                            let fct = function [] -> Eval.eval_term t (State.background_state, Map.empty) | _ -> UNDEF
+                            ((fun state -> state_override_static state (Map.add f fct Map.empty)), (fun mdb -> mdb))
+                         else failwith (sprintf "error in definition of function '%s': static function name expected in this context" f)
                                                         
             let MacroDeclaration =
                 R3 (poption (kw "macro") << kw "rule" << ID_RULE) parameter_list (lit "=" << Rule)
                 |>> fun (rname, param_list, r) ->
                         if List.length param_list > 0
-                        then failwith (sprintf "not implemented: definition of rule macro ('%s') with arity > 0" rname)
-                        else (rname, r)
+                        then (rname, (List.map fst param_list, r))    // !!! types are currently ignored
+                        else (rname, ([], r))
             let TurboDeclaration = R4 (kw "turbo" << kw "rule" << ID_RULE) parameter_list (poption (kw "in" << getDomainByID)) (lit "=" << Rule)
                                         |>> fun (rname, _, _, _) -> failwith (sprintf "not implemented: turbo rule declaration ('%s')" rname)
             let RuleDeclaration = (MacroDeclaration <|> TurboDeclaration)
@@ -425,8 +439,12 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
             |   ParserFailure x -> ParserFailure x
             |   ParserSuccess (((_, function_definitions, rule_declarations, _, _, _), opt_main_rule_decl, opt_init), s'') ->
                     let rule_declarations = rule_declarations @ (Option.fold (fun _ x -> [x]) [] opt_main_rule_decl)
-                    let rdb' = List.fold (fun rdb (rname, r) -> Map.add rname r rdb) empty_rules_db rule_declarations
-                    let state' = List.fold (fun state fct_def -> fct_def state) empty_state function_definitions
+                    let rdb' : RULES_DB = List.fold (fun rdb (rname, r) -> Map.add rname r rdb) empty_rules_db rule_declarations
+                    let (state', mdb') : STATE * MACRO_DB =
+                        List.fold
+                            (fun (state, mdb) (fct_def, derived_fct_def) -> (fct_def state, derived_fct_def mdb))
+                            (empty_state, empty_macro_db)
+                            function_definitions
                     let result = ASM {
                         name      = asm_name;
                         is_module = modul;
@@ -436,7 +454,8 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
                         signature = sign;
                         definitions = {
                             functions = state';
-                            rules = rdb';
+                            rules  = rdb';
+                            macros = mdb';
                         };
                     }
                     ParserSuccess ( result, s'')

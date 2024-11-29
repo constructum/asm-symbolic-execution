@@ -76,7 +76,7 @@ let license () =
 
 
 let exec_symbolic symb_exec_fct main_rule_name =
-    let R_in = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
+    let (args, R_in) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
     let print_time (cpu, usr, sys) =
         writeln $"\n--- CPU time: {((float cpu) / 1000.0)}s (usr: {((float usr) / 1000.0)}s, sys: {((float sys) / 1000.0)}s)"
     match Common.time symb_exec_fct R_in with
@@ -93,7 +93,7 @@ let exec_symbolic symb_exec_fct main_rule_name =
     |   _ -> failwith "Failure: no result and no exception"
 
 let exec_nonsymbolic main_rule_name =
-    let R = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
+    let (args, R) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
     let R_pretty = R |> AST.pp_rule (TopLevel.signature ()) |> PrettyPrinting.toString 80
     writeln $"{R_pretty}\n\n  -->\n"
     Updates.show_update_set sign (Eval.eval_rule R (TopLevel.initial_state (), Map.empty)) |> writeln

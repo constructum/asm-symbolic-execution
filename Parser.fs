@@ -395,7 +395,7 @@ let definition (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE 
                         let _ = typecheck_rule R (sign, Map.empty)
                         (   add_rule_name rule_name [] Signature.empty_signature,
                             empty_state,
-                            add_rule rule_name R empty_rules_db ) )   // parameterless rule: empty type list
+                            add_rule rule_name ([], R) empty_rules_db ) )   // parameterless rule: empty type list
         (*<|> ( ws_or_comment >> peos |>> fun _ -> (empty_signature, empty_state, empty_rules_db) ) *)
     ) ||>> fun (sign, state) (sign', state', _) -> (signature_override sign sign', state_override state state' ) ) s
 

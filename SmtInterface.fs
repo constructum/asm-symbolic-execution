@@ -114,9 +114,9 @@ and smt_map_app_term sign C (f, ts) : SMT_EXPR =
          else failwith (sprintf "smt_map_app_term: '%s' is not a static function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
 and smt_map_initial sign C (f, ts) : SMT_EXPR =
-    if not (Signature.fct_kind f sign = Static)
+    if Signature.fct_kind f sign = Controlled
     then smt_map_term_user_defined_function sign C (f, ts)
-    else failwith (sprintf "smt_map_app_term: '%s' is a static function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
+    else failwith (sprintf "smt_map_app_term: '%s' is not a controlled function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
 and smt_map_term sign C (t : TERM) : SMT_EXPR =
     let ctx = !C.ctx
