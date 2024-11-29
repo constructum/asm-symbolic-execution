@@ -1,6 +1,6 @@
 asm bubblesort
 
-import ../STDL/StandardLibrary.asm
+import ../STDL/StandardLibrary
 
 
 signature:

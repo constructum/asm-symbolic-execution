@@ -7,6 +7,8 @@ open AST
 open Background
 open Microsoft.Z3
 
+let trace = ref 1
+
 type SMT_CONTEXT = {
     ctx : Context ref;
     slv : Solver ref;
@@ -50,7 +52,12 @@ let smt_map_type C (T : TYPE) : Sort =
 let smt_add_functions C (new_sign : SIGNATURE, new_state : STATE) : unit =
     let ctx = !C.ctx
     let fct_names = Signature.fct_names new_sign
+    //!!! filter to avoid problems due to AsmetaL standard library functions that cannot be mapped
+    //!!!  ad-hoc exclusion of AsmetaL controlled function 'result' and 'self', this should be done only for AsmetaL - tbd:
+    //!!!    --> tbd: AsmetaL flag
+    let fct_names = Set.filter (fun f -> fct_kind f new_sign = Controlled && f <> "result" && f <> "self") fct_names
     let add_function C fct_name =
+        if !trace > 0 then fprintf stderr "SmtInterface.add_function: %s : %s\n" fct_name (fct_type fct_name new_sign |> fct_type_to_string)
         let (Ts_dom, T_ran) = fct_type fct_name new_sign
         let func_decl = ctx.MkFuncDecl (fct_name, Array.ofList (Ts_dom >>| smt_map_type C), smt_map_type C T_ran)
         C.fct := Map.add fct_name func_decl (!C.fct)
