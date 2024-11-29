@@ -307,7 +307,10 @@ let rec s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
                 //s_eval_rule (SeqRule [ CondRule (G, R1, R2); IterRule R ]) (S, env, C)
                 s_eval_rule (CondRule (G, SeqRule [R1; IterRule R], SeqRule [R2; IterRule R])) (S, env, C)
         |   R' -> failwith (sprintf "SymEvalRules.s_eval_rule: eval_iter_rule - R'' = %s" (rule_to_string R'))
-
+    
+    and eval_let (v, t, R) (S, env, C) =
+        s_eval_rule R (S, add_binding env (v, s_eval_term t (S, env, C)), C)       // !!!!! is this one correct at all?
+ 
     let R =
         match R with
         |   UpdateRule ((f, ts), t) -> eval_update ((f, ts), t) (S, env, C)
@@ -315,6 +318,7 @@ let rec s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
         |   ParRule Rs              -> eval_par Rs (S, env, C)
         |   SeqRule Rs              -> eval_seq Rs (S, env, C)
         |   IterRule R              -> eval_iter R (S, env, C)
+        |   LetRule (v, t, R)       -> eval_let (v, t, R) (S, env, C) 
         |   S_Updates S             -> S_Updates S
 
     level := !level - 1
@@ -351,6 +355,7 @@ let reconvert_rule R =
         ParRule    = ParRule;
         SeqRule    = SeqRule;
         IterRule   = IterRule;
+        LetRule    = LetRule;
         S_Updates  = fun upds -> ParRule (List.map (fun ((f, xs), t_rhs) -> UpdateRule ((f, xs >>| Value), reconvert_term t_rhs)) (Set.toList upds))
     } R
 
@@ -362,6 +367,7 @@ let count_s_updates = rule_induction (fun _ -> ()) {
     ParRule   = fun _ -> failwith "there should be no ParRule here";
     SeqRule   = fun _ -> failwith "there should be no SeqRule here";
     IterRule  = fun _ -> failwith "there should be no IterRule here";
+    LetRule   = fun _ -> failwith "there should be no LetRule here";
     S_Updates = fun _ -> 1;   // not relevant, but define somehow to allow printing for debugging
 }
 

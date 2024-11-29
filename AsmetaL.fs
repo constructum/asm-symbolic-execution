@@ -9,7 +9,7 @@ open AST
 
 //--------------------------------------------------------------------
 
-let trace = ref 1
+let trace = ref 0
 
 //--------------------------------------------------------------------
 
@@ -111,13 +111,13 @@ let psep1 p sep =
     p ++ pmany (sep << p) |>> fun (x, xs) -> x::xs
 
 let psep1_lit p sep =
-    p ++ pmany (lit sep << p) |>> fun (x, xs) -> x::xs
+    p ++ pmany ((lit sep) << p) |>> fun (x, xs) -> x::xs
 
 let psep2_lit p sep =
-    p ++ pmany1 (lit sep << p) |>> fun (x, xs) -> x::xs
+    p ++ pmany1 ((lit sep) << p) |>> fun (x, xs) -> x::xs
 
 let opt_psep1 encl_begin p sep encl_end =
-    poption (lit encl_begin << psep1_lit p sep >> lit encl_end) |>> function None -> [] | Some xs -> xs
+    poption (lit encl_begin << (psep1_lit p sep) >> lit encl_end) |>> function None -> [] | Some xs -> xs
 
 let opt_psep2 encl_begin p sep encl_end =
     poption (lit encl_begin << psep2_lit p sep >> lit encl_end) |>> function None -> [] | Some xs -> xs
@@ -161,7 +161,8 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
             let PowersetDomain = kw "Powerset" ++ (lit "(" << (getDomainByID |>> fun t->[t]) >> lit ")") |>> construct_type sign
             let BagDomain      = kw "Bag"      ++ (lit "(" << (getDomainByID |>> fun t->[t]) >> lit ")") |>> construct_type sign
             let MapDomain      = kw "Map"      ++ (lit "(" << (R3 getDomainByID (lit ",") getDomainByID |>> fun (t1,_,t2) -> [t1;t2]) >> lit ")")  |>> construct_type sign
-            ProductDomain <|> SequenceDomain <|> PowersetDomain <|> BagDomain<|> MapDomain ) s
+            (kw "Boolean" |>> fun _ -> construct_type sign ("Boolean",[]))
+            <|> ProductDomain <|> SequenceDomain <|> PowersetDomain <|> BagDomain <|> MapDomain ) s
     and ConcreteDomain (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
         let sign = get_signature_from_input s
         (   (kw "domain" << ID_DOMAIN) ++ (kw "subsetof" << getDomainByID)          
@@ -183,6 +184,14 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
 
 let Domain (s : ParserInput<PARSER_STATE>) =
     ((ConcreteDomain <|> TypeDomain) ||>> fun (sign, state) update_sign_fct -> (update_sign_fct sign, state)) s
+
+
+let add_function_name f (kind, infix, (tys, ty)) sign =
+    //!!! little hack to avoid overwriting of predefined background functions by Asmeta StandardLibrary.asm
+    //!!! (which would destroy infix status of operators)
+    if not (Map.containsKey f Background.signature)
+    then add_function_name f (kind, infix, (tys, ty)) sign
+    else fprintf stderr "warning: ignoring declaration of function '%s' already present in background signature\n" f; sign
 
 let Function (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
     // any function f : Prod(T1,...,Tn) -> T is converted into an n-ary function f : T1,...,Tn -> T  [n >= 0]
@@ -217,9 +226,11 @@ let rec BasicRule (s : ParserInput<PARSER_STATE>) =
     let BlockRule = kw "par" << pmany1 Rule >> kw "endpar" |>> ParRule
     let ConditionalRule = R3 (kw "if" << Term) (kw "then" << Rule) (poption (kw "else" << Rule) |>> Option.defaultValue skipRule) >> kw "endif" |>> CondRule
     let VariableTerm = ID_VARIABLE
-    let LetRule    = R2 (kw "let" << lit "(" << (psep1_lit (VariableTerm >> lit "=" << Term) ",") >> lit ")")
-                        (kw "in" << Rule)
-                        |>> fun _ -> failwith "not implemented: let rule"
+    let LetRule    = R2 (kw "let" << lit "(" << (psep1_lit ((VariableTerm >> lit "=") ++ Term) ",") >> lit ")")
+                        (kw "in" << Rule) >> (kw "endlet")
+                        |>> ( function
+                                | ([(v, t)], R) -> LetRule (v, t, R)
+                                | _ -> failwith "not implemented: let rule with multiple bindings" )
     let ChooseRule = R4 (kw "choose" << psep1_lit ((ID_VARIABLE >> kw "in") ++ Term) ",") (kw "with" << Term) (kw "do" << Rule) (poption (kw "ifnone" << Rule))
                         |>> fun _ -> failwith "not implemented: choose rule"
     let ForallRule = R3 (kw "forall" << psep1_lit ((ID_VARIABLE >> kw "in") ++ Term) ",") (kw "with" << Term) (kw "do" << Rule)
@@ -343,24 +354,29 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
             //let sign = signature_override sign sign'
             let (sign, state) = get_parser_state s'
             let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
-        
-            let VariableTerm = ID_VARIABLE
-            let parameter_list = opt_psep1 "(" ((VariableTerm >> (kw "in")) ++ getDomainByID) "," ")"
+            let parameter_list = opt_psep1 "(" ((ID_VARIABLE >> (kw "in")) ++ getDomainByID) "," ")"
             let DomainDefinition = (kw "domain" << ID_DOMAIN) ++ (lit "=" << Term)
-                                            |>> fun _ -> ()
-            let FunctionDefinition = R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
-                                                |>> fun (f, param_list, t) ->
-                                                        //!!!! no type checking
-                                                        if List.length param_list > 0
-                                                        then failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
-                                                        else let fct = function [] -> Eval.eval_term t (State.background_state, Map.empty) | _ -> UNDEF
-                                                             fun state -> state_override_static state (Map.add f fct Map.empty)
+
+            let FunctionDefinition =
+                R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
+                |>> fun (f, param_list, t) ->
+                    //!!!! no type checking
+                    if List.length param_list > 0
+                    then //!!! to do: proper handling of function overloading
+                         //!!! to do: this only makes sense for static function, check in signature that function is static
+                         let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
+                         let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) background_state, Map.ofList (List.zip parameters xs))
+                         //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
+                         fun state -> state_override_static state (Map.add f fct Map.empty)
+                    else let fct = function [] -> Eval.eval_term t (State.background_state, Map.empty) | _ -> UNDEF
+                         fun state -> state_override_static state (Map.add f fct Map.empty)
                                                         
-            let MacroDeclaration = R3 (poption (kw "macro") << kw "rule" << ID_RULE) parameter_list (lit "=" << Rule)
-                                        |>> fun (rname, param_list, r) ->
-                                                if List.length param_list > 0
-                                                then failwith (sprintf "not implemented: definition of rule macro ('%s') with arity > 0" rname)
-                                                else (rname, r)
+            let MacroDeclaration =
+                R3 (poption (kw "macro") << kw "rule" << ID_RULE) parameter_list (lit "=" << Rule)
+                |>> fun (rname, param_list, r) ->
+                        if List.length param_list > 0
+                        then failwith (sprintf "not implemented: definition of rule macro ('%s') with arity > 0" rname)
+                        else (rname, r)
             let TurboDeclaration = R4 (kw "turbo" << kw "rule" << ID_RULE) parameter_list (poption (kw "in" << getDomainByID)) (lit "=" << Rule)
                                         |>> fun (rname, _, _, _) -> failwith (sprintf "not implemented: turbo rule declaration ('%s')" rname)
             let RuleDeclaration = (MacroDeclaration <|> TurboDeclaration)

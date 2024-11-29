@@ -137,7 +137,7 @@ let prun (p: Parser<'a, 'state>) (state0 :'state) (s: string) = p (parser_input_
 let pstring (s: string) input0 =
     let rec F = function
         |   (result, [], input) ->
-                ParserSuccess (List.rev result, input)
+                ParserSuccess (implode (List.rev result), input)
         |   (result, c :: cs', input) ->
             (   match pchar c input with
                 |   ParserSuccess (x, input') -> F (x :: result, cs', input')
@@ -148,8 +148,8 @@ let pstring (s: string) input0 =
                         else ParserFailure (combine_failures (Set.singleton (get_pos input0, sprintf "string \"%s\" expected, \"%s\" found" s ((input0 |> get_stream |> implode)[0..pos-pos0] )), get_failures input0)) )
     F ([], [for c in s -> c], input0)
 
-let pwhitespace() =
-    pmany (pcharsat (fun c -> c = ' ' || c = '\t' || c = '\n' || c = '\r') "whitespace character (' ', '\\t', '\\n' or '\\r')")
+let pwhitespace s =
+    ( (pmany (pcharsat (fun c -> c = ' ' || c = '\t' || c = '\n' || c = '\r')  ("whitespace character (' ', '\\t', '\\n' or '\\r')"))) |>> implode ) s
 
 let pint s =
     ( ((pchar '+' <|> pchar '-') <|> preturn '+')  ++  (pmany1 pdigit)

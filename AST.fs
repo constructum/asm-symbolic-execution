@@ -23,6 +23,7 @@ type RULE =
 | ParRule of RULE list
 | SeqRule of RULE list
 | IterRule of RULE
+| LetRule of string * TERM * RULE
 
 let skipRule = ParRule []
 
@@ -39,6 +40,11 @@ let get_rule rule_name db = Map.find rule_name db
 
 let int_term n = AppTerm (IntConst n, [])
 let str_term s = AppTerm (StringConst s, [])
+
+//--------------------------------------------------------------------
+
+type FUNC_EXPR =
+| LambdaTerm of string list * TERM
 
 //--------------------------------------------------------------------
 
@@ -69,6 +75,7 @@ type RULE_INDUCTION<'term, 'rule> = {
     ParRule : 'rule list -> 'rule;
     SeqRule : 'rule list -> 'rule;
     IterRule : 'rule -> 'rule;
+    LetRule : string * 'term * 'rule -> 'rule;
     S_Updates : Set<(FCT_NAME * VALUE list) * TERM> -> 'rule;    // Map<FCT_NAME * VALUE list, 'term> -> 'rule;
 }
 
@@ -80,6 +87,7 @@ let rec rule_induction (term : TERM -> 'term) (F : RULE_INDUCTION<'term, 'rule>)
     |   ParRule Rs -> F.ParRule (List.map (rule_ind F) Rs)
     |   SeqRule Rs -> F.SeqRule (List.map (rule_ind F) Rs)
     |   IterRule R -> F.IterRule (rule_ind F R)
+    |   LetRule (v, t, R) -> F.LetRule (v, term t, (rule_ind F) R)
     |   S_Updates U -> F.S_Updates U   // F.S_Updates (Map.map (fun loc -> fun t_rhs -> term t_rhs) U)
 
 //--------------------------------------------------------------------
@@ -106,6 +114,7 @@ let rule_size = rule_induction term_size {
     ParRule = fun Rs -> 1 + List.sum Rs;
     SeqRule = fun Rs -> 1 + List.sum Rs;
     IterRule = fun R' -> 1 + R';
+    LetRule = fun (_, t, R) -> 1 + t + R;
     S_Updates = fun U -> Set.count U;   // not relevant, but define somehow to allow printing for debugging
 }
 
@@ -185,6 +194,7 @@ let rec pp_rule (sign : SIGNATURE) (R : RULE) =
         ParRule = fun Rs -> if Rs <> [] then blo0 [ str "par"; line_brk; blo2 ( pp_list [line_brk] Rs); line_brk; str "endpar" ] else str "skip";
         SeqRule = fun Rs -> blo0 [ str "seq"; line_brk; blo2 (pp_list [line_brk] Rs); line_brk; str "endseq" ];
         IterRule = fun R' -> blo0 [ str "iterate "; line_brk; blo2 [ R' ]; line_brk; str "enditerate" ];
+        LetRule = fun (v, t, R) -> blo0 [ str "let "; str v; str " = "; t; line_brk; str "in "; R; line_brk; str "endlet" ];
         S_Updates = fun U ->
                         let pp_elem ((f, xs), t) = blo0 [ str f; str " "; str "("; blo0 (pp_list [str",";brk 1] (xs >>| fun x -> str (value_to_string x))); str ") := "; (pp_term t) ]
                         let L = Set.toList U >>| pp_elem

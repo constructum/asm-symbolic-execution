@@ -16,7 +16,7 @@ let trace = ref 0
 let pcharf c = pcharsat c ""
 
 let one_line_comment (s : ParserInput<'state>) : ParserResult<string, 'state> =
-    (   R4  (pstring "//" |>> implode)
+    (   R4  (pstring "//")
             (pmany (pcharf (fun c -> c <> '\r' && c <> '\n')) |>> implode)
             (pmany (pchar '\r') |>> implode)
             (pchar '\n' |>> fun c -> implode [c]) |>> fun (s1, s2, s3, s4) -> s1 + s2 + s3 + s4 ) s
@@ -29,7 +29,7 @@ let rec ML_multiline_comment (s : ParserInput<'state>) : ParserResult<string, 's
                         <|> ((pchar '(') ++ pcharf (fun c -> c <> '*') |>> fun (c1,c2) -> [c1;c2])
                         <|> ((pchar '*') ++ pcharf (fun c -> c <> ')') |>> fun (c1,c2) -> [c1;c2])
                         <|> (fun input -> (ML_multiline_comment |>> explode) input) )  |>> List.concat
-    in ( R3 open_ inside close_ |>> fun (s1, s2, s3) ->  (implode s1 + implode s2 + implode s3) ) s
+    in ( R3 open_ inside close_ |>> fun (s1, s2, s3) ->  (s1 + implode s2 + s3) ) s
 
 let rec C_multiline_comment (s : ParserInput<'state>) : ParserResult<string, 'state> =
     let open_ = pstring "/*"
@@ -38,21 +38,28 @@ let rec C_multiline_comment (s : ParserInput<'state>) : ParserResult<string, 'st
                         <|> ((pchar '/') ++ pcharf (fun c -> c <> '*') |>> fun (c1,c2) -> [c1;c2])
                         <|> ((pchar '*') ++ pcharf (fun c -> c <> '/') |>> fun (c1,c2) -> [c1;c2])
                         <|> (fun input -> (C_multiline_comment |>> explode) input) )  |>> List.concat
-    in ( R3 open_ inside close_ |>> fun (s1, s2, s3) ->  (implode s1 + implode s2 + implode s3) ) s
+    in ( R3 open_ inside close_ |>> fun (s1, s2, s3) ->  (s1 + implode s2 + s3) ) s
 
 let comment (s : ParserInput<'state>) : ParserResult<string, 'state> =
     (   ( one_line_comment <|> ML_multiline_comment <|> C_multiline_comment )
     |>> fun s' -> ( (if !trace > 0 then fprintf stderr "comment:\n%s\n" s' else ());
                     s' )   )    s
 
-let ws_or_comment (s : ParserInput<'state>) : ParserResult<char list, 'state> =
-    ( pwhitespace() << pmany (comment << pwhitespace()) |>> List.concat ) s
+// let ws_or_comment (s : ParserInput<'state>) : ParserResult<string, 'state> =
+//     ( (pwhitespace ++ (pmany (comment << pwhitespace))) |>> fun (strg, strg_list : string list) -> strg + String.concat "" strg_list) s
 
-let skip_to_eos (s : ParserInput<'state>) : ParserResult<char list, 'state> =
+let ws_or_comment (s : ParserInput<'state>) : ParserResult<string, 'state> =
+    ( pwhitespace ++ (pmany (comment ++ pwhitespace))
+        |>> fun (strg, strg_list : (string*string) list) -> strg + String.concat "" (List.map (fun (s1, s2) -> s1+s2) strg_list) ) s
+
+// let ws_or_comment (s : ParserInput<'state>) : ParserResult<char list, 'state> =
+//     ( ( pwhitespace <|> comment ) >> (pmany (pwhitespace <|> comment)) |>> List.concat ) s
+
+let skip_to_eos (s : ParserInput<'state>) : ParserResult<string, 'state> =
     ( ws_or_comment >> peos ) s
 
-let lit arg s = (ws_or_comment << pstring arg) s
-let int s = (ws_or_comment << pint) s
+let lit arg s = (ws_or_comment << pstring arg >> pwhitespace) s
+let int s = (ws_or_comment << pint >> pwhitespace) s
     
 let is_symb_ident_char c =
   match c with
@@ -69,8 +76,8 @@ let symb_ident_char s = (pcharsat (fun c -> is_symb_ident_char c) "symbolic iden
 
 /// Parse keywords
 let kw kw_name s =
-    (   (   (   (ws_or_comment << (pmany1 pletter)))
-            <|> (ws_or_comment << (pmany1 symb_ident_char)) )
+    (   (   (   (ws_or_comment << (pmany1 pletter) >> pwhitespace))
+            <|> (ws_or_comment << (pmany1 symb_ident_char) >> pwhitespace) )
                     >>= fun s ->
                         let s = implode s
                         if s = kw_name
@@ -209,6 +216,7 @@ let typecheck_rule (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TY
         ParRule    = fun Rs (sign, tyenv) -> let _ = Rs >>| fun R -> R (sign, tyenv) in Rule;
         SeqRule    = fun Rs (sign, tyenv) -> let _ = Rs >>| fun R -> R (sign, tyenv) in Rule;
         IterRule   = fun R (sign, tyenv) -> let _ = R (sign, tyenv) in Rule;
+        LetRule    = fun (v, t, R) (sign, tyenv) -> R (sign, Map.add v (t (sign, tyenv)) tyenv);
         S_Updates  = fun _ -> failwith "not implemented"
     } R (sign, tyenv)
 
@@ -272,10 +280,11 @@ let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_
     let mkAppTerm_ = mkAppTerm sign
     (       (* ( (kw "let" >>. variable_) .>>. (kw "=" >>. term_) .>> kw "in" .>>. (term_ .>> kw "endlet") |>> fun ((x, t1), t2) -> LetTerm (x, t1, t2) )
         <|>*)
-            ( R3 (kw "if" << term) (kw "then" << term) (poption (kw "else" << term)) >> kw "endif"
+            ( (kw "not" << term) |>> function t -> mkAppTerm_ (FctName "not", [t]) )
+        <|> ( R3 (kw "if" << term) (kw "then" << term) (poption (kw "else" << term)) >> kw "endif"
                 |>> function  (G, r_then, opt_R_else) -> CondTerm (G, r_then, match opt_R_else with Some r_else -> r_else | None -> AppTerm (UndefConst, [])) )
         <|>
-            ( R3 ( fct_name >> lit "(" )   term   (pmany (lit "," << term) >> lit ")")
+            ( R3 ( fct_name >> lit "(" )   term   (pmany (lit "," << term) >> lit ")")  //!!!! is this production rule wrong ?
                 |>> fun (f, t, ts) -> mkAppTerm_ (FctName f, t :: ts) ) 
         <|> ( fct_name >> lit "(" >> lit ")" |>> fun f -> mkAppTerm_ (FctName f, []) )
         <|> ( name                           |>> fun nm -> mkAppTerm_ (nm, []) )  // 0-ary function names and special constants (int, string etc.)

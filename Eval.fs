@@ -59,6 +59,7 @@ let eval_rule = rule_induction eval_term ({
     ParRule = fun Rs -> fun (S, env) -> Set.unionMany (Rs >>| fun R -> R (S, env));
     SeqRule = fun Rs -> List.fold binary_seq (fun (S, env) -> Set.empty) Rs;
     IterRule = iterate;
+    LetRule = fun (v, t, R) -> fun (S, env) -> R (S, add_binding env (v, t (S, env)));
     S_Updates = fun s_updates -> fun (S, env) -> Set.unionMany (List.map (fun (loc, t_rhs) -> Set.singleton (loc, eval_term t_rhs (S, env))) (Set.toList s_updates))
 })
 
