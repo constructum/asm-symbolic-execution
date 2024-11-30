@@ -24,6 +24,7 @@ type RULE =
 | SeqRule of RULE list
 | IterRule of RULE
 | LetRule of string * TERM * RULE
+| MacroRuleCall of RULE_NAME * TERM list
 
 let skipRule = ParRule []
 
@@ -81,25 +82,27 @@ let rec term_induction (name : NAME -> 'name) (F : TERM_INDUCTION<'name, 'term>)
 //--------------------------------------------------------------------
 
 type RULE_INDUCTION<'term, 'rule> = {
+    S_Updates : Set<(FCT_NAME * VALUE list) * TERM> -> 'rule;
     UpdateRule : (FCT_NAME * 'term list) * 'term -> 'rule;
     CondRule : 'term * 'rule * 'rule -> 'rule;
     ParRule : 'rule list -> 'rule;
     SeqRule : 'rule list -> 'rule;
     IterRule : 'rule -> 'rule;
     LetRule : string * 'term * 'rule -> 'rule;
-    S_Updates : Set<(FCT_NAME * VALUE list) * TERM> -> 'rule;    // Map<FCT_NAME * VALUE list, 'term> -> 'rule;
+    MacroRuleCall : RULE_NAME * 'term list -> 'rule;     // Map<FCT_NAME * VALUE list, 'term> -> 'rule;
 }
 
 let rec rule_induction (term : TERM -> 'term) (F : RULE_INDUCTION<'term, 'rule>) (R : RULE) : 'rule =
     let rule_ind = rule_induction term
     match R with
+    |   S_Updates U -> F.S_Updates U   // F.S_Updates (Map.map (fun loc -> fun t_rhs -> term t_rhs) U)
     |   UpdateRule ((f: FCT_NAME, ts), t) -> F.UpdateRule ((f, List.map term ts), term t)
     |   CondRule (G, R1, R2: RULE) -> F.CondRule (term G, rule_ind F R1, rule_ind F R2)
     |   ParRule Rs -> F.ParRule (List.map (rule_ind F) Rs)
     |   SeqRule Rs -> F.SeqRule (List.map (rule_ind F) Rs)
     |   IterRule R -> F.IterRule (rule_ind F R)
     |   LetRule (v, t, R) -> F.LetRule (v, term t, (rule_ind F) R)
-    |   S_Updates U -> F.S_Updates U   // F.S_Updates (Map.map (fun loc -> fun t_rhs -> term t_rhs) U)
+    |   MacroRuleCall (r, ts) -> F.MacroRuleCall (r, List.map term ts)
 
 //--------------------------------------------------------------------
 //
@@ -120,13 +123,14 @@ let rec term_size t =
     } t
 
 let rule_size = rule_induction term_size {
+    S_Updates = fun U -> Set.count U;   // not relevant, but define somehow to allow printing for debugging
     UpdateRule = fun ((f, ts), t) -> 1 + 1 + List.sum ts + t;
     CondRule = fun (G, R1, R2) -> 1 + G + R1 + R2;
     ParRule = fun Rs -> 1 + List.sum Rs;
     SeqRule = fun Rs -> 1 + List.sum Rs;
     IterRule = fun R' -> 1 + R';
     LetRule = fun (_, t, R) -> 1 + t + R;
-    S_Updates = fun U -> Set.count U;   // not relevant, but define somehow to allow printing for debugging
+    MacroRuleCall = fun (r, ts) -> 1 + 1 + List.sum ts;
 }
 
 //--------------------------------------------------------------------
@@ -199,6 +203,10 @@ let rec pp_term (sign : SIGNATURE) (t : TERM) =
 let rec pp_rule (sign : SIGNATURE) (R : RULE) =
     let (pp_app_term, pp_term) = (pp_app_term sign, pp_term sign)
     rule_induction pp_term {
+        S_Updates = fun U ->
+                        let pp_elem ((f, xs), t) = blo0 [ str f; str " "; str "("; blo0 (pp_list [str",";brk 1] (xs >>| fun x -> str (value_to_string x))); str ") := "; (pp_term t) ]
+                        let L = Set.toList U >>| pp_elem
+                        blo0 [ str "{"; line_brk; blo2 ( pp_list [line_brk] L); line_brk; str "}" ];
         UpdateRule = fun ((f, ts), t) -> blo0 [ pp_app_term (FctName f, ts); str " := "; t ];
         CondRule = fun (G, R1, R2) -> blo0 ( str "if " :: G:: str " then " :: line_brk :: blo2 [ R1 ] :: line_brk ::
                                              (if R2 <> str "skip" then [ str "else "; line_brk; blo2 [ R2 ]; line_brk; str "endif" ] else [ str "endif"]) );
@@ -206,10 +214,7 @@ let rec pp_rule (sign : SIGNATURE) (R : RULE) =
         SeqRule = fun Rs -> blo0 [ str "seq"; line_brk; blo2 (pp_list [line_brk] Rs); line_brk; str "endseq" ];
         IterRule = fun R' -> blo0 [ str "iterate "; line_brk; blo2 [ R' ]; line_brk; str "enditerate" ];
         LetRule = fun (v, t, R) -> blo0 [ str "let "; str v; str " = "; t; line_brk; str "in "; R; line_brk; str "endlet" ];
-        S_Updates = fun U ->
-                        let pp_elem ((f, xs), t) = blo0 [ str f; str " "; str "("; blo0 (pp_list [str",";brk 1] (xs >>| fun x -> str (value_to_string x))); str ") := "; (pp_term t) ]
-                        let L = Set.toList U >>| pp_elem
-                        blo0 [ str "{"; line_brk; blo2 ( pp_list [line_brk] L); line_brk; str "}" ];
+        MacroRuleCall = fun (r, ts) -> blo0 [ str r; str "["; blo0 (pp_list [str",";brk 1] ts); str "]" ];
     } R
 
 let term_to_string sign t    = t |> pp_term sign |> PrettyPrinting.toString 80

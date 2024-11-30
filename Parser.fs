@@ -193,6 +193,7 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
 
 let typecheck_rule (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TYPE =
     rule_induction typecheck_term {
+        S_Updates  = fun _ -> failwith "not implemented"
         UpdateRule = fun ((f, ts), t) (sign, tyenv) ->
                         let kind = fct_kind f sign
                         if kind = Controlled || kind = Shared || kind = Out
@@ -217,7 +218,7 @@ let typecheck_rule (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TY
         SeqRule    = fun Rs (sign, tyenv) -> let _ = Rs >>| fun R -> R (sign, tyenv) in Rule;
         IterRule   = fun R (sign, tyenv) -> let _ = R (sign, tyenv) in Rule;
         LetRule    = fun (v, t, R) (sign, tyenv) -> R (sign, Map.add v (t (sign, tyenv)) tyenv);
-        S_Updates  = fun _ -> failwith "not implemented"
+        MacroRuleCall = fun (r, ts) (sign, tyenv) -> let _ = ts >>| fun t -> t (sign, tyenv) in Rule;  //!!! tbd: type-check types that types of terms matches parameter types
     } R (sign, tyenv)
 
 //--------------------------------------------------------------------

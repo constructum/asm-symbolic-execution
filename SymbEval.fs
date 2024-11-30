@@ -319,6 +319,7 @@ let rec s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
         |   SeqRule Rs              -> eval_seq Rs (S, env, C)
         |   IterRule R              -> eval_iter R (S, env, C)
         |   LetRule (v, t, R)       -> eval_let (v, t, R) (S, env, C) 
+        |   MacroRuleCall _         -> failwith "s_eval_rule: MacroRuleCall not implemented yet"
         |   S_Updates S             -> S_Updates S
 
     level := !level - 1
@@ -356,6 +357,7 @@ let reconvert_rule R =
         SeqRule    = SeqRule;
         IterRule   = IterRule;
         LetRule    = LetRule;
+        MacroRuleCall = MacroRuleCall;
         S_Updates  = fun upds -> ParRule (List.map (fun ((f, xs), t_rhs) -> UpdateRule ((f, xs >>| Value), reconvert_term t_rhs)) (Set.toList upds))
     } R
 
@@ -368,6 +370,7 @@ let count_s_updates = rule_induction (fun _ -> ()) {
     SeqRule   = fun _ -> failwith "there should be no SeqRule here";
     IterRule  = fun _ -> failwith "there should be no IterRule here";
     LetRule   = fun _ -> failwith "there should be no LetRule here";
+    MacroRuleCall = fun _ -> failwith "there should be no MacroRuleCall here";
     S_Updates = fun _ -> 1;   // not relevant, but define somehow to allow printing for debugging
 }
 
