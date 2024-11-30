@@ -143,8 +143,7 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
             let PowersetDomain = kw "Powerset" ++ (lit "(" << (getDomainByID |>> fun t->[t]) >> lit ")") |>> construct_type sign
             let BagDomain      = kw "Bag"      ++ (lit "(" << (getDomainByID |>> fun t->[t]) >> lit ")") |>> construct_type sign
             let MapDomain      = kw "Map"      ++ (lit "(" << (R3 getDomainByID (lit ",") getDomainByID |>> fun (t1,_,t2) -> [t1;t2]) >> lit ")")  |>> construct_type sign
-            (kw "Boolean" |>> fun _ -> construct_type sign ("Boolean",[]))
-            <|> ProductDomain <|> SequenceDomain <|> PowersetDomain <|> BagDomain <|> MapDomain ) s
+            ProductDomain <|> SequenceDomain <|> PowersetDomain <|> BagDomain <|> MapDomain ) s
     and ConcreteDomain (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
         let sign = get_signature_from_input s
         (   (kw "domain" << ID_DOMAIN) ++ (kw "subsetof" << getDomainByID)          
@@ -159,10 +158,7 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
                                 |>> fun _ -> failwith "not implemented: enum type domain"
             let AbstractTD = (popt_bool (kw "dynamic") >> kw "abstract" >> kw "domain") ++ ID_DOMAIN     // !!! what about 'dynamic'?
                                 |>> fun (is_dynamic, tyname) ->
-                                        ( fun sign ->
-                                            let sign'  = add_type_name tyname (0, Some (fun _ -> TypeCons (tyname, []))) sign
-                                            let sign'' = add_function_name tyname (Static, NonInfix, ([], Powerset (TypeCons (tyname, [])))) sign'
-                                            sign'' )
+                                        add_type_name tyname (0, Some (fun _ -> TypeCons (tyname, [])))
                                       //|>> fun (is_dynamic, s) -> TypeCons (s, []) 
             let BasicTD = (kw "basic" << kw "domain" << ID_DOMAIN) |>> fun tyname -> add_basic_domain tyname
             AnyDomain <|> EnumTD <|> AbstractTD <|> BasicTD

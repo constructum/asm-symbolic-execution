@@ -307,10 +307,11 @@ let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_
     // ExistUniqueTerm 	            ::= 	"(" <EXIST> <UNIQUE> VariableTerm <IN> Term ( "," VariableTerm <IN> Term )* ( <WITH> Term )? ")"
     // ForallTerm 	                ::= 	"(" <FORALL> VariableTerm <IN> Term ( "," VariableTerm <IN> Term )* ( <WITH> Term )? ")" 
     let quantificationTerm =
-        let quantContent = R2 (psep1_lit ((variable_identifier >> (kw "in")) ++ term) ",") (poption (kw "with" >> term)) >> lit ")"
-        (   ( (kw "forall") << quantContent  )
-        <|> ( (kw "exist" << kw "unique" << quantContent )
-        <|> ( (kw "exist") << quantContent ) ) )
+        let quantContent = R2 (psep1_lit ((variable_identifier >> (kw "in")) ++ ((term |>> fun _ -> "") <|> alphanumeric_identifier (*!!!temporary: should be domain name*) )) ",")
+                                (poption (kw "with" >> term))
+        (   ( kw "forall" << quantContent )
+        <|> ( kw "exist" << kw "unique" << quantContent )
+        <|> ( kw "exist" << quantContent ) )
         
     (       (* ( (kw "let" >>. variable_) .>>. (kw "=" >>. term_) .>> kw "in" .>>. (term_ .>> kw "endlet") |>> fun ((x, t1), t2) -> LetTerm (x, t1, t2) )
         <|>*)
@@ -328,7 +329,7 @@ let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_
         <|> ( R3 (lit "{" << term >> lit ":") (term >> lit ",") (term >> lit "}") |>> fun (t1, t2, t3) -> mkAppTerm_ (FctName "set_interval", [ t1; t2; t3 ]) )
         <|> ( R3 (kw "switch" << term) (pmany1 ((kw "case" << term >> lit ":") ++ term)) (kw "otherwise" << term >> kw "endswitch") |>> switch_to_cond_term ) 
                     // !!! note: 'otherwise' not optional to avoid 'undef' as default case
-        <|> ( quantificationTerm |>> fun _ -> QuantTerm  (* !!! temporary !!! *) )
+        <|> ( lit "(" << quantificationTerm >> lit ")" |>> fun _ -> QuantTerm  (* !!! temporary !!! *) )
         <|> ( lit "(" << term >> lit ")" )
     ) s
 
