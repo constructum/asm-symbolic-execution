@@ -13,6 +13,7 @@ type TERM =
 | AppTerm of NAME * TERM list
 | CondTerm of TERM * TERM * TERM
 | VarTerm of string
+| QuantTerm
 //  | LetTerm of string * TERM * TERM
 //  | TupleTerm of TERM list
 
@@ -77,6 +78,7 @@ let rec term_induction (name : NAME -> 'name) (F : TERM_INDUCTION<'name, 'term>)
     |   AppTerm (f, ts) -> F.AppTerm (name f, List.map (fun t -> term_ind F t) ts)
     |   CondTerm (G, t1, t2) -> F.CondTerm (term_ind F G, term_ind F t1, term_ind F t2)
     |   VarTerm v -> (((F.VarTerm :string -> 'term) (v : string)) :'term)
+    |   QuantTerm -> failwith "QuantTerm not implemented"
     //  |   LetTerm (x, t1, t2) -> F.LetTerm (x, term_ind F t1, term_ind F t2)
 
 //--------------------------------------------------------------------

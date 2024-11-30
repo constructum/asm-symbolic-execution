@@ -74,6 +74,29 @@ let symb_ident_char s = (pcharsat (fun c -> is_symb_ident_char c) "symbolic iden
 
 //--------------------------------------------------------------------
 
+let popt_bool p =
+    poption p |>> function None -> false | Some _ -> true
+
+let psep0 p sep =
+    poption (p ++ pmany (sep << p)) |>> function Some (x, xs) -> x::xs | None -> []
+
+let psep1 p sep =
+    p ++ pmany (sep << p) |>> fun (x, xs) -> x::xs
+
+let psep1_lit p sep =
+    p ++ pmany ((lit sep) << p) |>> fun (x, xs) -> x::xs
+
+let psep2_lit p sep =
+    p ++ pmany1 ((lit sep) << p) |>> fun (x, xs) -> x::xs
+
+let opt_psep1 encl_begin p sep encl_end =
+    poption (lit encl_begin << (psep1_lit p sep) >> lit encl_end) |>> function None -> [] | Some xs -> xs
+
+let opt_psep2 encl_begin p sep encl_end =
+    poption (lit encl_begin << psep2_lit p sep >> lit encl_end) |>> function None -> [] | Some xs -> xs
+
+//--------------------------------------------------------------------
+
 /// Parse keywords
 let kw kw_name s =
     (   (   (   (ws_or_comment << (pmany1 pletter) >> pwhitespace))
@@ -279,6 +302,16 @@ let switch_to_cond_term (t, cases : (TERM * TERM) list, otherwise : TERM) =
 let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_STATE> = 
     let sign = get_signature_from_input s
     let mkAppTerm_ = mkAppTerm sign
+    // FiniteQuantificationTerm 	::= 	( ForallTerm | ExistUniqueTerm | ExistTerm )
+    // ExistTerm 	                ::= 	"(" <EXIST> VariableTerm <IN> Term ( "," VariableTerm <IN> Term )* ( <WITH> Term )? ")"
+    // ExistUniqueTerm 	            ::= 	"(" <EXIST> <UNIQUE> VariableTerm <IN> Term ( "," VariableTerm <IN> Term )* ( <WITH> Term )? ")"
+    // ForallTerm 	                ::= 	"(" <FORALL> VariableTerm <IN> Term ( "," VariableTerm <IN> Term )* ( <WITH> Term )? ")" 
+    let quantificationTerm =
+        let quantContent = R2 (psep1_lit ((variable_identifier >> (kw "in")) ++ term) ",") (poption (kw "with" >> term)) >> lit ")"
+        (   ( (kw "forall") << quantContent  )
+        <|> ( (kw "exist" << kw "unique" << quantContent )
+        <|> ( (kw "exist") << quantContent ) ) )
+        
     (       (* ( (kw "let" >>. variable_) .>>. (kw "=" >>. term_) .>> kw "in" .>>. (term_ .>> kw "endlet") |>> fun ((x, t1), t2) -> LetTerm (x, t1, t2) )
         <|>*)
             ( (kw "not" << term) |>> function t -> mkAppTerm_ (FctName "not", [t]) )
@@ -295,12 +328,14 @@ let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_
         <|> ( R3 (lit "{" << term >> lit ":") (term >> lit ",") (term >> lit "}") |>> fun (t1, t2, t3) -> mkAppTerm_ (FctName "set_interval", [ t1; t2; t3 ]) )
         <|> ( R3 (kw "switch" << term) (pmany1 ((kw "case" << term >> lit ":") ++ term)) (kw "otherwise" << term >> kw "endswitch") |>> switch_to_cond_term ) 
                     // !!! note: 'otherwise' not optional to avoid 'undef' as default case
+        <|> ( quantificationTerm |>> fun _ -> QuantTerm  (* !!! temporary !!! *) )
         <|> ( lit "(" << term >> lit ")" )
     ) s
 
 and term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_STATE> = 
     let sign = get_signature_from_input s
     operator_parser (simple_term, mkAppTerm sign) sign s
+
 
 //--------------------------------------------------------------------
 

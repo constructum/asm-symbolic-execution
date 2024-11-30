@@ -102,28 +102,8 @@ let identifier = alphanumeric_identifier
 
 let Term = Parser.term
 
-
-let popt_bool p =
-    poption p |>> function None -> false | Some _ -> true
-
-let psep0 p sep =
-    poption (p ++ pmany (sep << p)) |>> function Some (x, xs) -> x::xs | None -> []
-
-let psep1 p sep =
-    p ++ pmany (sep << p) |>> fun (x, xs) -> x::xs
-
-let psep1_lit p sep =
-    p ++ pmany ((lit sep) << p) |>> fun (x, xs) -> x::xs
-
-let psep2_lit p sep =
-    p ++ pmany1 ((lit sep) << p) |>> fun (x, xs) -> x::xs
-
-let opt_psep1 encl_begin p sep encl_end =
-    poption (lit encl_begin << (psep1_lit p sep) >> lit encl_end) |>> function None -> [] | Some xs -> xs
-
-let opt_psep2 encl_begin p sep encl_end =
-    poption (lit encl_begin << psep2_lit p sep >> lit encl_end) |>> function None -> [] | Some xs -> xs
-
+let (popt_bool, psep0, psep1, psep1_lit, psep2_lit, opt_psep1, opt_psep2) =
+    (Parser.popt_bool, Parser.psep0, Parser.psep1, Parser.psep1_lit, Parser.psep2_lit, Parser.opt_psep1, Parser.opt_psep2)
 
 
 let MOD_ID =
@@ -178,8 +158,12 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
             let EnumTD = (kw "enum" << kw "domain" << ID_DOMAIN) ++ (lit "=" << lit "{" << psep1 EnumElement (lit "," <|> lit "|") >> lit "}")
                                 |>> fun _ -> failwith "not implemented: enum type domain"
             let AbstractTD = (popt_bool (kw "dynamic") >> kw "abstract" >> kw "domain") ++ ID_DOMAIN     // !!! what about 'dynamic'?
-                                |>> fun (is_dynamic, tyname) -> add_type_name tyname (0, Some (fun _ -> TypeCons (tyname, [])))
-                                //|>> fun (is_dynamic, s) -> TypeCons (s, []) 
+                                |>> fun (is_dynamic, tyname) ->
+                                        ( fun sign ->
+                                            let sign'  = add_type_name tyname (0, Some (fun _ -> TypeCons (tyname, []))) sign
+                                            let sign'' = add_function_name tyname (Static, NonInfix, ([], Powerset (TypeCons (tyname, [])))) sign'
+                                            sign'' )
+                                      //|>> fun (is_dynamic, s) -> TypeCons (s, []) 
             let BasicTD = (kw "basic" << kw "domain" << ID_DOMAIN) |>> fun tyname -> add_basic_domain tyname
             AnyDomain <|> EnumTD <|> AbstractTD <|> BasicTD
             (* <|> StructuredTD  (* not really a declaration *) *) ) s
@@ -237,8 +221,6 @@ let rec BasicRule (s : ParserInput<PARSER_STATE>) =
                         |>> fun _ -> failwith "not implemented: choose rule"
     let ForallRule = R3 (kw "forall" << psep1_lit ((ID_VARIABLE >> kw "in") ++ Term) ",") (kw "with" << Term) (kw "do" << Rule)
                         |>> fun _ -> failwith "not implemented: forall rule"
-    
-    // /* AsmetaL grammar */    LetRule 	::= 	<LET> "(" VariableTerm "=" Term ( "," VariableTerm "=" Term )* ")" <IN> Rule <ENDLET> 
     (   kw "skip" |>> fun _ -> skipRule
     <|> BlockRule
     <|> ConditionalRule
@@ -246,7 +228,6 @@ let rec BasicRule (s : ParserInput<PARSER_STATE>) =
     <|> ChooseRule
     <|> ForallRule
     <|> MacroCallRule
-    // <|> LetRule
     // <|> ExtendRule
     ) s
 
@@ -402,14 +383,15 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
             let JusticeConstraint = (kw "JUSTICE" << Term) |>> fun _ -> ()
             let CompassionConstraint = (kw "COMPASSION" << lit "(" << Term >> lit "," << Term >> lit ",") |>> fun _ -> ()
             let FairnessConstraint = JusticeConstraint <|> CompassionConstraint
-            let Invariant = R3  (kw "invariant" << poption identifier)
-                                (kw "over" <<
-                                poption (psep1_lit (
-                                            (ID_DOMAIN |>> fun _ -> ())
-                                        <|> (ID_RULE |>> fun _ -> ())
-                                        <|> (ID_FUNCTION << poption (lit "(" << pmany1 getDomainByID << lit ")") |>> fun _ -> ())
-                                ) ","))
-                                (lit ":" << Term) |>> fun _ -> ()
+            let Invariant = 
+                let over_part = (kw "over" <<
+                                psep1_lit (
+                                        (ID_DOMAIN |>> fun _ -> ())
+                                    <|> (ID_RULE |>> fun _ -> ())
+                                    <|> (ID_FUNCTION << poption (lit "(" << poption getDomainByID << lit ")") |>> fun _ -> ())
+                                ) ",")
+                (   ( R3  (kw "invariant")                       over_part (lit ":" << Term) |>> fun _ -> () )
+                <|> ( R3  (kw "invariant" << poption identifier) over_part (lit ":" << Term) |>> fun _ -> () )    )
             let CtlSpec = kw "CTLSPEC" << poption (ID_CTL >> lit ":") ++ Term   |>> fun _ -> ()
             let LtlSpec = kw "LTLSPEC" << poption (ID_LTL >> lit ":") ++ Term   |>> fun _ -> ()
             let TemporalProperty = CtlSpec <|> LtlSpec
