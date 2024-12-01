@@ -343,28 +343,22 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
             let FunctionDefinition =
                 R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
                 |>> fun (f, param_list, t) ->
-                    //let (add_proper_functions_to_state, macro_list)
                     //!!!! no type checking
-                    if List.length param_list > 0
-                    then //!!! to do: proper handling of function overloading
-                         // !!! types of parameters are currently ignored
-                         if not (is_function_name f sign) then
-                            failwith (sprintf "error in function definition: function '%s' is not declared in the signature" f)
-                         else if fct_kind f sign = Static then 
+                    if not (is_function_name f sign) then
+                        failwith (sprintf "error in function definition: function '%s' is not declared in the signature" f)
+                    else
+                        //!!! to do: proper handling of function overloading
+                        // !!! types of parameters are currently ignored
+                        if fct_kind f sign = Static then 
                             let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
                             let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) background_state, Map.ofList (List.zip parameters xs))
                             //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
                             ((fun (state : STATE) -> state_override_static state (Map.add f fct Map.empty)), (fun mdb -> mdb))
-                         else if fct_kind f sign = Derived then 
+                        else if fct_kind f sign = Derived then 
                             let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
-                            let body = t
                             //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
                             ((fun state -> state), (fun (mdb : MACRO_DB) -> macro_db_override mdb (Map.add f (parameters, t) Map.empty)))
-                         else failwith (sprintf "error in function definition: function '%s' is not declared as static or derived in the signature" f)
-                    else if fct_kind f sign = Static then 
-                            let fct = function [] -> Eval.eval_term t (State.background_state, Map.empty) | _ -> UNDEF
-                            ((fun state -> state_override_static state (Map.add f fct Map.empty)), (fun mdb -> mdb))
-                         else failwith (sprintf "error in definition of function '%s': static function name expected in this context" f)
+                        else failwith (sprintf "error in function definition: function '%s' is not declared as static or derived in the signature" f)
                                                         
             let MacroDeclaration =
                 R3 (poption (kw "macro") << kw "rule" << ID_RULE) parameter_list (lit "=" << Rule)
