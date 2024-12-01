@@ -396,8 +396,20 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
                             (pmany Property)       )
             let DomainInitialization = (kw "domain" << ID_DOMAIN) ++ (lit "=" << Term)
                                             |>> fun (id, _) -> failwith (sprintf "not implemented: initialization of domains ('%s')" id)
-            let FunctionInitialization = R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
-                                            |>> fun (id, _, _) -> failwith (sprintf "not implemented: initialization of dynamic function ('%s')" id)
+            let FunctionInitialization =
+                R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
+                |>> fun (f, param_list, t) ->
+                    //!!!! no type checking
+                    if not (is_function_name f sign) then
+                        failwith (sprintf "error in function definition: function '%s' is not declared in the signature" f)
+                    else
+                        if fct_kind f sign = Controlled then 
+                            let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
+                            let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) background_state, Map.ofList (List.zip parameters xs))
+                            //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
+                            ((fun (state : STATE) -> state_override_dynamic_initial state (Map.add f fct Map.empty)), (fun mdb -> mdb))
+                        else failwith (sprintf "error in function initialization: function '%s' is not declared as controlled in the signature" f)
+
             let AgentInitialization = (kw "agent" << ID_DOMAIN) ++ (lit ":" << MacroCallRule)
                                             |>> fun (id, _) -> failwith (sprintf "not implemented: initialization of agent ('%s')" id)
             let Initialization = R4 (kw "init" << identifier >> lit ":")

@@ -78,7 +78,7 @@ let apply_update_map (S : STATE) (U : UPDATE_MAP) =
                         (function None -> Some (update_dynamic_function_table Map.empty updates_of_f)
                                 | Some f_table -> Some (update_dynamic_function_table f_table updates_of_f)) dS_ )
                 dS U
-    in  { _signature = S._signature; _static = S._static; _dynamic = apply_to_dynamic_state S._dynamic U }
+    in  { _signature = S._signature; _static = S._static; _dynamic = apply_to_dynamic_state S._dynamic U; _dynamic_initial = S._dynamic_initial }
 
 let apply_update_set S U =
     apply_update_map S (update_set_to_update_map U)
