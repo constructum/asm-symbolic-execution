@@ -149,20 +149,18 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
         (   (kw "domain" << ID_DOMAIN) ++ (kw "subsetof" << getDomainByID)          
                 |>> fun (tyname, T) ->
                         // !!! for the moment, simply map to main type
-                        add_type_name tyname (0, Some (fun _ -> T)) ) s
+                        add_type_name tyname (0, SubsetType, Some (fun _ -> T)) ) s
     and TypeDomain (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
         let sign = get_signature_from_input s
         (   let AnyDomain = kw "anydomain" << ID_DOMAIN
-                                |>> fun tyname -> add_type_name tyname (0, Some (fun _ -> TypeParam tyname))
+                                |>> fun tyname -> add_type_name tyname (0, AnyType, Some (fun _ -> TypeParam tyname))
             let EnumTD = (kw "enum" << kw "domain" << ID_DOMAIN) ++ (lit "=" << lit "{" << psep1 EnumElement (lit "," <|> lit "|") >> lit "}")
                                 |>> fun _ -> failwith "not implemented: enum type domain"
             let AbstractTD = (popt_bool (kw "dynamic") >> kw "abstract" >> kw "domain") ++ ID_DOMAIN     // !!! what about 'dynamic'?
                                 |>> fun (is_dynamic, tyname) ->
-                                        add_type_name tyname (0, Some (fun _ -> TypeCons (tyname, [])))
-                                      //|>> fun (is_dynamic, s) -> TypeCons (s, []) 
+                                        add_type_name tyname (0, EnumType, Some (fun _ -> TypeCons (tyname, [])))
             let BasicTD = (kw "basic" << kw "domain" << ID_DOMAIN) |>> fun tyname -> add_basic_domain tyname
-            AnyDomain <|> EnumTD <|> AbstractTD <|> BasicTD
-            (* <|> StructuredTD  (* not really a declaration *) *) ) s
+            AnyDomain <|> EnumTD <|> AbstractTD <|> BasicTD ) s
 
 let Domain (s : ParserInput<PARSER_STATE>) =
     ((ConcreteDomain <|> TypeDomain) ||>> fun (sign, state) update_sign_fct -> (update_sign_fct sign, state)) s
@@ -204,7 +202,6 @@ let Function (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATU
 
 let rec BasicRule (s : ParserInput<PARSER_STATE>) =
     let sign = get_signature_from_input s
-    if (!trace > 0) then fprintf stderr "BasicRule: " // "BasicRule: %s" (ParserInput.to_string s)
     let BlockRule = kw "par" << pmany1 Rule >> kw "endpar" |>> ParRule
     let ConditionalRule = R3 (kw "if" << Term) (kw "then" << Rule) (poption (kw "else" << Rule) |>> Option.defaultValue skipRule) >> kw "endif" |>> CondRule
     let VariableTerm = ID_VARIABLE
@@ -328,6 +325,7 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
                     (pmany (ImportClause ||>> fun (sign, state) (_, ASM { signature = new_sign }, _) -> (signature_override sign new_sign, state)(* !!! replace with some proper function to load module at some point *)))
                     (poption ExportClause |>> Option.defaultValue None)
                     Signature
+                    |>> fun (imports, exports, sign) -> (imports, exports, sign)
     
     let parse_asm_with_header = isAsyncr_isModule_name ++ Header
 
@@ -336,7 +334,9 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
     |   ParserSuccess (((asyncr, modul, asm_name), (imports, exports, sign')), s') ->
             //let sign = signature_override sign sign'
             let (sign, state) = get_parser_state s'
-            let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
+            if !trace > 0 then fprintf stderr "parse_asm_with_header: |signature|=%d\n" (Map.count sign)
+
+            let Term s = Term (chg_parser_state s (sign, state))    // !!! temporary
             let parameter_list = opt_psep1 "(" ((ID_VARIABLE >> (kw "in")) ++ getDomainByID) "," ")"
             let DomainDefinition = (kw "domain" << ID_DOMAIN) ++ (lit "=" << Term)
             
@@ -344,14 +344,16 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
                 R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
                 |>> fun (f, param_list, t) ->
                     //!!!! no type checking
+                    if !trace > 0 then fprintf stderr "|signature| = %d - FunctionDefinition '%s'\n" (Map.count sign) f
                     if not (is_function_name f sign) then
                         failwith (sprintf "error in function definition: function '%s' is not declared in the signature" f)
                     else
+                        let _ = Parser.typecheck_term t (sign, Map.ofSeq param_list)
                         //!!! to do: proper handling of function overloading
                         // !!! types of parameters are currently ignored
                         if fct_kind f sign = Static then 
                             let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
-                            let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) background_state, Map.ofList (List.zip parameters xs))
+                            let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) (state_with_signature state sign), Map.ofList (List.zip parameters xs))
                             //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
                             ((fun (state : STATE) -> state_override_static state (Map.add f fct Map.empty)), (fun mdb -> mdb))
                         else if fct_kind f sign = Derived then 
@@ -403,11 +405,12 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
                     if not (is_function_name f sign) then
                         failwith (sprintf "error in function definition: function '%s' is not declared in the signature" f)
                     else
+                        let _ = Parser.typecheck_term t (sign, Map.ofSeq param_list)
                         if fct_kind f sign = Controlled then 
                             let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
-                            let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) background_state, Map.ofList (List.zip parameters xs))
+                            let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) (state_with_signature state sign), Map.ofList (List.zip parameters xs))
                             //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
-                            ((fun (state : STATE) -> state_override_dynamic_initial state (Map.add f fct Map.empty)), (fun mdb -> mdb))
+                            ((fun (state : STATE) -> state_override_dynamic_initial state (Map.add f fct Map.empty)), (fun (mdb : MACRO_DB) -> mdb))
                         else failwith (sprintf "error in function initialization: function '%s' is not declared as controlled in the signature" f)
 
             let AgentInitialization = (kw "agent" << ID_DOMAIN) ++ (lit ":" << MacroCallRule)
@@ -415,24 +418,30 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
             let Initialization = R4 (kw "init" << identifier >> lit ":")
                                     (pmany DomainInitialization)
                                     (pmany FunctionInitialization)
-                                    (pmany AgentInitialization) |>> fun _ -> ()
+                                    (pmany AgentInitialization)
+                                        |>> fun (_, domain_init, function_init, agent_init) -> domain_init @ function_init @ agent_init
             let parse_asm_rest = 
-                R3
+                ( R3
                     Body
                     (poption (kw "main" << MacroDeclaration))
-                    (poption (pmany Initialization ++ (kw "default" >> (pmany1 Initialization))))
-                >>  skip_to_eos
+                    // !!! only the default initial state is considered for the moment, the other are ignored
+                    (poption ((pmany Initialization) << (kw "default" << Initialization) >> (pmany Initialization)))   
+                >>  skip_to_eos )
+                    |>> fun (body, opt_main_rule, default_init) ->
+                            (   body,
+                                opt_main_rule,
+                                match default_init with None -> [] | Some default_init -> default_init  )
 
             match parse_asm_rest s' with
             |   ParserFailure x -> ParserFailure x
-            |   ParserSuccess (((_, function_definitions, rule_declarations, _, _, _), opt_main_rule_decl, opt_init), s'') ->
+            |   ParserSuccess (((_, function_definitions, rule_declarations, _, _, _), opt_main_rule_decl, default_init), s'') ->
                     let rule_declarations = rule_declarations @ (Option.fold (fun _ x -> [x]) [] opt_main_rule_decl)
                     let rdb' : RULES_DB = List.fold (fun rdb (rname, r) -> Map.add rname r rdb) empty_rules_db rule_declarations
                     let (state', mdb') : STATE * MACRO_DB =
                         List.fold
                             (fun (state, mdb) (fct_def, derived_fct_def) -> (fct_def state, derived_fct_def mdb))
                             (empty_state, empty_macro_db)
-                            function_definitions
+                            (function_definitions @ default_init)
                     let result = ASM {
                         name      = asm_name;
                         is_module = modul;
@@ -459,4 +468,7 @@ let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB =
 
 let parse_definitions (sign, S) s =
     imported_modules := Map.empty
-    fst (Parser.make_parser Asm (sign, S) s)
+    let asm as ASM asm' = fst (Parser.make_parser Asm (sign, S) s)
+    if (!trace > 0) then fprintf stderr "---\n%s\n---\n" (asm'.signature |> signature_to_string)
+    asm
+

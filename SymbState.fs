@@ -7,9 +7,13 @@ open Background
 
 //--------------------------------------------------------------------
 
+let trace = ref 0
+
+//--------------------------------------------------------------------
+
 type S_DYNAMIC_STATE = Map<string, Map<VALUE list, TERM>>
 
-type S_STATE = { _signature : SIGNATURE; _static : STATIC_STATE; _dynamic : S_DYNAMIC_STATE }
+type S_STATE = { _signature : SIGNATURE; _static : STATIC_STATE; _dynamic : S_DYNAMIC_STATE; _dynamic_initial : STATIC_STATE; }
 
 let signature_of (S : S_STATE) : SIGNATURE =
     S._signature
@@ -18,36 +22,42 @@ let state_with_signature S sign = {
     _signature  = sign;
     _static     = S._static;
     _dynamic    = S._dynamic;
+    _dynamic_initial = S._dynamic_initial;
 }
 
 let state_to_s_state (S : State.STATE) : S_STATE = {
     _signature = S._signature;
     _static    = S._static;
     _dynamic   = Map.map (fun f -> fun f_table -> Map.map (fun loc -> fun x -> Value x) f_table) S._dynamic;
+    _dynamic_initial = S._dynamic_initial;
 }
 
 let state_to_s_state_only_static (S : State.STATE) : S_STATE = {
     _signature = S._signature;
     _static    = S._static;
     _dynamic   = Map.empty;
+    _dynamic_initial = Map.empty;
 }
 
 let background_state = {
     _signature = Background.signature;
     _static    = Background.state;
     _dynamic   = Map.empty;
+    _dynamic_initial = Map.empty;
 }
 
 let empty_state = {
     _signature  = Signature.empty_signature;
     _static     = Map.empty;
     _dynamic    = Map.empty;
+    _dynamic_initial = Map.empty;
 }
 
 let state_override S0 S' = {
     _signature  = Common.map_override (signature_of S0) (signature_of S');
     _static     = Common.map_override S0._static  S'._static;
     _dynamic    = Common.map_override S0._dynamic S'._dynamic;
+    _dynamic_initial = Common.map_override S0._dynamic_initial S'._dynamic_initial;
 }
 
 let show_s_state (S : S_STATE) =
@@ -73,7 +83,9 @@ let has_interpretation (S : S_STATE) (name : NAME) =
 
 //--------------------------------------------------------------------
 let fct_name_interpretation (S : S_STATE) (f : string) (args : VALUE list) =
-    let kind = fct_kind f (signature_of S)
+    let kind =
+        try fct_kind f (signature_of S)
+        with _ -> failwith (sprintf "function '%s' not defined in signature" f)
     match kind with
     |   Static -> 
         (   try
@@ -83,11 +95,33 @@ let fct_name_interpretation (S : S_STATE) (f : string) (args : VALUE list) =
             with _ -> failwith (sprintf "static function name '%s' has no interpretation" f)    )
     |   Controlled ->
         (   try Map.find args (Map.find f (S._dynamic))
-            with _ -> Initial (f, args)     )
+            with _ ->
+                try Value (Map.find f (S._dynamic_initial) args)
+                with _ -> Initial (f, args) )
+            // // old:
+            // try Map.find args (Map.find f (S._dynamic))
+            // with _ -> Initial (f, args)     )
     |   _ ->
         failwith (sprintf "unsupported function kind '%s' for function name '%s'" (fct_kind_to_string kind) f)
 
+(*
+    // in 'regular' state:
+    let fct_name_interpretation (S : STATE) (f : string) (args : VALUE list) =
+    match fct_kind f S._signature with
+    |   Static ->
+            try (Map.find f (S._static)) args
+            with _ -> failwith (sprintf "static function name '%s' has no interpretation" f)
+    |   Controlled ->
+            let f_map = Map.find f (S._dynamic)
+            try Map.find args f_map
+            with _ ->
+                try Map.find f (S._dynamic_initial) args
+                with _ -> failwith (sprintf "dynamic function '%s' not defined on (%s)" f (String.concat ", " (args >>| value_to_string)))
+    |   _ -> failwith (sprintf "fct_name_interpretation: function '%s' is not static nor controlled" f)
+*)
+
 let interpretation (S : S_STATE) (name : NAME) =
+    if !trace > 0 then fprintfn stderr "|signature|=%d | SymbState.interpretation of %A\n" (Map.count (signature_of S)) (name)
     match name with
     |   UndefConst -> (fun _ -> Value UNDEF)
     |   BoolConst b -> (fun _ -> Value (BOOL b))

@@ -162,6 +162,7 @@ let term_type sign =
 //---------------------------------------------------
 
 let eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name : NAME, ts) = 
+    if !trace > 0 then fprintfn stderr "|signature|=%d | eval_app_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) (AppTerm (fct_name, [])))
     let ts = ts >>| fun t -> t (S, env, C)
     match get_values ts with
     |   Some xs -> interpretation S fct_name xs
@@ -204,7 +205,8 @@ let eval_cond_term (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) =
                         let (t1', t2') = (t1 (S, env, Set.add G C), t2 (S, env, Set.add (s_not G) C))
                         if t1' = t2' then t1' else CondTerm (G, t1', t2')
 
-let s_eval_term_ t : S_STATE * ENV * CONTEXT-> TERM =
+let s_eval_term_ t = fun ((S, env, C) : S_STATE * ENV * CONTEXT) ->
+    if !trace > 0 then fprintfn stderr "|signature|=%d | s_eval_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) t)
     term_induction (fun x -> x) {
         Value    = fun x _ -> Value x;
         Initial  = fun (f, xs)  _ -> Initial (f, xs);
@@ -212,7 +214,7 @@ let s_eval_term_ t : S_STATE * ENV * CONTEXT-> TERM =
         CondTerm = fun (G, t1, t2) -> fun (S, env, C) -> eval_cond_term (S, env, C) (G, t1, t2);
         VarTerm  = fun v -> fun (S, env, _) -> get_env env v;
         // LetTerm = fun (v, t1, t2) -> fun (S, env) -> t2 (S, add_binding env (v, t1 (S, env)))
-    } t
+    } t (S, env, C)
 
 let s_eval_term (t : TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TERM =
     let sign = signature_of S
@@ -378,7 +380,9 @@ let count_s_updates = rule_induction (fun _ -> ()) {
 
 // first element of pair returned is the number of S_Updates rules, i.e. paths in the decision tree
 let symbolic_execution (R_in : RULE) : int * RULE =
+    if (!trace > 0) then fprintf stderr "symbolic_execution\n"
     let S0 = TopLevel.initial_state ()
+    if (!trace > 0) then fprintf stderr "---\n%s\n---\n" (signature_to_string (signature_of (state_to_s_state S0)))
     let R_out = s_eval_rule R_in (state_to_s_state S0, Map.empty, Set.empty)
     (count_s_updates R_out, reconvert_rule R_out)
 

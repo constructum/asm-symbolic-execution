@@ -185,7 +185,11 @@ let typecheck_name name (sign : SIGNATURE, _ : Map<string, TYPE>) =
     |   BoolConst b     -> (BoolConst b,   [([], Boolean)])
     |   IntConst i      -> (IntConst i,    [([], Integer)])
     |   StringConst s   -> (StringConst s, [([], String)])
-    |   FctName f       -> (FctName f,     fct_types f sign)
+    |   FctName f       ->
+            if not (is_function_name f sign)
+            then fprintf stderr "typecheck_name: function name '%s' not defined in signature\n" f
+                 failwith (sprintf "typecheck_name: function name '%s' not defined in signature" f)
+            else (FctName f, fct_types f sign)
 
 let typecheck_app_term sign = function
     |   (fct_name, ts)  -> failwith ""
@@ -204,7 +208,10 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
                         then failwith "typecheck_term: type of guard in conditional term must be Boolean)"
                         else
                         (   let (t1, t2) = (t1 (sign, tyenv), t2 (sign, tyenv))
-                            if t1 = t2 then t1
+                            //!!!!!!!!!!!!! make everything compatible with undef for the moment - but this should be done properly
+                            if t1 = Undef then t2
+                            else if t2 = Undef then t1
+                            else if t1 = t2 then t1
                             else failwith $"branches of conditional term have different types (then-branch: {t1 |> type_to_string}; else-branch: {t2 |> type_to_string})" )                                                  
         Initial  = fun (f, xs) (sign, tyenv) ->
                         match_fct_type f (xs >>| type_of_value) (fct_types f sign)
@@ -336,6 +343,7 @@ let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_
 and term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_STATE> = 
     let sign = get_signature_from_input s
     operator_parser (simple_term, mkAppTerm sign) sign s
+
 
 
 //--------------------------------------------------------------------

@@ -47,9 +47,16 @@ val type_to_string : TYPE -> string
 val type_list_to_string : TYPE list -> string
 val fct_type_to_string : TYPE list * TYPE -> string
 
+type TYPE_KIND =
+| BasicType
+| AnyType           // type parameter (needed to implement AsmetaL's 'anydomain')
+| EnumType          // inductive types - AsmetaL: enum / abstract domains
+| SubsetType        // subset 'types'  - AsmetaL: concrete domains (i.e. subset of a basic or abstract domain)
+
 type TYPE_INFO = {
-    arity   : int;
-    maps_to : (TYPE list -> TYPE) option;    // None for user-defined types; Some ... for mapping type names to built-in types
+    arity : int;
+    type_kind : TYPE_KIND;
+    maps_to : (TYPE list -> TYPE) option;  // None for user-declared types; Some ... for mapping type names to built-in types
 }
 
 type FCT_INFO = {
@@ -72,7 +79,7 @@ type SIGNATURE = Map<FCT_NAME, NAME_INFO>
 val empty_signature : SIGNATURE
 val signature_override : SIGNATURE -> SIGNATURE -> SIGNATURE
 
-val add_type_name : string -> int * (TYPE list -> TYPE) option -> SIGNATURE -> SIGNATURE
+val add_type_name : string -> int * TYPE_KIND * (TYPE list -> TYPE) option -> SIGNATURE -> SIGNATURE
 val add_function_name : string -> FCT_KIND * INFIX_STATUS * (TYPE list * TYPE) -> SIGNATURE -> SIGNATURE
 val add_rule_name : string -> TYPE list -> SIGNATURE -> SIGNATURE
 
@@ -84,6 +91,8 @@ val is_name_defined : string -> SIGNATURE -> bool
 val construct_type : SIGNATURE -> (string * TYPE list) -> TYPE
 
 val is_type_name : string -> SIGNATURE -> bool
+val type_kind : string -> SIGNATURE -> TYPE_KIND
+
 val is_rule_name : string -> SIGNATURE -> bool
 
 val is_function_name : string -> SIGNATURE -> bool
@@ -97,3 +106,5 @@ val is_right_assoc : string -> SIGNATURE -> bool
 val precedence : string -> SIGNATURE -> int
 
 val match_fct_type : string -> TYPE list -> (TYPE list * TYPE) list -> TYPE
+
+val signature_to_string : SIGNATURE -> string

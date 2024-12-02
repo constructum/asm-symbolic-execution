@@ -151,7 +151,7 @@ let background_functions =
 let signature =
     let sign0 = Map.empty
     let add_fct sign (f, _, f_type, f_infix) = add_function_name f (Static, f_infix, f_type) sign
-    let add_typ sign (t, arity, maps_to) = add_type_name t (arity, maps_to) sign
+    let add_typ sign (t, arity, maps_to) = add_type_name t (arity, BasicType, maps_to) sign
     let sign1 = List.fold add_typ sign0 background_types
     let sign2 = List.fold add_fct sign1 background_functions   //(fun sign (f, _, f_type, f_infix) -> add_function_name f (Static, f_type, f_infix) sign)
     sign2

@@ -44,7 +44,8 @@ let time f args =
     with ex ->
         let elapsed_time = timer.ElapsedMilliseconds
         let (cpu, usr, sys) = measure_cpu_time proc (cpu0, usr0, sys0)
-        (None, Some ex, elapsed_time, cpu, usr, sys)
+        //(None, Some ex, elapsed_time, cpu, usr, sys)
+        reraise ()
 
 let readfile filename =
     try System.IO.File.ReadAllText filename

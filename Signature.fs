@@ -2,6 +2,8 @@ module Signature
 
 open Common
 
+let trace = ref 0
+
 type FCT_NAME = string
 type RULE_NAME = string
 
@@ -76,6 +78,8 @@ and type_list_to_string tys =
 and fct_type_to_string (args_type, res_type) =
     sprintf "%s -> %s" (args_type |> type_list_to_string) (res_type |> type_to_string)
 
+//--------------------------------------------------------------------
+
 exception TypeMismatch of TYPE * TYPE
 
 let match_type (ty : TYPE) (ty_sign : TYPE) (ty_env : Map<string, TYPE>) : Map<string, TYPE> =
@@ -86,21 +90,31 @@ let match_type (ty : TYPE) (ty_sign : TYPE) (ty_env : Map<string, TYPE>) : Map<s
             failwith (sprintf "%s: type parameter not allowed in concrete type to be matched to signature type %s"
                 (type_to_string ty) (type_to_string ty_sign))
     |   _ ->
-            if ty = ty_sign then
+            if ty = Undef || ty_sign = Undef then
+                //!!!!!!!!!!!!! make everything compatible with undef for the moment - but this should be done properly
+                Map.empty
+            else if ty = ty_sign then
                 Map.empty
             else
                 match ty_sign with
                 |   TypeParam a ->
                         if Map.containsKey a ty_env then
-                            if ty = Map.find a ty_env
+                            if (ty = Map.find a ty_env)
                             then ty_env
                             else raise (TypeMismatch (ty, ty_sign))
                         else Map.add a ty ty_env
                 |   _ -> raise (TypeMismatch (ty, ty_sign))
 
+type TYPE_KIND =
+| BasicType
+| AnyType           // type parameter (needed to implement AsmetaL's 'anydomain')
+| EnumType          // inductive types - AsmetaL: enum / abstract domains
+| SubsetType        // subset 'types'  - AsmetaL: concrete domains (i.e. subset of a basic or abstract domain)
+
 type TYPE_INFO = {
-    arity   : int;
-    maps_to : (TYPE list -> TYPE) option;    // None for user-declared types; Some ... for mapping type names to built-in types
+    arity : int;
+    type_kind : TYPE_KIND;
+    maps_to : (TYPE list -> TYPE) option;  // None for user-declared types; Some ... for mapping type names to built-in types
 }
 
 type FCT_INFO = {
@@ -122,14 +136,33 @@ type NAME_INFO =
 
 type SIGNATURE = Map<FCT_NAME, NAME_INFO>
 
+//--------------------------------------------------------------------
+
+let signature_to_string sign =
+    let name_info_to_string (name : string) (name_info : NAME_INFO) =
+        match name_info with
+        | TypeInfo { arity = n; type_kind = kind; maps_to = maps_to } ->
+            sprintf "type %s(%d)\n" name n
+        | FctInfo { fct_kind = kind; infix_status = status; fct_types = fct_types } ->
+            ( String.concat "\n" (
+                List.map
+                    (fun fct_type -> sprintf "%s function %s : %s" (fct_kind_to_string kind) name (fct_type_to_string fct_type))
+                    fct_types) ) + "\n"   // + (infix_status_to_string status)
+        | RuleInfo { rule_type = ty } ->
+            sprintf "rule %s : %s\n" name (ty |> type_list_to_string)
+    String.concat ""
+        (Seq.map snd (Map.toSeq (Map.map (fun name name_info -> sprintf "%s" (name_info_to_string name name_info)) sign)))
+
+//--------------------------------------------------------------------
+
 let empty_signature : SIGNATURE = Map.empty
 
 let signature_override (sign0 : SIGNATURE) sign' = Common.map_override sign0 sign'
 
-let add_type_name type_name (arity, maps_to) (sign : SIGNATURE) =
+let add_type_name type_name (arity, type_kind, maps_to) (sign : SIGNATURE) =
     if Map.containsKey type_name sign
     then failwith (sprintf "type name '%s' already declared" type_name)
-    else Map.add type_name (TypeInfo { arity = arity; maps_to = maps_to }) sign
+    else Map.add type_name (TypeInfo { arity = arity; type_kind = type_kind; maps_to = maps_to }) sign
 
 let add_function_name fct_name (fct_kind, infix_status, new_fct_type) (sign : SIGNATURE) =
     let existing_fct_types =
@@ -202,8 +235,20 @@ let is_rule_name name (sign : SIGNATURE) =
 let fct_names sign  = Set.ofSeq (Map.keys sign) |> Set.filter (fun name -> is_function_name name sign)
 let rule_names sign = Set.ofSeq (Map.keys sign) |> Set.filter (fun name -> is_rule_name name sign)
 
+let get_type_info msg tyname (sign : SIGNATURE) f = 
+    assert is_type_name tyname sign
+    (Map.find tyname sign)
+    |> function TypeInfo ti -> f ti | _ -> failwith (sprintf "Signature.%s: '%s' is not a type name" msg tyname)
+
+let type_kind (tyname : string) sign =
+    get_type_info "type_kind" tyname sign (fun ti -> ti.type_kind)
+
 let get_fct_info msg fct_name (sign : SIGNATURE) f = 
-    assert is_function_name fct_name sign
+    if !trace > 0 then fprintf stderr "(|signature| = %d) " (Map.count sign)
+    if !trace > 0 then fprintf stderr "get_fct_info(%s, %s)\n" msg fct_name
+    if !trace > 0 then fprintf stderr $"{Map.containsKey fct_name sign}\n"
+    assert (Map.containsKey fct_name sign)
+//    assert is_function_name fct_name sign
     (Map.find fct_name sign)
     |> function FctInfo fi -> f fi | _ -> failwith (sprintf "Signature.%s: '%s' is not a function name" msg fct_name)
 

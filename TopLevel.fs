@@ -68,9 +68,11 @@ let loadstr (asmeta_flag : bool) contents =
     signature_    := Some (signature_override (signature ()) new_sign)  //
     initial_state_ := Some (state_with_signature (state_override (initial_state ()) new_state) (signature ()))
     rules_         := Some (rules_db_override (rules ()) new_rules_db)
-    smt_add_functions smt_ctx (new_sign, new_state)
+    smt_add_functions smt_ctx (signature()) (new_sign, new_state)
 
 let loadfile (asmeta_flag : bool) filename =
+    if (!trace > 0) then fprintf stderr "load_file: %s\n" filename
     Common.readfile (filename) |> loadstr asmeta_flag
+    if (!trace > 0) then fprintf stderr "---\n%s\n---\n" (signature_to_string (signature ()))
 
 //--------------------------------------------------------------------
