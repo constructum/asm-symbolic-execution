@@ -473,5 +473,5 @@ let parse_rule sign s = parse_and_typecheck rule typecheck_rule (sign, empty_sta
 //let parse_definitions (sign, S) s = get_state_from_input (snd (make_parser definitions (sign, S) s))
 let parse_definitions (sign, S) s =
     let defs = fst (make_parser definitions (sign, S) s)
-    fprintf stderr "parse_definitions: %A\n" defs
+    if !trace > 0 then fprintf stderr "parse_definitions: %A\n" defs
     defs
