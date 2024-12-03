@@ -139,11 +139,7 @@ let smt_eval_formula (phi : TERM) (S, env, C) =
 // this returns the type of an already type-checked term (i.e. it assumes that the term is type-correct)
 let term_type sign =
     term_induction (fun x -> x) {
-        Value = function
-                |   UNDEF   -> Undef
-                |   BOOL _  -> Boolean
-                |   INT _   -> Integer
-                |   STRING _ -> String;
+        Value = Background.type_of_value sign;
         Initial  = fun (f, ts) -> let (_, T_ran) = fct_type f sign in T_ran;
                         // !!! (1) not very efficient due to unnecessarily calling fct_type every time - note: term is already been type checked!
                         // !!! (2) does not work for overloaded functions
@@ -333,14 +329,13 @@ let rec s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
 //--------------------------------------------------------------------
 // convert partially evaluated terms and rules to regular ones
 
-let reconvert_value x =
-    let special_const =
-        match x with
-        |   UNDEF   -> UndefConst
-        |   BOOL b  -> BoolConst b
-        |   INT i   -> IntConst i
-        |   STRING s -> StringConst s
-    AppTerm (special_const, [])
+let rec reconvert_value x =
+    match x with
+    |   UNDEF    -> AppTerm (UndefConst, [])
+    |   BOOL b   -> AppTerm (BoolConst b, [])
+    |   INT i    -> AppTerm (IntConst i, [])
+    |   STRING s -> AppTerm (StringConst s, [])
+    |   CELL (tag, args) -> AppTerm (FctName tag, args >>| reconvert_value)
 
 let reconvert_term t =
     term_induction (fun x -> x) {

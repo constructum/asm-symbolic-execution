@@ -86,7 +86,11 @@ let fct_name_interpretation (S : S_STATE) (f : string) (args : VALUE list) =
     let kind =
         try fct_kind f (signature_of S)
         with _ -> failwith (sprintf "function '%s' not defined in signature" f)
+    if !trace > 0 then fprintfn stderr "SymbState.fct_name_interpretation: %s kind=%s" f (fct_kind_to_string kind)
     match kind with
+    |   Constructor ->
+            if !trace > 0 then fprintfn stderr "fct_name_interpretation: constructor '%s'" f
+            Value (CELL (f, args))
     |   Static -> 
         (   try
                 match Map.find f (S._static) args with 
@@ -97,28 +101,10 @@ let fct_name_interpretation (S : S_STATE) (f : string) (args : VALUE list) =
         (   try Map.find args (Map.find f (S._dynamic))
             with _ ->
                 try Value (Map.find f (S._dynamic_initial) args)
-                with _ -> Initial (f, args) )
-            // // old:
-            // try Map.find args (Map.find f (S._dynamic))
-            // with _ -> Initial (f, args)     )
+                with _ -> Initial (f, args)  )
     |   _ ->
         failwith (sprintf "unsupported function kind '%s' for function name '%s'" (fct_kind_to_string kind) f)
 
-(*
-    // in 'regular' state:
-    let fct_name_interpretation (S : STATE) (f : string) (args : VALUE list) =
-    match fct_kind f S._signature with
-    |   Static ->
-            try (Map.find f (S._static)) args
-            with _ -> failwith (sprintf "static function name '%s' has no interpretation" f)
-    |   Controlled ->
-            let f_map = Map.find f (S._dynamic)
-            try Map.find args f_map
-            with _ ->
-                try Map.find f (S._dynamic_initial) args
-                with _ -> failwith (sprintf "dynamic function '%s' not defined on (%s)" f (String.concat ", " (args >>| value_to_string)))
-    |   _ -> failwith (sprintf "fct_name_interpretation: function '%s' is not static nor controlled" f)
-*)
 
 let interpretation (S : S_STATE) (name : NAME) =
     if !trace > 0 then fprintfn stderr "|signature|=%d | SymbState.interpretation of %A\n" (Map.count (signature_of S)) (name)

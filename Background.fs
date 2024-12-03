@@ -2,6 +2,7 @@ module Background
 
 //--------------------------------------------------------------------
 
+open Common
 open Signature
 
 //--------------------------------------------------------------------
@@ -11,22 +12,26 @@ type VALUE =
 | BOOL of bool
 | INT of int
 | STRING of string
+| CELL of string * VALUE list     // for values of user-defined inductive data types
 //| TUPLE of VALUE list
 
 let TRUE = BOOL true
 let FALSE = BOOL false
 
-let value_to_string = function
+let rec value_to_string = function
 |   UNDEF -> "undef"
 |   BOOL b -> if b then "true" else "false"
 |   INT i -> i.ToString ()
 |   STRING s -> "\"" + s + "\""
+|   CELL (tag, args) -> if List.isEmpty args then tag else tag + " (" + (args >>| value_to_string |> String.concat ", ") + ")"
 
-let type_of_value = function
-|   UNDEF    -> Undef
-|   BOOL b   -> Boolean
-|   INT i    -> Integer
-|   STRING s -> String
+let type_of_value (sign : SIGNATURE) (x : VALUE) =
+    match x with
+    |   UNDEF    -> Undef
+    |   BOOL b   -> Boolean
+    |   INT i    -> Integer
+    |   STRING s -> String
+    |   CELL (tag, _) -> let (_, ran) = fct_type tag sign in ran
 
 //--------------------------------------------------------------------
 

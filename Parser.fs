@@ -196,7 +196,7 @@ let typecheck_app_term sign = function
 
 let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TYPE =
     term_induction typecheck_name {
-        Value    = fun x _ -> type_of_value x;
+        Value    = fun x _ -> type_of_value sign x;
         AppTerm  = fun (f, ts) (sign, tyenv) ->
                         match f (sign, tyenv) with
                         |   (FctName f, f_sign_types) ->  // fprintf stderr "typecheck_term %A\n" (f, (ts >>| fun t -> t (sign, tyenv)))
@@ -214,7 +214,7 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
                             else if t1 = t2 then t1
                             else failwith $"branches of conditional term have different types (then-branch: {t1 |> type_to_string}; else-branch: {t2 |> type_to_string})" )                                                  
         Initial  = fun (f, xs) (sign, tyenv) ->
-                        match_fct_type f (xs >>| type_of_value) (fct_types f sign)
+                        match_fct_type f (xs >>| type_of_value sign) (fct_types f sign)
         VarTerm  = fun v -> fun (_, tyenv) -> try Map.find v tyenv with _ -> failwith $"variable '{v}' not defined";
         // LetTerm  = fun (x, t1, t2) -> fun (sign, tyenv) ->
         //                 let t1 = t1 (sign, tyenv)
@@ -420,7 +420,7 @@ let definition (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE 
                         state_override_static empty_state (Map.add f static_def Map.empty)
                 |   (_, Some initial_values) ->
                         let _ = Map.map (fun xs y -> 
-                                    if (xs >>| type_of_value, type_of_value y) <> (tys_ran, ty_dom)
+                                    if (xs >>| type_of_value sign, type_of_value sign y) <> (tys_ran, ty_dom)
                                     then failwith (sprintf "type mismatch in initialisation of function '%s'" f)
                                     else ()) initial_values
                         state_override_dynamic empty_state (Map.add f initial_values Map.empty)

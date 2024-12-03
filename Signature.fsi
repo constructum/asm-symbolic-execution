@@ -19,6 +19,7 @@ type INFIX_STATUS =
 | Infix of ASSOCIATIVITY * int
 
 type FCT_KIND =
+| Constructor           // (static) constructor for inductive data types
 | Static
 | Monitored             // same as 'in'
 | Controlled

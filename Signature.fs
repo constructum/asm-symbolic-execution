@@ -23,6 +23,7 @@ type INFIX_STATUS =
 | Infix of ASSOCIATIVITY * int
 
 type FCT_KIND =
+| Constructor           // (static) constructor for inductive data types
 | Static
 | Monitored             // same as 'in'
 | Controlled
@@ -31,6 +32,7 @@ type FCT_KIND =
 | Derived
 
 let fct_kind_to_string = function
+| Constructor -> "constructor"
 | Static -> "static"
 | Monitored -> "monitored"
 | Controlled -> "controlled"

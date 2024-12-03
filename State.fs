@@ -78,7 +78,11 @@ let has_interpretation (S : STATE) (name : NAME) =
 
 //--------------------------------------------------------------------
 let fct_name_interpretation (S : STATE) (f : string) (args : VALUE list) =
-    match fct_kind f (signature_of S) with
+    let kind = fct_kind f (signature_of S)
+    if !trace > 0 then fprintfn stderr "State.fct_name_interpretation: %s kind=%A" f kind
+    match kind with
+    |   Constructor ->
+            CELL (f, args)
     |   Static ->
             try (Map.find f (S._static)) args
             with _ -> failwith (sprintf "static function name '%s' has no interpretation" f)

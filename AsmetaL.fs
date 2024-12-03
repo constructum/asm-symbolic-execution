@@ -174,6 +174,7 @@ let add_function_name f (kind, infix, (tys, ty)) sign =
     else fprintf stderr "warning: ignoring declaration of function '%s' already present in background signature\n" f; sign
 
 let Function (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
+    let (sign, state) = get_parser_state s
     // any function f : Prod(T1,...,Tn) -> T is converted into an n-ary function f : T1,...,Tn -> T  [n >= 0]
     let to_fct_type (tys : TYPE, ty_opt : TYPE option) =
         match (tys, ty_opt) with
@@ -181,7 +182,20 @@ let Function (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATU
         |   (Prod tys, Some ty) -> (tys, ty)
         |   (ty, Some ty')      -> ([ty], ty')
     let StaticFunction     = R3 (kw "static"  << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
-                                |>> fun (f, tys, opt_ty) -> add_function_name f (Static, NonInfix, to_fct_type(tys, opt_ty))
+                                // !!! check whether the type is an enum type, then the static function is a constructor of this type ????
+                                //    but can it be a regular function with the same name?
+                                |>> fun (f, tys, opt_ty) ->
+                                    let (ty_dom, ty_ran) = // correct special syntax of nullary functions
+                                        match (tys, opt_ty) with
+                                        |   (ty_ran, None) -> (Prod [], ty_ran)
+                                        |   (ty_dom, Some ty_ran) -> (ty_dom, ty_ran)
+                                    match (ty_dom, ty_ran) with
+                                    |   (Prod [], TypeCons (ty, [])) ->
+                                            if type_kind ty sign = EnumType then
+                                                add_function_name f (Constructor, NonInfix, ([], TypeCons (ty, [])))
+                                            else
+                                                add_function_name f (Static, NonInfix, ([], TypeCons (ty, [])))
+                                    |   _-> add_function_name f (Static, NonInfix, to_fct_type(tys, opt_ty))
     let DerivedFunction    = R3 (kw "derived" << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
                                 |>> fun (f, tys, opt_ty) -> add_function_name f (Derived, NonInfix, to_fct_type(tys, opt_ty))
     let OutFunction        = R3 (poption (kw "dynamic") << kw "out"        << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
@@ -347,7 +361,9 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
                     if !trace > 0 then fprintf stderr "|signature| = %d - FunctionDefinition '%s'\n" (Map.count sign) f
                     if not (is_function_name f sign) then
                         failwith (sprintf "error in function definition: function '%s' is not declared in the signature" f)
-                    else
+                    else if fct_kind f sign = Constructor then
+                        failwith (sprintf "error in function definition: function '%s' is a constructor, cannot be redefined" f)
+                    else 
                         let _ = Parser.typecheck_term t (sign, Map.ofSeq param_list)
                         //!!! to do: proper handling of function overloading
                         // !!! types of parameters are currently ignored
