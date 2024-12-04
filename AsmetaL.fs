@@ -14,7 +14,7 @@ let trace = ref 0
 //--------------------------------------------------------------------
 
 type ASM_Definitions = {
-    functions : STATE;
+    state : STATE;
     rules  : RULES_DB;
     macros : MACRO_DB;
 }
@@ -46,7 +46,7 @@ let asm_content (asyncr_module_name as (asyncr : bool, modul : bool, name : stri
         exports = exports;
         signature = signature;
         definitions = {
-            functions = definitions.functions;
+            state = definitions.state;
             rules     = definitions.rules;
             macros    = definitions.macros;
         };
@@ -336,7 +336,9 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
                             let signature_with_functions = List.fold (fun sign add_one_function -> add_one_function sign) signature_with_domains function_declarations
                             signature_with_functions
     let Header = R3
-                    (pmany (ImportClause ||>> fun (sign, state) (_, ASM { signature = new_sign }, _) -> (signature_override sign new_sign, state)(* !!! replace with some proper function to load module at some point *)))
+                    (pmany (ImportClause ||>> fun (sign, state) (_, ASM asm', _) ->
+                                                (   signature_override sign asm'.signature,
+                                                    state_override state asm'.definitions.state ) ))
                     (poption ExportClause |>> Option.defaultValue None)
                     Signature
                     |>> fun (imports, exports, sign) -> (imports, exports, sign)
@@ -458,6 +460,9 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
                             (fun (state, mdb) (fct_def, derived_fct_def) -> (fct_def state, derived_fct_def mdb))
                             (empty_state, empty_macro_db)
                             (function_definitions @ default_init)
+                    if !trace > 0 then fprintf stderr "static function definitions found for: %s\n" (Map.keys state'._static |> String.concat ", ")
+                    if !trace > 0 then fprintf stderr "dynamic function definitions found for: %s\n" (Map.keys state'._dynamic |> String.concat ", ")
+                    if !trace > 0 then fprintf stderr "dynamic function initializations found for: %s\n" (Map.keys state'._dynamic_initial |> String.concat ", ")
                     let result = ASM {
                         name      = asm_name;
                         is_module = modul;
@@ -466,9 +471,9 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
                         exports   = exports;
                         signature = sign;
                         definitions = {
-                            functions = state';
-                            rules  = rdb';
-                            macros = mdb';
+                            state  = state_override state state';
+                            rules  = rdb';   //????
+                            macros = mdb';   //????
                         };
                     }
                     ParserSuccess ( result, s'')
@@ -477,7 +482,7 @@ let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB =
     match asm with
     |   ASM (asm_content) ->
             let sign  = asm_content.signature
-            let state = state_with_signature asm_content.definitions.functions sign
+            let state = state_with_signature asm_content.definitions.state sign
             let rdb   = asm_content.definitions.rules
             (sign, state, rdb)
 
@@ -485,6 +490,6 @@ let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB =
 let parse_definitions (sign, S) s =
     imported_modules := Map.empty
     let asm as ASM asm' = fst (Parser.make_parser Asm (sign, S) s)
-    if (!trace > 0) then fprintf stderr "---\n%s\n---\n" (asm'.signature |> signature_to_string)
+    if (!trace > 1) then fprintf stderr "---\n%s\n---\n" (asm'.signature |> signature_to_string)
     asm
 
