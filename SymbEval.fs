@@ -26,7 +26,7 @@ let use_smt_solver = ref true     // this only has an effect if 'simplify_cond' 
 
 //--------------------------------------------------------------------
 
-type ENV = Map<string, TERM>
+type ENV = Map<string, TERM * TYPE>
 
 type CONTEXT = Set<TERM>    // boolean formulas (facts) that are true in current branch of conditional rule
 
@@ -41,8 +41,8 @@ let defined_in (env : ENV) var =
 let get_env (env : ENV) (var : string) =
     Map.find var env
 
-let add_binding (env : ENV) (var : string, t : TERM) =
-    Map.add var t env
+let add_binding (env : ENV) (var : string, t : TERM, ty : TYPE) =
+    Map.add var (t, ty) env
 
 //--------------------------------------------------------------------
 
@@ -137,7 +137,7 @@ let smt_eval_formula (phi : TERM) (S, env, C) =
 //--------------------------------------------------------------------
 
 // this returns the type of an already type-checked term (i.e. it assumes that the term is type-correct)
-let term_type sign =
+let term_type sign (env : ENV) =
     term_induction (fun x -> x) {
         Value = Background.type_of_value sign;
         Initial  = fun (f, ts) -> let (_, T_ran) = fct_type f sign in T_ran;
@@ -152,7 +152,8 @@ let term_type sign =
                             // !!! (1) not very efficient due to unnecessarily calling fct_type every time - note: term is already been type checked!
                             // !!! (2) does not work for overloaded functions
         CondTerm = function (G, t1, t2) -> t1;
-        VarTerm  = fun _ -> failwith "term_type: VarTerm not implemented yet";
+        VarTerm  = fun v -> get_env env v |> snd;
+        LetTerm  = fun _ -> failwith "term_type: LetTerm not implemented yet";
     }
 
 //---------------------------------------------------
@@ -208,13 +209,13 @@ let s_eval_term_ t = fun ((S, env, C) : S_STATE * ENV * CONTEXT) ->
         Initial  = fun (f, xs)  _ -> Initial (f, xs);
         AppTerm  = fun (f, ts) -> fun (S, env, C) -> eval_app_term (S, env, C) (f, ts);
         CondTerm = fun (G, t1, t2) -> fun (S, env, C) -> eval_cond_term (S, env, C) (G, t1, t2);
-        VarTerm  = fun v -> fun (S, env, _) -> get_env env v;
-        // LetTerm = fun (v, t1, t2) -> fun (S, env) -> t2 (S, add_binding env (v, t1 (S, env)))
+        VarTerm  = fun v -> fun (S, env, _) -> fst (get_env env v);
+        LetTerm  = fun v -> fun (S, env, _) -> failwith "s_eval_term: LetTerm: not implemented yet"  // fun (v, t1, t2) -> fun (S, env) -> t2 (S, add_binding env (v, t1 (S, env)))
     } t (S, env, C)
 
 let s_eval_term (t : TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TERM =
     let sign = signature_of S
-    if term_type sign t = Boolean
+    if term_type sign env t = Boolean
     then
         let t = s_eval_term_ t (S, env, C)
         match t with
@@ -307,7 +308,12 @@ let rec s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
         |   R' -> failwith (sprintf "SymEvalRules.s_eval_rule: eval_iter_rule - R'' = %s" (rule_to_string R'))
     
     and eval_let (v, t, R) (S, env, C) =
-        s_eval_rule R (S, add_binding env (v, s_eval_term t (S, env, C)), C)       // !!!!! is this one correct at all?
+        s_eval_rule R (S, add_binding env (v, s_eval_term t (S, env, C), term_type (signature_of S) env t), C)       // !!!!! is this one correct at all?
+
+    and eval_macro_rule_call (r, args) (S, env, C) =
+        let (formals, body) = Map.find r (TopLevel.rules ()) 
+        let env' = List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (S, env, C), term_type (signature_of S) env arg)) env formals args
+        s_eval_rule body (S, env', C)
  
     let R =
         match R with
@@ -317,7 +323,7 @@ let rec s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
         |   SeqRule Rs              -> eval_seq Rs (S, env, C)
         |   IterRule R              -> eval_iter R (S, env, C)
         |   LetRule (v, t, R)       -> eval_let (v, t, R) (S, env, C) 
-        |   MacroRuleCall _         -> failwith "s_eval_rule: MacroRuleCall not implemented yet"
+        |   MacroRuleCall (r, args) -> eval_macro_rule_call (r, args) (S, env, C)
         |   S_Updates S             -> S_Updates S
 
     level := !level - 1
@@ -344,6 +350,7 @@ let reconvert_term t =
         AppTerm  = AppTerm;
         CondTerm = CondTerm;
         VarTerm  = VarTerm;
+        LetTerm  = LetTerm;
     } t
 
 let reconvert_rule R = 

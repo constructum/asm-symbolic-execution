@@ -14,7 +14,7 @@ type TERM =
 | CondTerm of TERM * TERM * TERM
 | VarTerm of string
 | QuantTerm
-//  | LetTerm of string * TERM * TERM
+| LetTerm of string * TERM * TERM
 //  | TupleTerm of TERM list
 
 type RULE =
@@ -67,7 +67,7 @@ type TERM_INDUCTION<'name, 'term> = {
     AppTerm  : 'name * 'term list -> 'term;
     CondTerm : 'term * 'term * 'term -> 'term;
     VarTerm  : string -> 'term;
-    //  LetTerm  : string * 'term * 'term -> 'term
+    LetTerm  : string * 'term * 'term -> 'term
 }
 
 let rec term_induction (name : NAME -> 'name) (F : TERM_INDUCTION<'name, 'term>) (t : TERM) :'term =
@@ -79,7 +79,7 @@ let rec term_induction (name : NAME -> 'name) (F : TERM_INDUCTION<'name, 'term>)
     |   CondTerm (G, t1, t2) -> F.CondTerm (term_ind F G, term_ind F t1, term_ind F t2)
     |   VarTerm v -> (((F.VarTerm :string -> 'term) (v : string)) :'term)
     |   QuantTerm -> failwith "QuantTerm not implemented"
-    //  |   LetTerm (x, t1, t2) -> F.LetTerm (x, term_ind F t1, term_ind F t2)
+    |   LetTerm (x, t1, t2) -> F.LetTerm (x, term_ind F t1, term_ind F t2)
 
 //--------------------------------------------------------------------
 
@@ -121,7 +121,7 @@ let rec term_size t =
         CondTerm = fun (G, t1, t2) -> 1 + G + t1 + t2;
         Initial = fun _ -> 1;
         VarTerm = fun _ -> 1;
-        //  LetTerm = fun (x, t1, t2) -> 1 + t1 + t2;
+        LetTerm = fun (x, t1, t2) -> 1 + t1 + t2;
     } t
 
 let rule_size = rule_induction term_size {
@@ -199,7 +199,7 @@ let rec pp_term (sign : SIGNATURE) (t : TERM) =
         Value    = fun x -> str (value_to_string x);
         Initial  = fun (f, xs) -> pp_location_term "initial" (f, xs);
         VarTerm = fun x -> str x;
-        //  LetTerm = fun (v, t1, t2) -> blo0 [ str "let "; str v; str " = "; t1; line_brk; str "in "; t2; line_brk; str "endlet" ];
+        LetTerm = fun (v, t1, t2) -> blo0 [ str "let "; str v; str " = "; t1; line_brk; str "in "; t2; line_brk; str "endlet" ];
     } t
 
 let rec pp_rule (sign : SIGNATURE) (R : RULE) =

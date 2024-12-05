@@ -216,9 +216,9 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
         Initial  = fun (f, xs) (sign, tyenv) ->
                         match_fct_type f (xs >>| type_of_value sign) (fct_types f sign)
         VarTerm  = fun v -> fun (_, tyenv) -> try Map.find v tyenv with _ -> failwith $"variable '{v}' not defined";
-        // LetTerm  = fun (x, t1, t2) -> fun (sign, tyenv) ->
-        //                 let t1 = t1 (sign, tyenv)
-        //                 t2 (sign, Map.add x t1 tyenv)
+        LetTerm  = fun (x, t1, t2) -> fun (sign, tyenv) ->
+                        let t1 = t1 (sign, tyenv)
+                        t2 (sign, Map.add x t1 tyenv)
     } t (sign, tyenv)
 
 let typecheck_rule (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TYPE =
@@ -336,6 +336,7 @@ let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_
         <|> ( R3 (lit "{" << term >> lit ":") (term >> lit ",") (term >> lit "}") |>> fun (t1, t2, t3) -> mkAppTerm_ (FctName "set_interval", [ t1; t2; t3 ]) )
         <|> ( R3 (kw "switch" << term) (pmany1 ((kw "case" << term >> lit ":") ++ term)) (kw "otherwise" << term >> kw "endswitch") |>> switch_to_cond_term ) 
                     // !!! note: 'otherwise' not optional to avoid 'undef' as default case
+        <|> ( R4 (kw "let" << lit "(" << variable_identifier) (kw "=" << term >> lit ")") (kw "in" << term) (kw "endlet") |>> fun (x, t1, t2, _) -> LetTerm (x, t1, t2) )
         <|> ( lit "(" << quantificationTerm >> lit ")" |>> fun _ -> QuantTerm  (* !!! temporary !!! *) )
         <|> ( lit "(" << term >> lit ")" )
     ) s

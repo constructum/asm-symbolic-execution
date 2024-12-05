@@ -87,8 +87,7 @@ let fct_name_interpretation (S : STATE) (f : string) (args : VALUE list) =
             try (Map.find f (S._static)) args
             with _ -> failwith (sprintf "static function name '%s' has no interpretation" f)
     |   Controlled ->
-            let f_map = Map.find f (S._dynamic)
-            try Map.find args f_map
+            try Map.find args (Map.find f (S._dynamic))
             with _ ->
                 try Map.find f (S._dynamic_initial) args
                 with _ -> failwith (sprintf "dynamic function '%s' not defined on (%s)" f (String.concat ", " (args >>| value_to_string)))

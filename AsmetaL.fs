@@ -56,17 +56,6 @@ let mkAsm (asyncr : bool, modul : bool, name : string) (imports : (string * ASM 
     ASM (asm_content (asyncr, modul, name) imports exports signature definitions)
 
 //--------------------------------------------------------------------
-(*
-type PARSER_STATE = SIGNATURE * STATE * RULES_DB
-
-let get_signature ((sign : SIGNATURE, state : STATE, rules_db : RULES_DB) : PARSER_STATE) = sign
-let get_state ((sign : SIGNATURE, state : STATE, rules_db : RULES_DB) : PARSER_STATE) = state
-let get_rules_db ((sign : SIGNATURE, state : STATE, rules_db : RULES_DB) : PARSER_STATE) = state
-
-let get_signature_from_input (s : ParserInput<PARSER_STATE>) = get_parser_state s |> get_signature
-let get_state_from_input (s : ParserInput<PARSER_STATE>)     = get_parser_state s |> get_state
-let get_rules_db_from_input (s : ParserInput<PARSER_STATE>)  = get_parser_state s |> get_rules_db
-*)
 
 type PARSER_STATE = Parser.PARSER_STATE
 
@@ -214,6 +203,14 @@ let Function (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATU
 
 
 
+let let_rule_with_multiple_bindings v_t_list R =
+    let rec mk_let_rule = function
+    |   [] -> failwith "let_rule_with_multiple_bindings: empty list of bindings"
+    |   [(v, t)] -> LetRule (v, t, R)
+    |   (v, t) :: v_t_list -> LetRule (v, t, mk_let_rule v_t_list)
+    in mk_let_rule v_t_list
+
+
 let rec BasicRule (s : ParserInput<PARSER_STATE>) =
     let sign = get_signature_from_input s
     let BlockRule = kw "par" << pmany1 Rule >> kw "endpar" |>> ParRule
@@ -223,7 +220,7 @@ let rec BasicRule (s : ParserInput<PARSER_STATE>) =
                         (kw "in" << Rule) >> (kw "endlet")
                         |>> ( function
                                 | ([(v, t)], R) -> LetRule (v, t, R)
-                                | _ -> failwith "not implemented: let rule with multiple bindings" )
+                                | (v_t_list, R) -> let_rule_with_multiple_bindings v_t_list R )
     let ChooseRule = R4 (kw "choose" << psep1_lit ((ID_VARIABLE >> kw "in") ++ Term) ",") (kw "with" << Term) (kw "do" << Rule) (poption (kw "ifnone" << Rule))
                         |>> fun _ -> failwith "not implemented: choose rule"
     let ForallRule = R3 (kw "forall" << psep1_lit ((ID_VARIABLE >> kw "in") ++ Term) ",") (kw "with" << Term) (kw "do" << Rule)
