@@ -65,14 +65,15 @@ let smt_add_types_and_functions (C : SMT_CONTEXT) sign (new_sign : SIGNATURE, ne
     let fct_names = Set.filter (fun f -> fct_kind f new_sign = Controlled && f <> "result" && f <> "self") fct_names
     let add_type C tyname =
         let (kind, ar) = (type_kind tyname new_sign, type_arity tyname new_sign)
-        if kind <> EnumType || ar <> 0 then failwith (sprintf "smt_add_types_and_functions: add_type: only enumerated types without type parameters are supported (type '%s' is of kind '%A' and has arity %d)" tyname kind ar)
-        let constructor_names = Signature.fct_names new_sign |> Set.filter (fun f -> fct_kind f new_sign = Signature.Constructor && fct_type f new_sign = ([], TypeCons (tyname, []))) |> Set.toArray
-        if Array.length constructor_names > 0
-        then    if !trace > 0 then fprintf stderr "SmtInterface.add_type: %s = { %s }\n" tyname (String.concat ", " constructor_names)
-                let enum_sort = ctx.MkEnumSort (tyname, constructor_names)
-                C.typ := Map.add tyname enum_sort (!C.typ)
-                C.con := Common.map_override (!C.con) (Array.fold2 (fun m cons_name smt_expr -> Map.add cons_name smt_expr m) Map.empty constructor_names (enum_sort.Consts))
-        else    fprintf stderr "SmtInterface.add_type: warning: skipping abstract type '%s', because it has no elements (%s = { })\n" tyname tyname
+        if kind = EnumType && ar = 0
+        then    let constructor_names = Signature.fct_names new_sign |> Set.filter (fun f -> fct_kind f new_sign = Signature.Constructor && fct_type f new_sign = ([], TypeCons (tyname, []))) |> Set.toArray
+                if Array.length constructor_names > 0
+                then    if !trace > 0 then fprintf stderr "SmtInterface.add_type: %s = { %s }\n" tyname (String.concat ", " constructor_names)
+                        let enum_sort = ctx.MkEnumSort (tyname, constructor_names)
+                        C.typ := Map.add tyname enum_sort (!C.typ)
+                        C.con := Common.map_override (!C.con) (Array.fold2 (fun m cons_name smt_expr -> Map.add cons_name smt_expr m) Map.empty constructor_names (enum_sort.Consts))
+                else    fprintf stderr "SmtInterface.add_type: warning: skipping abstract type '%s', because it has no elements (%s = { })\n" tyname tyname
+        else fprintf stderr "SmtInterface.add_type: warning: only enumerated types without type parameters are supported (type '%s' is of kind '%A' and has arity %d)\n" tyname kind ar
     let add_function C fct_name =
         if !trace > 0 then fprintf stderr "SmtInterface.add_function: %s : %s\n" fct_name (fct_type fct_name new_sign |> fct_type_to_string)
         let (Ts_dom, T_ran) = fct_type fct_name new_sign
