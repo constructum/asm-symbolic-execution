@@ -315,9 +315,7 @@ let rec s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
             try Map.find r (TopLevel.rules ())     // !!! should not use global TopLevel.rules
             with _ -> failwith (sprintf "SymbEval.s_eval_rule: macro rule %s not found" r)
         let env' =
-            try List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (S, env, C), term_type (signature_of S) env arg)) env formals args
-            with _ -> failwith (sprintf "SymbEval.s_eval_rule: error in call of macro rule %s(%s), called with arguments (%s)"
-                        r (String.concat ", " formals) (String.concat ", " (args >>| term_to_string)))
+            List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (S, env, C), term_type (signature_of S) env arg)) env formals args
         s_eval_rule body (S, env', C)
  
     let R =
