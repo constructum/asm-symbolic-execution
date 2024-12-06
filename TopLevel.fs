@@ -59,13 +59,13 @@ let reset asmeta_flag =
 //--------------------------------------------------------------------
 
 let loadstr (asmeta_flag : bool) contents =
-    let parse_definitions (sign, S) s =
+    let parse_definitions ((sign, S), rules_db) s =
         if not asmeta_flag
         then Parser.parse_definitions (sign, S) s
-        else AsmetaL.parse_definitions (sign, S) s |> AsmetaL.extract_definitions_from_asmeta
+        else AsmetaL.parse_definitions ((sign, S), (Map.empty : RULES_DB)) s |> AsmetaL.extract_definitions_from_asmeta
     // note: exceptions are thrown if the environment (signature, initial state, rules) is not initialised (by 'Option.get')
-    let (new_sign, new_state, new_rules_db) = parse_definitions (signature (), initial_state ()) contents
-    signature_    := Some (signature_override (signature ()) new_sign)  //
+    let (new_sign, new_state, new_rules_db) = parse_definitions ((signature (), initial_state ()), rules ()) contents
+    signature_     := Some (signature_override (signature ()) new_sign)  //
     initial_state_ := Some (state_with_signature (state_override (initial_state ()) new_state) (signature ()))
     rules_         := Some (rules_db_override (rules ()) new_rules_db)
     smt_add_functions smt_ctx (signature()) (new_sign, new_state)

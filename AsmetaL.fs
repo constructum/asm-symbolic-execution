@@ -59,6 +59,10 @@ let mkAsm (asyncr : bool, modul : bool, name : string) (imports : (string * ASM 
 
 type PARSER_STATE = Parser.PARSER_STATE
 
+type EXTENDED_PARSER_STATE = PARSER_STATE * RULES_DB
+
+//--------------------------------------------------------------------
+
 let get_signature = Parser.get_signature
 let get_state = Parser.get_state
 let get_signature_from_input = Parser.get_signature_from_input
@@ -285,12 +289,22 @@ and Rule (s : ParserInput<PARSER_STATE>) =
 // !!! temporary: global mutable variable to keep track of imported modules - to be replaced with 'modules' component of parser state
 let imported_modules = ref (Map.empty : Map<string, ASM>)
 
-let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PARSER_STATE>  =
+let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDED_PARSER_STATE>  =
     //let (sign, state) = get_parser_state s
-    let isAsyncr_isModule_name =
+    let reduce_state (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserInput<PARSER_STATE> * RULES_DB =
+        let ((sign, state), rules_db) = get_parser_state s
+        in (chg_parser_state s (sign, state), rules_db)
+    // let extend_state (s : ParserInput<PARSER_STATE>) (rules_db : RULES_DB) : ParserInput<EXTENDED_PARSER_STATE> =
+    //     let (sign, state) = get_parser_state s
+    //     in chg_parser_state s ((sign, state), rules_db)
+    let isAsyncr_isModule_name (s : ParserInput<EXTENDED_PARSER_STATE>) =
+            let (s, rules_db) = reduce_state s
             (   ( (poption (kw "asyncr")) ++ (kw "asm" << identifier) |>> fun (asyncr, name) -> (asyncr.IsSome, false, name) )
-            <|> ( (poption (kw "asyncr")) ++ (kw "module" << identifier) |>> fun (asyncr, name) -> (asyncr.IsSome, true, name) ) )
-    let parse_imported_module mod_id (sign, state) =
+            <|> ( (poption (kw "asyncr")) ++ (kw "module" << identifier) |>> fun (asyncr, name) -> (asyncr.IsSome, true, name) )
+                ||>> fun (sign, state) _ -> ((sign, state), rules_db)  ) s
+
+    
+    let parse_imported_module mod_id (sign, state, rules_db) =
         if (!trace > 0) then fprintf stderr "importing module: '%s'\n" mod_id
         let saved_dir = System.IO.Directory.GetCurrentDirectory ()
         let filename = mod_id + ".asm"
@@ -304,7 +318,7 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
             // that may be imported in the imported module
             System.IO.Directory.SetCurrentDirectory new_dir
             let text = Common.readfile full_path
-            let parse = Parser.make_parser Asm (sign, state)
+            let parse = Parser.make_parser Asm ((sign, state), rules_db)
             let imported_module = fst (parse text)        // !!! checks missing (e.g. check that it is a 'module' and not an 'asm', etc.)
             // move to original directory (where the importing file is located)
             System.IO.Directory.SetCurrentDirectory saved_dir
@@ -314,28 +328,36 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
             if (!trace > 0) then fprintf stderr "  [skipped - already loaded]\n"
             Map.find full_path !imported_modules
     let ImportClause s = 
+        //let ((sign, state), rules_db) = get_parser_state s
+        let (s, rules_db) = reduce_state s
         let (sign, state) = get_parser_state s
         (   (   (kw "import" << MOD_ID (* or string, according to orig. grammar *))
                 ++ (poption (lit "(" << (psep1_lit identifier ",") >> lit ")"))
-            |>> fun (mod_name, opt_imported_names) -> (mod_name, parse_imported_module mod_name (sign, state), opt_imported_names) )     // !!! tbd: the 'opt_names' for the objects to import is not used
-                    // imports : (string * string list option) list;
-        ) s
-    let ExportClause =
+            |>> fun (mod_name, opt_imported_names) -> (mod_name, parse_imported_module mod_name (sign, state, rules_db), opt_imported_names)
+            ||>> fun (sign, state) (_, ASM asm', _) -> ((sign, state), rules_db_override rules_db asm'.definitions.rules)
+            ) ) s
+    let ExportClause s =
+            let (s, rules_db) = reduce_state s
             (   (kw "export" << (psep1_lit identifier ",")) |>> fun names -> Some names
-            <|> (kw "export" << (lit "*") |>> fun _ -> None ) )
+            <|> (kw "export" << (lit "*") |>> fun _ -> None )
+                ||>> fun (sign, state) _ -> ((sign, state), rules_db) ) s
                     // exports : string list option;     // None means all are exported ("export*")
-    let Signature =
-            (   (kw "signature" >> lit ":") <<
-                (   (pmany Domain) ++
-                    (pmany Function)    )   ) 
-                        |>> fun (domain_declarations, function_declarations) ->
+    let Signature s =
+        let (s, rules_db) = reduce_state s
+        (   (kw "signature" >> lit ":") <<
+            (   (pmany Domain) ++
+                (pmany Function)    )
+                    |>> fun (domain_declarations, function_declarations) ->
                             let signature_with_domains   = List.fold (fun sign add_one_domain -> add_one_domain sign) empty_signature domain_declarations
                             let signature_with_functions = List.fold (fun sign add_one_function -> add_one_function sign) signature_with_domains function_declarations
                             signature_with_functions
+                    ||>> fun (sign, state) _ -> ((sign, state), rules_db) ) s
+
     let Header = R3
-                    (pmany (ImportClause ||>> fun (sign, state) (_, ASM asm', _) ->
-                                                (   signature_override sign asm'.signature,
-                                                    state_override state asm'.definitions.state ) ))
+                    (pmany (ImportClause ||>> fun ((sign, state), rules_db) (_, ASM asm', _) ->
+                                                (   (   signature_override sign asm'.signature,
+                                                        state_override state asm'.definitions.state ),
+                                                    rules_db    )))
                     (poption ExportClause |>> Option.defaultValue None)
                     Signature
                     |>> fun (imports, exports, sign) -> (imports, exports, sign)
@@ -346,7 +368,7 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
     |   ParserFailure x -> ParserFailure x
     |   ParserSuccess (((asyncr, modul, asm_name), (imports, exports, sign')), s') ->
             //let sign = signature_override sign sign'
-            let (sign, state) = get_parser_state s'
+            let ((sign, state), rules_db) : EXTENDED_PARSER_STATE = get_parser_state s'
             if !trace > 0 then fprintf stderr "parse_asm_with_header: |signature|=%d\n" (Map.count sign)
 
             let Term s = Term (chg_parser_state s (sign, state))    // !!! temporary
@@ -435,17 +457,20 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
                                     (pmany FunctionInitialization)
                                     (pmany AgentInitialization)
                                         |>> fun (_, domain_init, function_init, agent_init) -> domain_init @ function_init @ agent_init
-            let parse_asm_rest = 
-                ( R3
-                    Body
-                    (poption (kw "main" << MacroDeclaration))
-                    // !!! only the default initial state is considered for the moment, the other are ignored
-                    (poption ((pmany Initialization) << (kw "default" << Initialization) >> (pmany Initialization)))   
-                >>  skip_to_eos )
-                    |>> fun (body, opt_main_rule, default_init) ->
-                            (   body,
-                                opt_main_rule,
-                                match default_init with None -> [] | Some default_init -> default_init  )
+            let parse_asm_rest s = 
+                let parse =
+                    ( R3
+                        Body
+                        (poption (kw "main" << MacroDeclaration))
+                        // !!! only the default initial state is considered for the moment, the other are ignored
+                        (poption ((pmany Initialization) << (kw "default" << Initialization) >> (pmany Initialization)))   
+                    >>  skip_to_eos )
+                        |>> fun (body, opt_main_rule, default_init) ->
+                                (   body,
+                                    opt_main_rule,
+                                    match default_init with None -> [] | Some default_init -> default_init  )
+                (   let (s, rules_db) = reduce_state s
+                    (parse ||>> fun (sign, state) _ -> ((sign, state), rules_db) ) s )
 
             match parse_asm_rest s' with
             |   ParserFailure x -> ParserFailure x
@@ -469,7 +494,7 @@ let rec Asm (s : ParserInput<Parser.PARSER_STATE>) : ParserResult<ASM, Parser.PA
                         signature = sign;
                         definitions = {
                             state  = state_override state state';
-                            rules  = rdb';   //????
+                            rules  = rules_db_override rules_db rdb';   //????
                             macros = mdb';   //????
                         };
                     }
