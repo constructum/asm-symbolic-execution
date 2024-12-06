@@ -84,6 +84,7 @@ val add_type_name : string -> int * TYPE_KIND * (TYPE list -> TYPE) option -> SI
 val add_function_name : string -> FCT_KIND * INFIX_STATUS * (TYPE list * TYPE) -> SIGNATURE -> SIGNATURE
 val add_rule_name : string -> TYPE list -> SIGNATURE -> SIGNATURE
 
+val type_names  : SIGNATURE -> Set<string>
 val fct_names  : SIGNATURE -> Set<string>
 val rule_names : SIGNATURE -> Set<string>
 
@@ -92,7 +93,8 @@ val is_name_defined : string -> SIGNATURE -> bool
 val construct_type : SIGNATURE -> (string * TYPE list) -> TYPE
 
 val is_type_name : string -> SIGNATURE -> bool
-val type_kind : string -> SIGNATURE -> TYPE_KIND
+val type_arity : string -> SIGNATURE -> int
+val type_kind  : string -> SIGNATURE -> TYPE_KIND
 
 val is_rule_name : string -> SIGNATURE -> bool
 

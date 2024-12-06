@@ -234,6 +234,7 @@ let is_rule_name name (sign : SIGNATURE) =
         |   RuleInfo ri -> true
     with _ -> false
 
+let type_names sign  = Set.ofSeq (Map.keys sign) |> Set.filter (fun name -> is_type_name name sign)
 let fct_names sign  = Set.ofSeq (Map.keys sign) |> Set.filter (fun name -> is_function_name name sign)
 let rule_names sign = Set.ofSeq (Map.keys sign) |> Set.filter (fun name -> is_rule_name name sign)
 
@@ -241,6 +242,9 @@ let get_type_info msg tyname (sign : SIGNATURE) f =
     assert is_type_name tyname sign
     (Map.find tyname sign)
     |> function TypeInfo ti -> f ti | _ -> failwith (sprintf "Signature.%s: '%s' is not a type name" msg tyname)
+
+let type_arity (tyname : string) sign =
+    get_type_info "type_arity" tyname sign (fun ti -> ti.arity)
 
 let type_kind (tyname : string) sign =
     get_type_info "type_kind" tyname sign (fun ti -> ti.type_kind)
