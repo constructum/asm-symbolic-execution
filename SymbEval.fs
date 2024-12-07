@@ -204,7 +204,6 @@ let rec try_case_distinction_for_term_with_finite_domain (S : S_STATE, env : ENV
 
 and eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name : NAME, ts) = 
     //if !trace > 0 then fprintfn stderr "|signature|=%d | eval_app_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) (AppTerm (fct_name, [])))
-    //let ts = ts >>| fun t -> try_reducing_term_with_finite_domain (S, env, C) (t (S, env, C))
     let ts = ts >>| fun t -> t (S, env, C)
     match get_values ts with
     |   Some xs -> interpretation S fct_name xs
@@ -222,12 +221,8 @@ and eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name : NAME, ts) =
                             else if Set.contains (s_not t) C
                             then Value (BOOL false)
                             else t
-                    else t
-                    (* if there is nothing to simplify by rewriting or using context, it would return AppTerm (FctName f, ts) *)
-            else    // !!! tbd: before giving up, make case distinction if range of f is finite
-                    try_case_distinction_for_term_with_finite_domain (S, env, C) f ts
-                    // failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
-                    //                     f (term_to_string (signature_of S) (AppTerm (FctName f, ts))))
+                    else t               (* if there is nothing to simplify by rewriting or using context, it would return AppTerm (FctName f, ts) *)
+            else    try_case_distinction_for_term_with_finite_domain (S, env, C) f ts
 
 and eval_cond_term (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) = 
     let term_to_string = term_to_string (signature_of S)

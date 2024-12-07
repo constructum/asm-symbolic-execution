@@ -218,11 +218,7 @@ let let_rule_with_multiple_bindings v_t_list R =
     in mk_let_rule v_t_list
 
 let switch_to_cond_rule (t, cases : (TERM * RULE) list, otherwise : RULE option) =
-    let rec mk_cond_rule = function
-    |   [] -> failwith "switch_to_cond_term: empty list of cases"
-    |   [(t1, R1)] -> CondRule (AppTerm (FctName "=", [t; t1]), R1, match otherwise with None -> skipRule | Some R -> R)
-    |   (t1, R1) :: cases -> CondRule (AppTerm (FctName "=", [t; t1]), R1, mk_cond_rule cases)
-    in mk_cond_rule cases
+    Parser.switch_to_cond_rule (t, cases, match otherwise with Some R -> R | None -> skipRule)
 
 // ---------------------------------
 

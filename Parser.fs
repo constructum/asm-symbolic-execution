@@ -302,12 +302,15 @@ let let_term_with_multiple_bindings v_ti_list (t : TERM) =
     |   (v, t_i) :: v_t_list -> LetTerm (v, t_i, mk_let_term v_t_list)
     in mk_let_term v_ti_list
 
-let switch_to_cond_term (t, cases : (TERM * TERM) list, otherwise : TERM) =
+let switch_to_cond cond_type (CondCons : TERM * 'a * 'a -> 'a) (t, cases : (TERM * 'a) list, otherwise : 'a) =
     let rec mk_cond_term = function
-    |   [] -> failwith "switch_to_cond_term: empty list of cases"
-    |   [(t1, t2)] -> CondTerm (AppTerm (FctName "=", [t; t1]), t2, otherwise)
-    |   (t1, t2) :: cases -> CondTerm (AppTerm (FctName "=", [t; t1]), t2, mk_cond_term cases)
+    |   [] -> failwith $"switch_to_cond_{cond_type}: empty list of cases"
+    |   [(t1, t2)] -> CondCons (AppTerm (FctName "=", [t; t1]), t2, otherwise)
+    |   (t1, t2) :: cases -> CondCons (AppTerm (FctName "=", [t; t1]), t2, mk_cond_term cases)
     in mk_cond_term cases
+
+let switch_to_cond_term = switch_to_cond "term" CondTerm
+let switch_to_cond_rule = switch_to_cond "rule" CondRule
 
 //--------------------------------------------------------------------
 
