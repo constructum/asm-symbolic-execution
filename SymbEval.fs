@@ -178,29 +178,22 @@ let try_reducing_term_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (
     |   _ -> t
 
 let rec try_case_distinction_for_term_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts : TERM list) : TERM =
-    let make_case_distinction (t : TERM) (elems : VALUE list, ts : TERM list) =
-        if List.isEmpty elems
+    let make_case_distinction (t : TERM) (elem_term_pairs : (VALUE * TERM) list) =
+        if List.isEmpty elem_term_pairs
         then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
-        let elems_without_last = elems |> List.rev |> List.tail |> List.rev
-        let (terms_without_last, last_term) =
-            let ts_rev = List.rev ts
-            (List.rev (List.tail ts_rev), List.head ts_rev)
-        Parser.switch_to_cond_term (t, List.map2 (fun elem term -> (Value elem, term)) elems_without_last terms_without_last, last_term)
-    let rec F past_args future_args =
-        match future_args with
+        let (elem_term_pairs_without_last, last_elem_term_pair) = List.splitAt (List.length elem_term_pairs - 1) elem_term_pairs
+        Parser.switch_to_cond_term (t, List.map (fun (elem, term) -> (Value elem, term)) elem_term_pairs_without_last, snd (List.head (last_elem_term_pair)))
+    let rec F past_args = function
         |   (t1 :: ts) ->
                 match (try enum_finite_range (term_type (signature_of S) env t1) S with _ -> None) with
                 |   None ->
                         failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
                                     f (term_to_string (signature_of S) (AppTerm (FctName f, ts))))
                 |   Some elems ->
-                        let elems = Set.toList elems
-                        let case_dist = make_case_distinction t1 (List.unzip (List.map (fun elem -> (elem, F (Value elem :: past_args) ts)) elems))
+                        let case_dist = make_case_distinction t1 (List.map (fun elem -> (elem, F (Value elem :: past_args) ts)) (Set.toList elems))
                         s_eval_term_ case_dist (S, env, C)    // simplify generated conditional term
         |   [] -> AppTerm (FctName f, List.rev past_args)
-    let result = F [] ts
-    fprintf stderr "%A\n" result
-    result
+    F [] ts
 
 and eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name : NAME, ts) = 
     //if !trace > 0 then fprintfn stderr "|signature|=%d | eval_app_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) (AppTerm (fct_name, [])))
@@ -269,7 +262,25 @@ let s_eval_term (t : TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TERM =
 
 //--------------------------------------------------------------------
 
-let rec s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
+let rec try_case_distinction_for_update_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts : TERM list) (t_rhs : TERM): RULE =
+    let make_case_distinction (t : TERM) (elem_term_pairs : (VALUE * RULE) list) =
+        if List.isEmpty elem_term_pairs
+        then failwith (sprintf "SymbEval.try_case_distinction_for_update_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
+        let (elem_term_pairs_without_last, last_elem_term_pair) = List.splitAt (List.length elem_term_pairs - 1) elem_term_pairs
+        Parser.switch_to_cond_rule (t, List.map (fun (elem, term) -> (Value elem, term)) elem_term_pairs_without_last, snd (List.head (last_elem_term_pair)))
+    let rec F past_args = function
+        |   (t1 :: ts) ->
+                match (try enum_finite_range (term_type (signature_of S) env t1) S with _ -> None) with
+                |   None ->
+                        failwith (sprintf "location (%s, (%s)) on the lhs of update cannot be fully evaluated"
+                                    f (String.concat "," (ts >>| term_to_string (signature_of S))))
+                |   Some elems ->
+                        let case_dist = make_case_distinction t1 (List.map (fun elem -> (elem, F (Value elem :: past_args) ts)) (Set.toList elems))
+                        s_eval_rule case_dist (S, env, C)    // simplify generated conditional rule
+        |   [] -> UpdateRule ((f, List.rev past_args), t_rhs)
+    F [] ts
+
+and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
     let (rule_to_string, term_to_string, pp_rule) =
          (rule_to_string (signature_of S), term_to_string (signature_of S), pp_rule (signature_of S))
 
@@ -281,9 +292,7 @@ let rec s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
     let eval_update ((f, ts), t_rhs) (S, env, C) =
         match get_values (ts >>| fun t -> s_eval_term t (S, env, C)) with
         |   Some xs -> S_Updates (Set.singleton ((f, xs), s_eval_term t_rhs (S, env, C)));
-        |   None ->
-                let display_terms ts = String.concat ", " (ts >>| (fun t -> t |> pp_term (signature_of S) |> PrettyPrinting.toString 10000))
-                failwith $"location ({f}, ({display_terms ts})) on the lhs of update cannot be fully evaluated"
+        |   None -> try_case_distinction_for_update_with_finite_domain (S, env, C) f ts t_rhs
 
     let eval_cond (G, R1, R2) (S, env, C) = 
         match s_eval_term G (S, env, C) with
