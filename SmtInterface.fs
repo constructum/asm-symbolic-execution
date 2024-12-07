@@ -7,7 +7,7 @@ open AST
 open Background
 open Microsoft.Z3
 
-let trace = ref 1
+let trace = ref 0
 
 type SMT_CONTEXT = {
     ctx : Context ref;
@@ -150,17 +150,21 @@ and smt_map_initial sign C (f, ts) : SMT_EXPR =
     else failwith (sprintf "smt_map_app_term: '%s' is not a controlled function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
 and smt_map_term sign C (t : TERM) : SMT_EXPR =
+    //if !trace > 0 then fprintf stderr "smt_map_term: %s -> " (term_to_string sign t)
     let ctx = !C.ctx
-    match t with
-    |   AppTerm (IntConst i, [])    -> SMT_IntExpr (ctx.MkInt i)
-    |   Value (INT i)               -> SMT_IntExpr (ctx.MkInt i)
-    |   AppTerm (BoolConst b, [])   -> SMT_BoolExpr (ctx.MkBool b)
-    |   Value (BOOL b)              -> SMT_BoolExpr (ctx.MkBool b)
-    |   Value (CELL (cons, []))     -> SMT_Expr (Map.find cons (!C.con))
-    |   Initial (f, xs)             -> smt_map_initial sign C (f, xs >>| Value)
-    |   CondTerm (G, t1, t2)        -> smt_map_ITE sign C (G, t1, t2)
-    |   AppTerm (FctName f, ts)     -> smt_map_app_term sign C (f, ts)
-    |   t -> failwith (sprintf "smt_map_term: not supported (t = %s)" (term_to_string sign t))
+    let result = 
+        match t with
+        |   AppTerm (IntConst i, [])    -> SMT_IntExpr (ctx.MkInt i)
+        |   Value (INT i)               -> SMT_IntExpr (ctx.MkInt i)
+        |   AppTerm (BoolConst b, [])   -> SMT_BoolExpr (ctx.MkBool b)
+        |   Value (BOOL b)              -> SMT_BoolExpr (ctx.MkBool b)
+        |   Value (CELL (cons, []))     -> SMT_Expr (Map.find cons (!C.con))
+        |   Initial (f, xs)             -> smt_map_initial sign C (f, xs >>| Value)
+        |   CondTerm (G, t1, t2)        -> smt_map_ITE sign C (G, t1, t2)
+        |   AppTerm (FctName f, ts)     -> smt_map_app_term sign C (f, ts)
+        |   t -> failwith (sprintf "smt_map_term: not supported (t = %s)" (term_to_string sign t))
+    //if !trace > 0 then fprintf stderr "%A\n" (result)
+    result
 
 //--------------------------------------------------------------------
 

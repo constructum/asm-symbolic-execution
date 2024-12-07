@@ -493,9 +493,9 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
                         exports   = exports;
                         signature = sign;
                         definitions = {
-                            state  = state_override state state';
-                            rules  = rules_db_override rules_db rdb';   //????
-                            macros = mdb';   //????
+                            state  = extend_with_carrier_sets (sign, state_override state state');   // !!! Agent, Reserve added twice ?
+                            rules  = rules_db_override rules_db rdb';
+                            macros = mdb';
                         };
                     }
                     ParserSuccess ( result, s'')

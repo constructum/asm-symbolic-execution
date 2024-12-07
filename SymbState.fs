@@ -13,13 +13,14 @@ let trace = ref 0
 
 type S_DYNAMIC_STATE = Map<string, Map<VALUE list, TERM>>
 
-type S_STATE = { _signature : SIGNATURE; _static : STATIC_STATE; _dynamic : S_DYNAMIC_STATE; _dynamic_initial : STATIC_STATE; }
+type S_STATE = { _signature : SIGNATURE; _carrier_sets : State.CARRIER_SETS; _static : STATIC_STATE; _dynamic : S_DYNAMIC_STATE; _dynamic_initial : STATIC_STATE; }
 
 let signature_of (S : S_STATE) : SIGNATURE =
     S._signature
 
 let state_with_signature S sign = {
     _signature  = sign;
+    _carrier_sets = S._carrier_sets;
     _static     = S._static;
     _dynamic    = S._dynamic;
     _dynamic_initial = S._dynamic_initial;
@@ -27,6 +28,7 @@ let state_with_signature S sign = {
 
 let state_to_s_state (S : State.STATE) : S_STATE = {
     _signature = S._signature;
+    _carrier_sets = S._carrier_sets;
     _static    = S._static;
     _dynamic   = Map.map (fun f -> fun f_table -> Map.map (fun loc -> fun x -> Value x) f_table) S._dynamic;
     _dynamic_initial = S._dynamic_initial;
@@ -34,30 +36,10 @@ let state_to_s_state (S : State.STATE) : S_STATE = {
 
 let state_to_s_state_only_static (S : State.STATE) : S_STATE = {
     _signature = S._signature;
+    _carrier_sets = S._carrier_sets;
     _static    = S._static;
     _dynamic   = Map.empty;
     _dynamic_initial = Map.empty;
-}
-
-let background_state = {
-    _signature = Background.signature;
-    _static    = Background.state;
-    _dynamic   = Map.empty;
-    _dynamic_initial = Map.empty;
-}
-
-let empty_state = {
-    _signature  = Signature.empty_signature;
-    _static     = Map.empty;
-    _dynamic    = Map.empty;
-    _dynamic_initial = Map.empty;
-}
-
-let state_override S0 S' = {
-    _signature  = Common.map_override (signature_of S0) (signature_of S');
-    _static     = Common.map_override S0._static  S'._static;
-    _dynamic    = Common.map_override S0._dynamic S'._dynamic;
-    _dynamic_initial = Common.map_override S0._dynamic_initial S'._dynamic_initial;
 }
 
 let show_s_state (S : S_STATE) =
@@ -73,6 +55,31 @@ let show_s_state (S : S_STATE) =
 
 //--------------------------------------------------------------------
 
+let boolean_carrier_set = Set.ofList [ BOOL true; BOOL false ];
+let undef_carrier_set = Set.ofList [ UNDEF ];
+
+let enum_finite_domain (ty : TYPE) (S : S_STATE) =
+    match ty with
+    |   Boolean -> Some boolean_carrier_set
+    |   Integer -> None
+    |   String  -> None
+    |   Undef   -> Some undef_carrier_set
+    |   Rule    ->
+            try Some (Option.get (Map.find "Rule" (S._carrier_sets)))
+            with _ -> failwith "enum_finite_domain: carrier set of 'Rule' not found or not defined"  // not found: not in map; not defined: None
+    |   TypeParam _ -> None
+    |   TypeCons (tyname, []) ->
+            try Some (Option.get (Map.find tyname (S._carrier_sets)))
+            with _ -> failwith (sprintf "enum_finite_domain: carrier set of '%s' not found" tyname)
+    |   TypeCons (tyname, _)  -> failwith (sprintf "enum_finite_domain: not yet implemented for user-defined type '%s' with type arity > 0" tyname)
+    |   Prod _  -> failwith (sprintf "enum_finite_domain: not yet implemented for '%s'" (type_to_string ty))
+    |   Seq _   -> failwith (sprintf "enum_finite_domain: not yet implemented for '%s'" (type_to_string ty))
+    |   Powerset _ -> failwith (sprintf "enum_finite_domain: not yet implemented for '%s'" (type_to_string ty))
+    |   Bag _ -> failwith (sprintf "enum_finite_domain: not yet implemented for '%s'" (type_to_string ty))
+    |   Map _ -> failwith (sprintf "enum_finite_domain: not yet implemented for '%s'" (type_to_string ty))
+
+//--------------------------------------------------------------------
+
 let fct_name_has_interpretation (S : S_STATE) (f : string) =
     Map.containsKey f (S._static) || Map.containsKey f (S._dynamic)
 
@@ -82,6 +89,7 @@ let has_interpretation (S : S_STATE) (name : NAME) =
     |   _ -> true    // the interpretation of the various special constants always exists
 
 //--------------------------------------------------------------------
+
 let fct_name_interpretation (S : S_STATE) (f : string) (args : VALUE list) =
     let kind =
         try fct_kind f (signature_of S)

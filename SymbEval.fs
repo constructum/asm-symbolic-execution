@@ -125,6 +125,7 @@ let ctx_to_smt (S, env, C)=
 let smt_eval_formula (phi : TERM) (S, env, C) =
     // precondition: term_type (signature_of S) phi = Boolean
     // old version before using solver push and pop: // ctx_to_smt (S, env, C)
+    if !trace > 0 then fprintf stderr "smt_eval_formula(%s) -> " (term_to_string (signature_of S) phi)
     let result =
         if (!use_smt_solver && smt_formula_is_true (signature_of S) TopLevel.smt_ctx phi)
         then Value (BOOL true)
@@ -132,6 +133,7 @@ let smt_eval_formula (phi : TERM) (S, env, C) =
         then Value (BOOL false)
         else phi
     // old version before using solver push and pop: // smt_solver_reset TopLevel.smt_ctx
+    if !trace > 0 then fprintf stderr "%s\n" (term_to_string (signature_of S) result)
     result
 
 //--------------------------------------------------------------------
@@ -158,8 +160,23 @@ let term_type sign (env : ENV) =
 
 //---------------------------------------------------
 
+let try_reducing_term_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (t : TERM) : TERM =
+    let opt_elems = try enum_finite_domain (term_type (signature_of S) env t) S with _ -> None
+    match opt_elems with
+    |   None -> t
+    |   Some elems ->
+            let folder result elem =
+                match result with
+                |   Some _ -> result
+                |   None -> if smt_eval_formula (AppTerm (FctName "=", [t; Value elem])) (S, env, C) = Value TRUE then Some elem else None
+            let opt_elem = Set.fold folder None elems
+            match opt_elem with
+            |   None -> t
+            |   Some x -> Value x
+
 let eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name : NAME, ts) = 
-    if !trace > 0 then fprintfn stderr "|signature|=%d | eval_app_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) (AppTerm (fct_name, [])))
+    //if !trace > 0 then fprintfn stderr "|signature|=%d | eval_app_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) (AppTerm (fct_name, [])))
+    //let ts = ts >>| fun t -> try_reducing_term_with_finite_domain (S, env, C) (t (S, env, C))
     let ts = ts >>| fun t -> t (S, env, C)
     match get_values ts with
     |   Some xs -> interpretation S fct_name xs
@@ -202,12 +219,13 @@ let eval_cond_term (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) =
                         let (t1', t2') = (t1 (S, env, Set.add G C), t2 (S, env, Set.add (s_not G) C))
                         if t1' = t2' then t1' else CondTerm (G, t1', t2')
 
-let s_eval_term_ t = fun ((S, env, C) : S_STATE * ENV * CONTEXT) ->
-    if !trace > 0 then fprintfn stderr "|signature|=%d | s_eval_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) t)
+let rec s_eval_term_ t ((S, env, C) : S_STATE * ENV * CONTEXT) =
+//    if !trace > 0 then fprintfn stderr "|signature|=%d | s_eval_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) t)
+    //let t = try_reducing_term_with_finite_domain (S, env, C) t
     term_induction (fun x -> x) {
         Value    = fun x _ -> Value x;
-        Initial  = fun (f, xs)  _ -> Initial (f, xs);
-        AppTerm  = fun (f, ts) -> fun (S, env, C) -> eval_app_term (S, env, C) (f, ts);
+        Initial  = fun (f, xs)  _ -> Initial (f, xs); //Initial (f, xs);
+        AppTerm  = fun (f, ts) -> fun (S, env, C) -> try_reducing_term_with_finite_domain (S, env, C) (eval_app_term (S, env, C) (f, ts));
         CondTerm = fun (G, t1, t2) -> fun (S, env, C) -> eval_cond_term (S, env, C) (G, t1, t2);
         VarTerm  = fun v -> fun (S, env, _) -> fst (get_env env v);
         LetTerm  = fun v -> fun (S, env, _) -> failwith "s_eval_term: LetTerm: not implemented yet"  // fun (v, t1, t2) -> fun (S, env) -> t2 (S, add_binding env (v, t1 (S, env)))
@@ -215,13 +233,16 @@ let s_eval_term_ t = fun ((S, env, C) : S_STATE * ENV * CONTEXT) ->
 
 let s_eval_term (t : TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TERM =
     let sign = signature_of S
+    let t = s_eval_term_ t (S, env, C)
     if term_type sign env t = Boolean
-    then
-        let t = s_eval_term_ t (S, env, C)
-        match t with
-        |   Value (BOOL _)  -> t
-        |   _ -> smt_eval_formula t (S, env, C)
-    else s_eval_term_ t (S, env, C)
+    then    match t with
+            |   Value (BOOL _)  -> t
+            |   _ -> smt_eval_formula t (S, env, C)
+    else    match t with
+            |   Initial (f, xs) ->  fprintf stderr "%A\n" C
+                                    try_reducing_term_with_finite_domain (S, env, C) t
+                                     // try SMT solver as a last resort to reduce 'Initial' terms to a value (for types with finite carrier set)
+            |   _ -> t
 
 //--------------------------------------------------------------------
 
@@ -385,9 +406,9 @@ let count_s_updates = rule_induction (fun _ -> ()) {
 
 // first element of pair returned is the number of S_Updates rules, i.e. paths in the decision tree
 let symbolic_execution (R_in : RULE) : int * RULE =
-    if (!trace > 0) then fprintf stderr "symbolic_execution\n"
+    if (!trace > 2) then fprintf stderr "symbolic_execution\n"
     let S0 = TopLevel.initial_state ()
-    if (!trace > 0) then fprintf stderr "---\n%s\n---\n" (signature_to_string (signature_of (state_to_s_state S0)))
+    if (!trace > 2) then fprintf stderr "---\n%s\n---\n" (signature_to_string (signature_of (state_to_s_state S0)))
     let R_out = s_eval_rule R_in (state_to_s_state S0, Map.empty, Set.empty)
     (count_s_updates R_out, reconvert_rule R_out)
 

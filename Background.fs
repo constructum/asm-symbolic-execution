@@ -123,15 +123,15 @@ let const_static_fct (const_val : VALUE) (args : VALUE list) = const_val
 let background_types = 
     let fail type_ arity args = failwith (sprintf "%s type expects %d type parameter(s), but %d were given" type_ arity (List.length args))
     [
-        ("Boolean",  0, Some (function [] -> Integer | args -> fail "Boolean" 0 args));
-        ("Integer",  0, Some (function [] -> Integer | args -> fail "Integer" 0 args));
-        ("String",   0, Some (function [] -> String  | args -> fail "String"  0 args));
-        ("Undef",    0, Some (function [] -> Undef   | args -> fail "Undef"   0 args));
-        ("Rule",     0, Some (function [] -> Rule    | args -> fail "Rule"    0 args));
-        ("Seq",      1, Some (function [ty] -> Seq ty      | args -> fail "Seq"      1 args));
-        ("Powerset", 1, Some (function [ty] -> Powerset ty | args -> fail "Powerset" 1 args));
-        ("Bag",      1, Some (function [ty] -> Bag ty      | args -> fail "Bag"      1 args));
-        ("Map",      2, Some (function [ty1; ty2] -> Map (ty1, ty2) | args -> fail "Map" 2 args));
+        ("Boolean",  0, Some (function [] -> Integer | args -> fail "Boolean" 0 args), Some (Set.ofList [TRUE; FALSE]));
+        ("Integer",  0, Some (function [] -> Integer | args -> fail "Integer" 0 args), None);
+        ("String",   0, Some (function [] -> String  | args -> fail "String"  0 args), None);
+        ("Undef",    0, Some (function [] -> Undef   | args -> fail "Undef"   0 args), Some (Set.ofList [UNDEF]));
+        ("Rule",     0, Some (function [] -> Rule    | args -> fail "Rule"    0 args), Some (Set.empty));
+        ("Seq",      1, Some (function [ty] -> Seq ty      | args -> fail "Seq"      1 args), None);
+        ("Powerset", 1, Some (function [ty] -> Powerset ty | args -> fail "Powerset" 1 args), None);
+        ("Bag",      1, Some (function [ty] -> Bag ty      | args -> fail "Bag"      1 args), None);
+        ("Map",      2, Some (function [ty1; ty2] -> Map (ty1, ty2) | args -> fail "Map" 2 args), None);
     ]
 
 let background_functions = 
@@ -156,10 +156,14 @@ let background_functions =
 let signature =
     let sign0 = Map.empty
     let add_fct sign (f, _, f_type, f_infix) = add_function_name f (Static, f_infix, f_type) sign
-    let add_typ sign (t, arity, maps_to) = add_type_name t (arity, BasicType, maps_to) sign
+    let add_typ sign (t, arity, maps_to, _) = add_type_name t (arity, BasicType, maps_to) sign
     let sign1 = List.fold add_typ sign0 background_types
     let sign2 = List.fold add_fct sign1 background_functions   //(fun sign (f, _, f_type, f_infix) -> add_function_name f (Static, f_type, f_infix) sign)
     sign2
+
+let carrier_sets =
+    Map.ofList
+        (List.map (fun (tyname, _, _, elem_set) -> (tyname, elem_set)) background_types)
 
 let state =
     Map.ofList
