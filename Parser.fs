@@ -289,6 +289,22 @@ let rec operator_parser (elem : Parser<'elem, PARSER_STATE>, app_cons : NAME * '
         | _ -> failwith "operator parsing: badly formed stack"  (* this should never happen *) ) s
     (elem >>= fun t1 -> F [ (Opnd t1) ]) s
 
+// --- syntactic sugar for terms -------------------------------------
+
+let let_term_with_multiple_bindings v_ti_list (t : TERM) =
+    let rec mk_let_term = function
+    |   [] -> failwith "let_term_with_multiple_bindings: empty list of bindings"
+    |   [(v, t_i)] -> LetTerm (v, t_i, t)
+    |   (v, t_i) :: v_t_list -> LetTerm (v, t_i, mk_let_term v_t_list)
+    in mk_let_term v_ti_list
+
+let switch_to_cond_term (t, cases : (TERM * TERM) list, otherwise : TERM) =
+    let rec mk_cond_term = function
+    |   [] -> failwith "switch_to_cond_term: empty list of cases"
+    |   [(t1, t2)] -> CondTerm (AppTerm (FctName "=", [t; t1]), t2, otherwise)
+    |   (t1, t2) :: cases -> CondTerm (AppTerm (FctName "=", [t; t1]), t2, mk_cond_term cases)
+    in mk_cond_term cases
+
 //--------------------------------------------------------------------
 
 let mkAppTerm sign = function
@@ -298,13 +314,6 @@ let mkAppTerm sign = function
 |   (IntConst i,    []) -> AppTerm (IntConst i, [])
 |   (StringConst s, []) -> AppTerm (StringConst s, [])
 |   (_, ts) -> failwith $"constant / 0-ary function applied to {List.length ts} arguments"
-
-let switch_to_cond_term (t, cases : (TERM * TERM) list, otherwise : TERM) =
-    let rec mk_cond_term = function
-    |   [] -> failwith "switch_to_cond_term: empty list of cases"
-    |   [(t1, t2)] -> CondTerm (AppTerm (FctName "=", [t; t1]), t2, otherwise)
-    |   (t1, t2) :: cases -> CondTerm (AppTerm (FctName "=", [t; t1]), t2, mk_cond_term cases)
-    in mk_cond_term cases
 
 let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_STATE> = 
     let sign = get_signature_from_input s
@@ -344,8 +353,6 @@ let rec simple_term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_
 and term (s : ParserInput<PARSER_STATE>) : ParserResult<TERM, PARSER_STATE> = 
     let sign = get_signature_from_input s
     operator_parser (simple_term, mkAppTerm sign) sign s
-
-
 
 //--------------------------------------------------------------------
 

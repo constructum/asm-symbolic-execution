@@ -58,7 +58,7 @@ let show_s_state (S : S_STATE) =
 let boolean_carrier_set = Set.ofList [ BOOL true; BOOL false ];
 let undef_carrier_set = Set.ofList [ UNDEF ];
 
-let enum_finite_domain (ty : TYPE) (S : S_STATE) =
+let enum_finite_range (ty : TYPE) (S : S_STATE) =
     match ty with
     |   Boolean -> Some boolean_carrier_set
     |   Integer -> None

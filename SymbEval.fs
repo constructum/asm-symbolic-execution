@@ -161,18 +161,65 @@ let term_type sign (env : ENV) =
 //---------------------------------------------------
 
 let try_reducing_term_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (t : TERM) : TERM =
-    let opt_elems = try enum_finite_domain (term_type (signature_of S) env t) S with _ -> None
-    match opt_elems with
-    |   None -> t
-    |   Some elems ->
-            let folder result elem =
-                match result with
-                |   Some _ -> result
-                |   None -> if smt_eval_formula (AppTerm (FctName "=", [t; Value elem])) (S, env, C) = Value TRUE then Some elem else None
-            let opt_elem = Set.fold folder None elems
-            match opt_elem with
-            |   None -> t
-            |   Some x -> Value x
+    let opt_elems = try enum_finite_range (term_type (signature_of S) env t) S with _ -> None
+    match t with
+    |   Initial _ ->
+        match opt_elems with
+        |   None -> t
+        |   Some elems ->
+                let folder result elem =
+                    match result with
+                    |   Some _ -> result
+                    |   None -> if smt_eval_formula (AppTerm (FctName "=", [t; Value elem])) (S, env, C) = Value TRUE then Some elem else None
+                let opt_elem = Set.fold folder None elems
+                match opt_elem with
+                |   None -> t
+                |   Some x -> Value x
+    |   _ -> t
+
+let try_case_distinction_for_term_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts : TERM list) : TERM =
+        // let expand_one_argument (S, env, C) t =
+        //     let opt_elems = try enum_finite_range (term_type (signature_of S) env t) S with _ -> None
+        //     match t with
+        //     |   Initial _ ->
+        //         match opt_elems with
+        //         |   None -> t
+        //         |   Some elems ->
+        //                 if Set.count elems = 0 then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
+        //                 let (elems_list_without_last, last_elem) =
+        //                     let l_rev = List.rev (Set.toList elems)
+        //                     (List.rev (List.tail l_rev), List.head l_rev)
+        //                 Parser.switch_to_cond_term (t, List.map (fun elem -> (Value elem, Value elem)) elems_list_without_last, Value last_elem)
+        //     |   _ -> t
+        // let result = AppTerm (FctName f, t >>| expand_one_argument (S, env, C))
+    let make_case_distinction (t : TERM) (elems : VALUE list, ts : TERM list) =
+        if List.isEmpty elems
+        then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
+        let elems_without_last = elems |> List.rev |> List.tail |> List.rev
+        let (terms_without_last, last_term) =
+            let ts_rev = List.rev ts
+            (List.rev (List.tail ts_rev), List.head ts_rev)
+        Parser.switch_to_cond_term (t, List.map2 (fun elem term -> (Value elem, term)) elems_without_last terms_without_last, last_term)
+
+    let rec F past_args future_args =
+        match future_args with
+        |   (t1 :: ts) ->
+                match (try enum_finite_range (term_type (signature_of S) env t1) S with _ -> None) with
+                |   None ->
+                        failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
+                                    f (term_to_string (signature_of S) (AppTerm (FctName f, ts))))
+                |   Some elems ->
+                        let elems = Set.toList elems
+                        make_case_distinction t1 (List.unzip (List.map (fun elem -> (elem, F (Value elem :: past_args) ts)) elems))
+        |   [] -> AppTerm (FctName f, List.rev past_args)
+    let result = F [] ts
+    fprintf stderr "%A\n" result
+    result
+    
+
+    // failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
+    //                     f (term_to_string (signature_of S) (AppTerm (FctName f, ts))))
+
 
 let eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name : NAME, ts) = 
     //if !trace > 0 then fprintfn stderr "|signature|=%d | eval_app_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) (AppTerm (fct_name, [])))
@@ -196,8 +243,10 @@ let eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name : NAME, ts) =
                             else t
                     else t
                     (* if there is nothing to simplify by rewriting or using context, it would return AppTerm (FctName f, ts) *)
-            else failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
-                                        f (term_to_string (signature_of S) (AppTerm (FctName f, ts))))
+            else    // !!! tbd: before giving up, make case distinction if range of f is finite
+                    try_case_distinction_for_term_with_finite_domain (S, env, C) f ts
+                    // failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
+                    //                     f (term_to_string (signature_of S) (AppTerm (FctName f, ts))))
 
 let eval_cond_term (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) = 
     let term_to_string = term_to_string (signature_of S)
@@ -239,8 +288,7 @@ let s_eval_term (t : TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TERM =
             |   Value (BOOL _)  -> t
             |   _ -> smt_eval_formula t (S, env, C)
     else    match t with
-            |   Initial (f, xs) ->  try_reducing_term_with_finite_domain (S, env, C) t
-                                     // try SMT solver as a last resort to reduce 'Initial' terms to a value (for types with finite carrier set)
+            |   Initial (f, xs) -> try_reducing_term_with_finite_domain (S, env, C) t
             |   _ -> t
 
 //--------------------------------------------------------------------

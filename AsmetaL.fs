@@ -206,6 +206,7 @@ let Function (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATU
     ((BasicFunction <|> DerivedFunction)  ||>> fun (sign, state) update_sign_fct -> (update_sign_fct sign, state)) s
 
 
+// --- syntactic sugar for rules ---
 
 let let_rule_with_multiple_bindings v_t_list R =
     let rec mk_let_rule = function
@@ -214,6 +215,14 @@ let let_rule_with_multiple_bindings v_t_list R =
     |   (v, t) :: v_t_list -> LetRule (v, t, mk_let_rule v_t_list)
     in mk_let_rule v_t_list
 
+let switch_to_cond_rule (t, cases : (TERM * RULE) list, otherwise : RULE option) =
+    let rec mk_cond_rule = function
+    |   [] -> failwith "switch_to_cond_term: empty list of cases"
+    |   [(t1, R1)] -> CondRule (AppTerm (FctName "=", [t; t1]), R1, match otherwise with None -> skipRule | Some R -> R)
+    |   (t1, R1) :: cases -> CondRule (AppTerm (FctName "=", [t; t1]), R1, mk_cond_rule cases)
+    in mk_cond_rule cases
+
+// ---------------------------------
 
 let rec BasicRule (s : ParserInput<PARSER_STATE>) =
     let sign = get_signature_from_input s
@@ -255,12 +264,6 @@ and TurboRule (s : ParserInput<PARSER_STATE>) =
 and DerivedRule (s : ParserInput<PARSER_STATE>) =
     let sign = get_signature_from_input s
     let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
-    let switch_to_cond_rule (t, cases : (TERM * RULE) list, otherwise : RULE option) =
-        let rec mk_cond_rule = function
-        |   [] -> failwith "switch_to_cond_term: empty list of cases"
-        |   [(t1, R1)] -> CondRule (AppTerm (FctName "=", [t; t1]), R1, match otherwise with None -> skipRule | Some R -> R)
-        |   (t1, R1) :: cases -> CondRule (AppTerm (FctName "=", [t; t1]), R1, mk_cond_rule cases)
-        in mk_cond_rule cases
     let CaseRule = R3 (kw "switch" << Term) (pmany1 ((kw "case" << Term >> lit ":") ++ Rule)) ((poption (kw "otherwise" << Rule)) >> (kw "endswitch")) |>> switch_to_cond_rule
     let BasicDerivedRule = CaseRule
     let IterativeWhileRule = (kw "while" << Term) ++ (kw "do" << Rule)
