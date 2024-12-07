@@ -196,8 +196,7 @@ let rec try_case_distinction_for_term_with_finite_domain (S : S_STATE, env : ENV
                 |   Some elems ->
                         let elems = Set.toList elems
                         let case_dist = make_case_distinction t1 (List.unzip (List.map (fun elem -> (elem, F (Value elem :: past_args) ts)) elems))
-                        case_dist  //!!!! only for testing something, simplification should definitely be done
-                        //s_eval_term_ case_dist (S, env, C)    // simplify generated conditional term
+                        s_eval_term_ case_dist (S, env, C)    // simplify generated conditional term
         |   [] -> AppTerm (FctName f, List.rev past_args)
     let result = F [] ts
     fprintf stderr "%A\n" result
