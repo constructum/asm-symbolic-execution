@@ -177,21 +177,7 @@ let try_reducing_term_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (
                 |   Some x -> Value x
     |   _ -> t
 
-let try_case_distinction_for_term_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts : TERM list) : TERM =
-        // let expand_one_argument (S, env, C) t =
-        //     let opt_elems = try enum_finite_range (term_type (signature_of S) env t) S with _ -> None
-        //     match t with
-        //     |   Initial _ ->
-        //         match opt_elems with
-        //         |   None -> t
-        //         |   Some elems ->
-        //                 if Set.count elems = 0 then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
-        //                 let (elems_list_without_last, last_elem) =
-        //                     let l_rev = List.rev (Set.toList elems)
-        //                     (List.rev (List.tail l_rev), List.head l_rev)
-        //                 Parser.switch_to_cond_term (t, List.map (fun elem -> (Value elem, Value elem)) elems_list_without_last, Value last_elem)
-        //     |   _ -> t
-        // let result = AppTerm (FctName f, t >>| expand_one_argument (S, env, C))
+let rec try_case_distinction_for_term_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts : TERM list) : TERM =
     let make_case_distinction (t : TERM) (elems : VALUE list, ts : TERM list) =
         if List.isEmpty elems
         then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
@@ -200,7 +186,6 @@ let try_case_distinction_for_term_with_finite_domain (S : S_STATE, env : ENV, C 
             let ts_rev = List.rev ts
             (List.rev (List.tail ts_rev), List.head ts_rev)
         Parser.switch_to_cond_term (t, List.map2 (fun elem term -> (Value elem, term)) elems_without_last terms_without_last, last_term)
-
     let rec F past_args future_args =
         match future_args with
         |   (t1 :: ts) ->
@@ -210,18 +195,14 @@ let try_case_distinction_for_term_with_finite_domain (S : S_STATE, env : ENV, C 
                                     f (term_to_string (signature_of S) (AppTerm (FctName f, ts))))
                 |   Some elems ->
                         let elems = Set.toList elems
-                        make_case_distinction t1 (List.unzip (List.map (fun elem -> (elem, F (Value elem :: past_args) ts)) elems))
+                        let case_dist = make_case_distinction t1 (List.unzip (List.map (fun elem -> (elem, F (Value elem :: past_args) ts)) elems))
+                        s_eval_term_ case_dist (S, env, C)    // simplify generated conditional term
         |   [] -> AppTerm (FctName f, List.rev past_args)
     let result = F [] ts
     fprintf stderr "%A\n" result
     result
-    
 
-    // failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
-    //                     f (term_to_string (signature_of S) (AppTerm (FctName f, ts))))
-
-
-let eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name : NAME, ts) = 
+and eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name : NAME, ts) = 
     //if !trace > 0 then fprintfn stderr "|signature|=%d | eval_app_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) (AppTerm (fct_name, [])))
     //let ts = ts >>| fun t -> try_reducing_term_with_finite_domain (S, env, C) (t (S, env, C))
     let ts = ts >>| fun t -> t (S, env, C)
@@ -248,7 +229,7 @@ let eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name : NAME, ts) =
                     // failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
                     //                     f (term_to_string (signature_of S) (AppTerm (FctName f, ts))))
 
-let eval_cond_term (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) = 
+and eval_cond_term (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) = 
     let term_to_string = term_to_string (signature_of S)
     match G (S, env, C) with
     |   Value (BOOL true)  -> t1 (S, env, C)
@@ -268,7 +249,7 @@ let eval_cond_term (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) =
                         let (t1', t2') = (t1 (S, env, Set.add G C), t2 (S, env, Set.add (s_not G) C))
                         if t1' = t2' then t1' else CondTerm (G, t1', t2')
 
-let rec s_eval_term_ t ((S, env, C) : S_STATE * ENV * CONTEXT) =
+and s_eval_term_ t ((S, env, C) : S_STATE * ENV * CONTEXT) =
 //    if !trace > 0 then fprintfn stderr "|signature|=%d | s_eval_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) t)
     //let t = try_reducing_term_with_finite_domain (S, env, C) t
     term_induction (fun x -> x) {
