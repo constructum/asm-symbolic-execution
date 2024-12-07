@@ -160,7 +160,7 @@ let term_type sign (env : ENV) =
 
 //---------------------------------------------------
 
-let try_reducing_term_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (t : TERM) : TERM =
+let try_reducing_term_with_finite_range (S : S_STATE, env : ENV, C : CONTEXT) (t : TERM) : TERM =
     let opt_elems = try enum_finite_range (term_type (signature_of S) env t) S with _ -> None
     match t with
     |   Initial _ ->
@@ -177,7 +177,7 @@ let try_reducing_term_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (
                 |   Some x -> Value x
     |   _ -> t
 
-let rec try_case_distinction_for_term_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts : TERM list) : TERM =
+let rec try_case_distinction_for_term_with_finite_range (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts : TERM list) : TERM =
     let make_case_distinction (t : TERM) (elem_term_pairs : (VALUE * TERM) list) =
         if List.isEmpty elem_term_pairs
         then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
@@ -192,6 +192,13 @@ let rec try_case_distinction_for_term_with_finite_domain (S : S_STATE, env : ENV
                 |   Some elems ->
                         let case_dist = make_case_distinction t1 (List.map (fun elem -> (elem, F (Value elem :: past_args) ts)) (Set.toList elems))
                         s_eval_term_ case_dist (S, env, C)    // simplify generated conditional term
+        |   [] -> AppTerm (FctName f, List.rev past_args)
+    F [] ts
+
+and move_out_conditionals (S, env, C) (f : FCT_NAME) (ts : TERM list) : TERM =
+    let rec F past_args = function
+        |   (CondTerm (G1, t11, t12) :: ts) -> CondTerm (G1, F past_args (t11 :: ts), F past_args (t12 :: ts))
+        |   (t1 :: ts) -> F (t1 :: past_args) ts
         |   [] -> AppTerm (FctName f, List.rev past_args)
     F [] ts
 
@@ -215,7 +222,7 @@ and eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name : NAME, ts) =
                             then Value (BOOL false)
                             else t
                     else t               (* if there is nothing to simplify by rewriting or using context, it would return AppTerm (FctName f, ts) *)
-            else    try_case_distinction_for_term_with_finite_domain (S, env, C) f ts
+            else    try_case_distinction_for_term_with_finite_range (S, env, C) f ts
 
 and eval_cond_term (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) = 
     let term_to_string = term_to_string (signature_of S)
@@ -243,7 +250,7 @@ and s_eval_term_ t ((S, env, C) : S_STATE * ENV * CONTEXT) =
     term_induction (fun x -> x) {
         Value    = fun x _ -> Value x;
         Initial  = fun (f, xs)  _ -> Initial (f, xs); //Initial (f, xs);
-        AppTerm  = fun (f, ts) -> fun (S, env, C) -> try_reducing_term_with_finite_domain (S, env, C) (eval_app_term (S, env, C) (f, ts));
+        AppTerm  = fun (f, ts) -> fun (S, env, C) -> try_reducing_term_with_finite_range (S, env, C) (eval_app_term (S, env, C) (f, ts));
         CondTerm = fun (G, t1, t2) -> fun (S, env, C) -> eval_cond_term (S, env, C) (G, t1, t2);
         VarTerm  = fun v -> fun (S, env, _) -> fst (get_env env v);
         LetTerm  = fun v -> fun (S, env, _) -> failwith "s_eval_term: LetTerm: not implemented yet"  // fun (v, t1, t2) -> fun (S, env) -> t2 (S, add_binding env (v, t1 (S, env)))
@@ -257,7 +264,7 @@ let s_eval_term (t : TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TERM =
             |   Value (BOOL _)  -> t
             |   _ -> smt_eval_formula t (S, env, C)
     else    match t with
-            |   Initial (f, xs) -> try_reducing_term_with_finite_domain (S, env, C) t
+            |   Initial (f, xs) -> try_reducing_term_with_finite_range (S, env, C) t
             |   _ -> t
 
 //--------------------------------------------------------------------

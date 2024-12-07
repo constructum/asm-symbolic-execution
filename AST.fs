@@ -137,31 +137,6 @@ let rule_size = rule_induction term_size {
 
 //--------------------------------------------------------------------
 //
-//  lift conditional
-//
-//--------------------------------------------------------------------
-
-let lift_cond_term t = 
-    let rec F_app = function
-        |   (f, ts, []) -> AppTerm (f, List.rev ts)
-        |   (f, ts, CondTerm (G, t1, t2) :: ts') ->
-                let (G, t1, t2) = (lift G, lift t1, lift t2)
-                lift (CondTerm (G, F_app (f, t1 :: ts, ts'), F_app (f, t2 :: ts, ts')))
-        |   (f, ts, t' :: ts') -> F_app (f, t' :: ts, ts')
-    and F_cond = function
-    |   CondTerm (CondTerm (phi, phi1, phi2), t1, t2) ->
-            let (phi, phi1, phi2, t1, t2) = (lift phi, lift phi2, lift phi2, lift t1, lift t2)
-            lift (CondTerm (phi, CondTerm (phi1, t1, t2), CondTerm (phi2, t1, t2)))
-    |   t -> t
-    and lift t =
-        match t with
-        |   AppTerm (f, ts) -> F_app (f, [], List.map lift ts)
-        |   CondTerm (phi, t1, t2) -> F_cond (CondTerm (lift phi, lift t1, lift t2))
-        |   _ -> t
-    lift t
-
-//--------------------------------------------------------------------
-//
 //  pretty printing
 //
 //--------------------------------------------------------------------
