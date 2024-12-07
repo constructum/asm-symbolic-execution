@@ -198,7 +198,9 @@ let Function (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATU
     let SharedFunction     = R3 (poption (kw "dynamic") << kw "shared"     << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
                                 |>> fun _ -> failwith "not implemented: shared function"
     let ControlledFunction = R3 (poption (kw "dynamic") << kw "controlled" << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
-                                |>> fun (f, tys, opt_ty) -> add_function_name f (Controlled, NonInfix, to_fct_type(tys, opt_ty))
+                                |>> fun (f, tys, opt_ty) ->
+                                    if !trace > 1 then fprintf stderr "AsmetaL.Function: ControlledFunction: %A\n" (f, tys, opt_ty)
+                                    add_function_name f (Controlled, NonInfix, to_fct_type(tys, opt_ty))
     let LocalFunction      = R3 (poption (kw "dynamic") << kw "local"  << ID_FUNCTION) (lit ":" << getDomainByID) (poption (lit "->" << getDomainByID))
                                 |>> fun _ -> failwith "not implemented: local function"
     let DynamicFunction    = OutFunction <|> MonitoredFunction  <|> SharedFunction <|> ControlledFunction <|> LocalFunction

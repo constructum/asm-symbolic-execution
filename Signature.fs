@@ -85,6 +85,7 @@ and fct_type_to_string (args_type, res_type) =
 exception TypeMismatch of TYPE * TYPE
 
 let match_type (ty : TYPE) (ty_sign : TYPE) (ty_env : Map<string, TYPE>) : Map<string, TYPE> =
+    if !trace > 0 then fprintf stderr "match_type(%s, %s)\n" (ty |> type_to_string) (ty_sign |> type_to_string)
     let error_msg () =
         sprintf ("type %s does not match %s") (ty |> type_to_string) (ty_sign |> type_to_string)
     match ty with
@@ -202,6 +203,7 @@ let is_type_name name (sign : SIGNATURE) =
     with _ -> false
 
 let construct_type (sign : SIGNATURE) (tyname, tyargs) : TYPE =
+    if !trace > 1 then fprintf stderr "construct_type(%s, %A)\n" tyname tyargs
     if  // !!! temporary for AsmetaL compatibility: non-implemented types seen as user-defined base types
         tyname = "Complex" || tyname = "Real" || tyname = "Natural" || tyname = "Char"    // AsmetaL predefined basic domains
     then if List.isEmpty tyargs then TypeCons (tyname, tyargs) else failwith (sprintf "type '%s' does not expect type arguments" tyname)
@@ -335,10 +337,12 @@ let match_one_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_ty
 //     with ex -> type_error_fail ex  
 
 let match_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_types : list<TYPE list * TYPE>) : TYPE =
+    if !trace > 0 then fprintf stderr "match_fct_type(%s, %s)\n" fct_name (args_types |> type_list_to_string)
     let rec matching_types results candidates =
         match candidates with
         |   [] -> results
         |   sign_fct_type :: candidates' ->
+                if !trace > 1 then fprintf stderr "  sign_fct_type = %A\n" sign_fct_type
                 try match match_one_fct_type fct_name args_types sign_fct_type with
                     |   ty -> matching_types (ty :: results) candidates'
                 with ex -> matching_types results candidates'

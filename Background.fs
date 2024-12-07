@@ -123,7 +123,7 @@ let const_static_fct (const_val : VALUE) (args : VALUE list) = const_val
 let background_types = 
     let fail type_ arity args = failwith (sprintf "%s type expects %d type parameter(s), but %d were given" type_ arity (List.length args))
     [
-        ("Boolean",  0, Some (function [] -> Integer | args -> fail "Boolean" 0 args), Some (Set.ofList [TRUE; FALSE]));
+        ("Boolean",  0, Some (function [] -> Boolean | args -> fail "Boolean" 0 args), Some (Set.ofList [TRUE; FALSE]));
         ("Integer",  0, Some (function [] -> Integer | args -> fail "Integer" 0 args), None);
         ("String",   0, Some (function [] -> String  | args -> fail "String"  0 args), None);
         ("Undef",    0, Some (function [] -> Undef   | args -> fail "Undef"   0 args), Some (Set.ofList [UNDEF]));

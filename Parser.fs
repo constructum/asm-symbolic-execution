@@ -200,6 +200,7 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
         AppTerm  = fun (f, ts) (sign, tyenv) ->
                         match f (sign, tyenv) with
                         |   (FctName f, f_sign_types) ->  // fprintf stderr "typecheck_term %A\n" (f, (ts >>| fun t -> t (sign, tyenv)))
+                                                            if !trace > 0 then fprintf stderr "typecheck_term: match_fct_type 1 %A\n" (f, (ts >>| fun t -> t (sign, tyenv)))
                                                             match_fct_type f (ts >>| fun t -> t (sign, tyenv)) f_sign_types
                         |   (_, [(_, f_ran)]) -> f_ran    // special constants UndefConst, BoolConst b, etc.
                         |   _ -> failwith "typecheck_term: AppTerm: this should not happen";
@@ -214,6 +215,7 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
                             else if t1 = t2 then t1
                             else failwith $"branches of conditional term have different types (then-branch: {t1 |> type_to_string}; else-branch: {t2 |> type_to_string})" )                                                  
         Initial  = fun (f, xs) (sign, tyenv) ->
+                        if !trace > 0 then fprintf stderr "typecheck_term: match_fct_type 2 %A\n" (AppTerm (FctName f, xs >>| Value) |> term_to_string sign)
                         match_fct_type f (xs >>| type_of_value sign) (fct_types f sign)
         VarTerm  = fun v -> fun (_, tyenv) -> try Map.find v tyenv with _ -> failwith $"variable '{v}' not defined";
         LetTerm  = fun (x, t1, t2) -> fun (sign, tyenv) ->
@@ -230,7 +232,9 @@ let typecheck_rule (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TY
                         then
                             let ts = ts >>| fun t -> t (sign, tyenv)
                             let t_type  = t (sign, tyenv)
-                            let f_res_type = match_fct_type f ts (fct_types f sign)
+                            let f_res_type = 
+                                if !trace > 0 then fprintf stderr "typecheck_rule: match_fct_type 3 %A\n" (f, ts)
+                                match_fct_type f ts (fct_types f sign)
                             if t_type <> f_res_type
                             then failwith (sprintf "type of right-hand side of update rule (%s) does not match type of function %s : %s -> %s"
                                                 (t_type |> type_to_string) f (ts |> type_list_to_string) (f_res_type |> type_to_string))
