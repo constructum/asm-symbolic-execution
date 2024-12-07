@@ -111,8 +111,7 @@ let rec smt_map_term_background_function sign C (f, ts) : SMT_EXPR =
     |   ("+",       [ SMT_IntExpr e1;  SMT_IntExpr e2 ])  -> SMT_IntExpr (ctx.MkAdd (e1, e2) :?> IntExpr)
     |   ("-",       [ SMT_IntExpr e1;  SMT_IntExpr e2 ])  -> SMT_IntExpr (ctx.MkSub (e1, e2) :?> IntExpr)
     |   ("*",       [ SMT_IntExpr e1;  SMT_IntExpr e2 ])  -> SMT_IntExpr (ctx.MkMul (e1, e2) :?> IntExpr)
-    |   _ -> //failwith (sprintf "smt_map_term_background_function: error (t = %s)\n%A\n" (term_to_string sign (AppTerm (FctName f, ts))) es)
-             failwith (sprintf "smt_map_term_background_function: error (t = %s)" (term_to_string sign (AppTerm (FctName f, ts))))
+    |   _ -> failwith (sprintf "smt_map_term_background_function: error (t = %s)" (term_to_string sign (AppTerm (FctName f, ts))))
 
 and smt_map_term_user_defined_function sign C (f, ts) : SMT_EXPR =
     let (ctx, fct) = (!C.ctx, !C.fct)

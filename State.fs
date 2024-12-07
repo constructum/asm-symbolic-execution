@@ -105,6 +105,11 @@ let has_interpretation (S : STATE) (name : NAME) =
 
 //--------------------------------------------------------------------
 
+
+
+
+
+
 let fct_name_interpretation (S : STATE) (f : string) (args : VALUE list) =
     let kind = fct_kind f (signature_of S)
     if !trace > 0 then fprintfn stderr "State.fct_name_interpretation: %s kind=%A" f kind

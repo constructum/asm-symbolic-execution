@@ -239,8 +239,7 @@ let s_eval_term (t : TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TERM =
             |   Value (BOOL _)  -> t
             |   _ -> smt_eval_formula t (S, env, C)
     else    match t with
-            |   Initial (f, xs) ->  fprintf stderr "%A\n" C
-                                    try_reducing_term_with_finite_domain (S, env, C) t
+            |   Initial (f, xs) ->  try_reducing_term_with_finite_domain (S, env, C) t
                                      // try SMT solver as a last resort to reduce 'Initial' terms to a value (for types with finite carrier set)
             |   _ -> t
 
