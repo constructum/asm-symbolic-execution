@@ -115,13 +115,17 @@ let rec smt_map_term_background_function sign C (f, ts) : SMT_EXPR =
 
 and smt_map_term_user_defined_function sign C (f, ts) : SMT_EXPR =
     let (ctx, fct) = (!C.ctx, !C.fct)
+    let fail (f, dom, ran) =
+        failwith (sprintf "smt_map_term_user_defined_function: function '%s : %s -> %s' not found" f (type_list_to_string dom) (type_to_string ran))
     match (f, fct_type f sign, ts >>| fun t -> smt_map_term sign C t) with
-    |   (f, (_, Boolean), es) -> SMT_BoolExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> BoolExpr)
-    |   (f, (_, Integer), es) -> SMT_IntExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> IntExpr)
+    |   (f, (dom, Boolean), es) ->
+            try SMT_BoolExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> BoolExpr) with _ -> fail (f, dom, Boolean)
+    |   (f, (dom, Integer), es) ->
+            try SMT_IntExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> IntExpr) with _ -> fail (f, dom, Integer)
     |   (f, (dom, (ran as TypeCons (tyname, []))), es) ->
             let (kind, ar) = (type_kind tyname sign, type_arity tyname sign)
             if kind <> EnumType || ar <> 0 then failwith (sprintf "smt_map_term_user_defined_function: types in function '%s : %s -> %s' not supported" f (type_list_to_string dom) (type_to_string ran))
-            SMT_Expr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)))
+            try SMT_Expr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr))) with _ -> fail (f, dom, ran)
     |   _ -> failwith (sprintf "smt_map_term_user_defined_function : error (t = %s)" (term_to_string sign (AppTerm (FctName f, ts))))
 
 and smt_map_ITE sign C (G, t1, t2) : SMT_EXPR =

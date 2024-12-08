@@ -195,34 +195,42 @@ let rec try_case_distinction_for_term_with_finite_range (S : S_STATE, env : ENV,
         |   [] -> AppTerm (FctName f, List.rev past_args)
     F [] ts
 
-and move_out_conditionals (S, env, C) (f : FCT_NAME) (ts : TERM list) : TERM =
-    let rec F past_args = function
-        |   (CondTerm (G1, t11, t12) :: ts) -> CondTerm (G1, F past_args (t11 :: ts), F past_args (t12 :: ts))
-        |   (t1 :: ts) -> F (t1 :: past_args) ts
-        |   [] -> AppTerm (FctName f, List.rev past_args)
-    F [] ts
-
-and eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name : NAME, ts) = 
+and eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name, ts) = 
     //if !trace > 0 then fprintfn stderr "|signature|=%d | eval_app_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) (AppTerm (fct_name, [])))
     let ts = ts >>| fun t -> t (S, env, C)
-    match get_values ts with
-    |   Some xs -> interpretation S fct_name xs
-    |   None ->
-            let f = match fct_name with FctName f -> f | _ -> failwith "special constant not expected"
-            if fct_kind f (signature_of S) = Static
-            then let t = apply_rewrite_rules (f, ts)
-                 match t with
-                 | Value (BOOL _) -> t
-                 | _ ->
-                    let (_, T_ran) = fct_type f (signature_of S)
-                    if T_ran = Boolean
-                    then if Set.contains t C
-                            then Value (BOOL true)
-                            else if Set.contains (s_not t) C
-                            then Value (BOOL false)
-                            else t
-                    else t               (* if there is nothing to simplify by rewriting or using context, it would return AppTerm (FctName f, ts) *)
-            else    try_case_distinction_for_term_with_finite_range (S, env, C) f ts
+    let rec F ts_past = function
+        |   (t1 as Value x1 :: ts_fut)        -> F (t1 :: ts_past) ts_fut
+        |   (t1 as Initial (f, xs) :: ts_fut) -> F (t1 :: ts_past) ts_fut
+        |   (CondTerm (G1, t11, t12) :: ts_fut) -> s_eval_term_ (CondTerm (G1, F ts_past (t11 :: ts_fut), F ts_past (t12 :: ts_fut))) (S, env, C)
+        |   (QuantTerm :: ts_fut)           -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
+        |   (LetTerm (v, t1, t2) :: ts_fut) -> failwith "SymbEval.eval_app_term: LetTerm not implemented"
+        |   (VarTerm v :: ts_fut)           -> failwith "SymbEval.eval_app_term: VarTerm not implemented"
+        |   (t1 as AppTerm (_, _) :: ts_fut) -> F (s_eval_term_ t1 (S, env, C) :: ts_past) ts_fut
+        |   [] ->
+                match (fct_name, ts) with
+                |   (FctName f, ts)    ->
+                    match get_values ts with
+                    |   Some xs -> interpretation S fct_name xs
+                    |   None ->
+                        match (fct_kind f (signature_of S)) with
+                        |   Static ->
+                                match fct_type f (signature_of S) with
+                                |   (_, Boolean) ->
+                                        let t = apply_rewrite_rules (f, ts)
+                                        if      t = Value (BOOL true)       then t
+                                        else if t = Value (BOOL false)      then t
+                                        else if Set.contains t C            then Value (BOOL true)
+                                        else if Set.contains (s_not t) C    then Value (BOOL false)
+                                        else smt_eval_formula t (S, env, C)
+                                |   (_, _) -> AppTerm (FctName f, ts)    // nothing left to simplify
+                        |   Controlled ->
+                                try_case_distinction_for_term_with_finite_range (S, env, C) f ts
+                        |   other_kind -> failwith (sprintf "SymbEval.eval_app_term: kind '%s' of function '%s' not implemented" (fct_kind_to_string other_kind) f)
+                |   (UndefConst, _)    -> Value UNDEF
+                |   (BoolConst b, _)   -> Value (BOOL b)
+                |   (IntConst i, _)    -> Value (INT i)
+                |   (StringConst s, _) -> Value (STRING s)
+    F [] ts
 
 and eval_cond_term (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) = 
     let term_to_string = term_to_string (signature_of S)
@@ -297,10 +305,60 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
     level := !level + 1
 
     let eval_update ((f, ts), t_rhs) (S, env, C) =
-        match get_values (ts >>| fun t -> s_eval_term t (S, env, C)) with
-        |   Some xs -> S_Updates (Set.singleton ((f, xs), s_eval_term t_rhs (S, env, C)));
-        |   None -> try_case_distinction_for_update_with_finite_domain (S, env, C) f ts t_rhs
+        if !trace > 0 then fprintf stderr "eval_update: %s\n" (rule_to_string (UpdateRule ((f, ts), t_rhs)))
+        match s_eval_term t_rhs (S, env, C) with
+        |   CondTerm (G, t1, t2) ->
+                s_eval_rule (CondRule (G, UpdateRule ((f, ts), t1), UpdateRule ((f, ts), t2))) (S, env, C)
+        |   _ ->
+            let rec F ts_past = function
+            |   (t1 as Value x1 :: ts_fut)        -> F (t1 :: ts_past) ts_fut
+            |   (t1 as Initial (f, xs) :: ts_fut) -> F (t1 :: ts_past) ts_fut
+            |   (CondTerm (G1, t11, t12) :: ts_fut) ->
+                    s_eval_rule (CondRule (G1, F ts_past (t11 :: ts_fut), F ts_past (t12 :: ts_fut))) (S, env, C)
+            |   (QuantTerm :: ts_fut)           -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
+            |   (LetTerm (v, t1, t2) :: ts_fut) -> failwith "SymbEval.eval_app_term: LetTerm not implemented"
+            |   (VarTerm v :: ts_fut)           -> failwith "SymbEval.eval_app_term: VarTerm not implemented"
+            |   (t1 as AppTerm (_, _) :: ts_fut) -> F (s_eval_term_ t1 (S, env, C) :: ts_past) ts_fut
+            |   [] ->
+                match get_values (ts_past >>| fun t -> s_eval_term t (S, env, C)) with
+                |   Some xs -> S_Updates (Set.singleton ((f, xs), s_eval_term t_rhs (S, env, C)));
+                |   None -> try_case_distinction_for_update_with_finite_domain (S, env, C) f ts t_rhs
+            F [] ts
 
+(*
+    let rec F ts_past = function
+        |   (t1 as Value x1 :: ts_fut)        -> F (t1 :: ts_past) ts_fut
+        |   (t1 as Initial (f, xs) :: ts_fut) -> F (t1 :: ts_past) ts_fut
+        |   (CondTerm (G1, t11, t12) :: ts_fut) -> s_eval_term_ (CondTerm (G1, F ts_past (t11 :: ts_fut), F ts_past (t12 :: ts_fut))) (S, env, C)
+        |   (QuantTerm :: ts_fut)           -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
+        |   (LetTerm (v, t1, t2) :: ts_fut) -> failwith "SymbEval.eval_app_term: LetTerm not implemented"
+        |   (VarTerm v :: ts_fut)           -> failwith "SymbEval.eval_app_term: VarTerm not implemented"
+        |   (t1 as AppTerm (_, _) :: ts_fut) -> F (s_eval_term_ t1 (S, env, C) :: ts_past) ts_fut
+        |   [] ->
+                match (fct_name, ts) with
+                |   (FctName f, ts)    ->
+                    match get_values ts with
+                    |   Some xs -> interpretation S fct_name xs
+                    |   None ->
+                        match (fct_kind f (signature_of S)) with
+                        |   Static ->
+                                match fct_type f (signature_of S) with
+                                |   (_, Boolean) ->
+                                        let t = apply_rewrite_rules (f, ts)
+                                        if      t = Value (BOOL true)       then t
+                                        else if t = Value (BOOL false)      then t
+                                        else if Set.contains t C            then Value (BOOL true)
+                                        else if Set.contains (s_not t) C    then Value (BOOL false)
+                                        else smt_eval_formula t (S, env, C)
+                                |   (_, _) -> AppTerm (FctName f, ts)    // nothing left to simplify
+                        |   Controlled ->
+                                try_case_distinction_for_term_with_finite_range (S, env, C) f ts
+                        |   other_kind -> failwith (sprintf "SymbEval.eval_app_term: kind '%s' of function '%s' not implemented" (fct_kind_to_string other_kind) f)
+                |   (UndefConst, _)    -> Value UNDEF
+                |   (BoolConst b, _)   -> Value (BOOL b)
+                |   (IntConst i, _)    -> Value (INT i)
+                |   (StringConst s, _) -> Value (STRING s)
+*)
     let eval_cond (G, R1, R2) (S, env, C) = 
         match s_eval_term G (S, env, C) with
         |   Value (BOOL true)  -> s_eval_rule R1 (S, env, C)
