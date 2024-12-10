@@ -511,7 +511,8 @@ let symbolic_execution (R_in : RULE) : int * RULE =
     if (!trace > 2) then fprintf stderr "symbolic_execution\n"
     let S0 = TopLevel.initial_state ()
     if (!trace > 2) then fprintf stderr "---\n%s\n---\n" (signature_to_string (signature_of (state_to_s_state S0)))
-    let R_out = s_eval_rule R_in (state_to_s_state S0, Map.empty, Set.empty)
+    let R_in' = SeqRule [ R_in; skipRule ]      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
+    let R_out = s_eval_rule R_in' (state_to_s_state S0, Map.empty, Set.empty)
     (count_s_updates R_out, reconvert_rule R_out)
 
 //--------------------------------------------------------------------
@@ -523,5 +524,6 @@ let symbolic_execution (R_in : RULE) : int * RULE =
 // first element of pair returned is the number of S_Updates rules, i.e. paths in the decision tree
 let symbolic_execution_for_turbo_asm_to_basic_asm_transformation (R_in : RULE) : int * RULE =
     let S0 = TopLevel.initial_state ()
-    let R_out = s_eval_rule R_in (state_to_s_state_only_static S0, Map.empty, Set.empty)
+    let R_in' = SeqRule [ R_in; skipRule ]      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
+    let R_out = s_eval_rule R_in' (state_to_s_state_only_static S0, Map.empty, Set.empty)
     (count_s_updates R_out, reconvert_rule R_out)
