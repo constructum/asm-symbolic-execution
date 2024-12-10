@@ -79,13 +79,14 @@ let exec_symbolic (symb_exec_fct : AST.RULE -> 'a * AST.RULE) (main_rule_name : 
     let (args, R_in) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
     let print_time (cpu, usr, sys) =
         writeln $"\n--- CPU time: {((float cpu) / 1000.0)}s (usr: {((float usr) / 1000.0)}s, sys: {((float sys) / 1000.0)}s)"
+(*
     match symb_exec_fct R_in with
     |   (no_of_leaves, R_out)->
             write "\n\n--- generated rule:\n"
             PrettyPrinting.pr stdout 80 (AST.pp_rule (TopLevel.signature ()) R_out)
             write $"\n\n--- size of generated rule: {(AST.rule_size R_out)}\n"
             write $"\n--- number of leaves in decision tree: {no_of_leaves}\n" // (no_of_leaves)
-(*
+*)
     match Common.time symb_exec_fct R_in with
     |   (Some (no_of_leaves, R_out), _, _, cpu, usr, sys) ->
             write "\n\n--- generated rule:\n"
@@ -98,7 +99,8 @@ let exec_symbolic (symb_exec_fct : AST.RULE -> 'a * AST.RULE) (main_rule_name : 
             write "\n\n--- execution failed with exception:\n"
             raise ex
     |   _ -> failwith "Failure: no result and no exception"
-*)
+
+
 
 let exec_nonsymbolic main_rule_name =
     let (args, R) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
