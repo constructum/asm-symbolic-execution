@@ -46,7 +46,7 @@ let smt_solver_pop (C : SMT_CONTEXT) =
     (!C.slv).Pop ()
 
 let smt_map_type (C : SMT_CONTEXT) (sign : SIGNATURE) (T : TYPE) : Sort =
-    assert(match T with Boolean -> true | Integer -> true | String -> true | TypeCons(tyname,[]) -> type_kind tyname sign = EnumType | _ -> false)
+    //assert(match T with Boolean -> true | Integer -> true | String -> true | TypeCons(tyname,[]) -> type_kind tyname sign = EnumType | _ -> false)
     let ctx = !C.ctx
     match T with
     |   Boolean -> ctx.BoolSort
@@ -75,7 +75,6 @@ let smt_add_types_and_functions (C : SMT_CONTEXT) sign (new_sign : SIGNATURE, ne
                 else    fprintf stderr "SmtInterface.add_type: warning: skipping abstract type '%s', because it has no elements (%s = { })\n" tyname tyname
         else fprintf stderr "SmtInterface.add_type: warning: only enumerated types without type parameters are currently supported (type '%s' is of kind '%A' and has arity %d)\n" tyname kind ar
     let add_function C fct_name =
-        if !trace > 0 then fprintf stderr "SmtInterface.add_function: %s : %s\n" fct_name (fct_type fct_name new_sign |> fct_type_to_string)
         let (Ts_dom, T_ran) = fct_type fct_name new_sign
         let func_decl = ctx.MkFuncDecl (fct_name, Array.ofList (Ts_dom >>| smt_map_type C sign), smt_map_type C sign T_ran)
         C.fct := Map.add fct_name func_decl (!C.fct)
@@ -98,6 +97,7 @@ let rec smt_map_term_background_function sign C (f, ts) : SMT_EXPR =
     |   ("=",       [ SMT_Expr e1;     SMT_Expr e2 ])     -> SMT_BoolExpr (ctx.MkEq (e1, e2))
     |   ("!=",      [ SMT_BoolExpr e1; SMT_BoolExpr e2 ]) -> SMT_BoolExpr (ctx.MkNot (ctx.MkEq (e1, e2)))
     |   ("!=",      [ SMT_IntExpr e1;  SMT_IntExpr e2 ])  -> SMT_BoolExpr (ctx.MkNot (ctx.MkEq (e1, e2)))
+    |   ("!=",      [ SMT_Expr e1;     SMT_Expr e2 ])     -> SMT_BoolExpr (ctx.MkNot (ctx.MkEq (e1, e2)))
     |   ("not",     [ SMT_BoolExpr e ])                   -> SMT_BoolExpr (ctx.MkNot e)
     |   ("and",     [ SMT_BoolExpr e1; SMT_BoolExpr e2 ]) -> SMT_BoolExpr (ctx.MkAnd (e1, e2))
     |   ("or",      [ SMT_BoolExpr e1; SMT_BoolExpr e2 ]) -> SMT_BoolExpr (ctx.MkOr (e1, e2))
@@ -117,16 +117,19 @@ and smt_map_term_user_defined_function sign C (f, ts) : SMT_EXPR =
     let (ctx, fct) = (!C.ctx, !C.fct)
     let fail (f, dom, ran) =
         failwith (sprintf "smt_map_term_user_defined_function: function '%s : %s -> %s' not found" f (type_list_to_string dom) (type_to_string ran))
-    match (f, fct_type f sign, ts >>| fun t -> smt_map_term sign C t) with
-    |   (f, (dom, Boolean), es) ->
-            try SMT_BoolExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> BoolExpr) with _ -> fail (f, dom, Boolean)
-    |   (f, (dom, Integer), es) ->
-            try SMT_IntExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> IntExpr) with _ -> fail (f, dom, Integer)
-    |   (f, (dom, (ran as TypeCons (tyname, []))), es) ->
-            let (kind, ar) = (type_kind tyname sign, type_arity tyname sign)
-            if kind <> EnumType || ar <> 0 then failwith (sprintf "smt_map_term_user_defined_function: types in function '%s : %s -> %s' not supported" f (type_list_to_string dom) (type_to_string ran))
-            try SMT_Expr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr))) with _ -> fail (f, dom, ran)
-    |   _ -> failwith (sprintf "smt_map_term_user_defined_function : error (t = %s)" (term_to_string sign (AppTerm (FctName f, ts))))
+    if fct_kind f sign = Controlled
+    then
+        match (f, fct_type f sign, ts >>| fun t -> smt_map_term sign C t) with
+        |   (f, (dom, Boolean), es) ->
+                try SMT_BoolExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> BoolExpr) with _ -> fail (f, dom, Boolean)
+        |   (f, (dom, Integer), es) ->
+                try SMT_IntExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> IntExpr) with _ -> fail (f, dom, Integer)
+        |   (f, (dom, (ran as TypeCons (tyname, []))), es) ->
+                let (kind, ar) = (type_kind tyname sign, type_arity tyname sign)
+                if kind <> EnumType || ar <> 0 then failwith (sprintf "smt_map_term_user_defined_function: types in function '%s : %s -> %s' not supported" f (type_list_to_string dom) (type_to_string ran))
+                try SMT_Expr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr))) with _ -> fail (f, dom, ran)
+        |   _ -> failwith (sprintf "smt_map_term_user_defined_function : error (t = %s)" (term_to_string sign (AppTerm (FctName f, ts))))
+    else failwith (sprintf "smt_map_term_user_defined_function: unsupported function kind '%s' of function '%s'" (fct_kind f sign |> fct_kind_to_string) f)
 
 and smt_map_ITE sign C (G, t1, t2) : SMT_EXPR =
     let ctx = !C.ctx

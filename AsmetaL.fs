@@ -59,7 +59,7 @@ let mkAsm (asyncr : bool, modul : bool, name : string) (imports : (string * ASM 
 
 type PARSER_STATE = Parser.PARSER_STATE
 
-type EXTENDED_PARSER_STATE = PARSER_STATE * RULES_DB
+type EXTENDED_PARSER_STATE = PARSER_STATE * (RULES_DB * MACRO_DB)
 
 //--------------------------------------------------------------------
 
@@ -292,17 +292,17 @@ let imported_modules = ref (Map.empty : Map<string, ASM>)
 
 let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDED_PARSER_STATE>  =
     //let (sign, state) = get_parser_state s
-    let reduce_state (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserInput<PARSER_STATE> * RULES_DB =
-        let ((sign, state), rules_db) = get_parser_state s
-        in (chg_parser_state s (sign, state), rules_db)
+    let reduce_state (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserInput<PARSER_STATE> * (RULES_DB * MACRO_DB) =
+        let ((sign, state), (rules_db, macro_db)) = get_parser_state s
+        in (chg_parser_state s (sign, state), (rules_db, macro_db))
     // let extend_state (s : ParserInput<PARSER_STATE>) (rules_db : RULES_DB) : ParserInput<EXTENDED_PARSER_STATE> =
     //     let (sign, state) = get_parser_state s
     //     in chg_parser_state s ((sign, state), rules_db)
     let isAsyncr_isModule_name (s : ParserInput<EXTENDED_PARSER_STATE>) =
-            let (s, rules_db) = reduce_state s
+            let (s, (rules_db, macro_db)) = reduce_state s
             (   ( (poption (kw "asyncr")) ++ (kw "asm" << identifier) |>> fun (asyncr, name) -> (asyncr.IsSome, false, name) )
             <|> ( (poption (kw "asyncr")) ++ (kw "module" << identifier) |>> fun (asyncr, name) -> (asyncr.IsSome, true, name) )
-                ||>> fun (sign, state) _ -> ((sign, state), rules_db)  ) s
+                ||>> fun (sign, state) _ -> ((sign, state), (rules_db, macro_db))  ) s
 
     
     let parse_imported_module mod_id (sign, state, rules_db) =
@@ -329,22 +329,24 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
             if (!trace > 0) then fprintf stderr "  [skipped - already loaded]\n"
             Map.find full_path !imported_modules
     let ImportClause s = 
-        //let ((sign, state), rules_db) = get_parser_state s
-        let (s, rules_db) = reduce_state s
+        let (s, (rules_db, macro_db)) = reduce_state s
         let (sign, state) = get_parser_state s
         (   (   (kw "import" << MOD_ID (* or string, according to orig. grammar *))
                 ++ (poption (lit "(" << (psep1_lit identifier ",") >> lit ")"))
-            |>> fun (mod_name, opt_imported_names) -> (mod_name, parse_imported_module mod_name (sign, state, rules_db), opt_imported_names)
-            ||>> fun (sign, state) (_, ASM asm', _) -> ((sign, state), rules_db_override rules_db asm'.definitions.rules)
+            |>> fun (mod_name, opt_imported_names) -> (mod_name, parse_imported_module mod_name (sign, state, (rules_db, macro_db)), opt_imported_names)
+            ||>> fun (sign, state) (_, ASM asm', _) ->
+                    (   (sign, state),
+                        (   rules_db_override rules_db asm'.definitions.rules,
+                            macro_db_override macro_db asm'.definitions.macros    )   )
             ) ) s
     let ExportClause s =
-            let (s, rules_db) = reduce_state s
+            let (s, (rules_db, macro_db)) = reduce_state s
             (   (kw "export" << (psep1_lit identifier ",")) |>> fun names -> Some names
             <|> (kw "export" << (lit "*") |>> fun _ -> None )
-                ||>> fun (sign, state) _ -> ((sign, state), rules_db) ) s
+                ||>> fun (sign, state) _ -> ((sign, state), (rules_db, macro_db)) ) s
                     // exports : string list option;     // None means all are exported ("export*")
     let Signature s =
-        let (s, rules_db) = reduce_state s
+        let (s, (rules_db, macro_db)) = reduce_state s
         (   (kw "signature" >> lit ":") <<
             (   (pmany Domain) ++
                 (pmany Function)    )
@@ -352,7 +354,7 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
                             let signature_with_domains   = List.fold (fun sign add_one_domain -> add_one_domain sign) empty_signature domain_declarations
                             let signature_with_functions = List.fold (fun sign add_one_function -> add_one_function sign) signature_with_domains function_declarations
                             signature_with_functions
-                    ||>> fun (sign, state) _ -> ((sign, state), rules_db) ) s
+                    ||>> fun (sign, state) _ -> ((sign, state), (rules_db, macro_db)) ) s
 
     let Header = R3
                     (pmany (ImportClause ||>> fun ((sign, state), rules_db) (_, ASM asm', _) ->
@@ -369,7 +371,7 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
     |   ParserFailure x -> ParserFailure x
     |   ParserSuccess (((asyncr, modul, asm_name), (imports, exports, sign')), s') ->
             //let sign = signature_override sign sign'
-            let ((sign, state), rules_db) : EXTENDED_PARSER_STATE = get_parser_state s'
+            let ((sign, state), (rules_db, macro_db)) : EXTENDED_PARSER_STATE = get_parser_state s'
             if !trace > 0 then fprintf stderr "parse_asm_with_header: |signature|=%d\n" (Map.count sign)
 
             let Term s = Term (chg_parser_state s (sign, state))    // !!! temporary
@@ -389,16 +391,20 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
                         let _ = Parser.typecheck_term t (sign, Map.ofSeq param_list)
                         //!!! to do: proper handling of function overloading
                         // !!! types of parameters are currently ignored
-                        if fct_kind f sign = Static then 
-                            let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
-                            let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) (state_with_signature state sign), Map.ofList (List.zip parameters xs))
-                            //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
-                            ((fun (state : STATE) -> state_override_static state (Map.add f fct Map.empty)), (fun mdb -> mdb))
-                        else if fct_kind f sign = Derived then 
-                            let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
-                            //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
-                            ((fun state -> state), (fun (mdb : MACRO_DB) -> macro_db_override mdb (Map.add f (parameters, t) Map.empty)))
-                        else failwith (sprintf "error in function definition: function '%s' is not declared as static or derived in the signature" f)
+                        let result =
+                            if fct_kind f sign = Static then 
+                                let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
+                                let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) (state_with_signature state sign), Map.ofList (List.zip parameters xs))
+                                //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
+                                ( (fun (state : STATE) -> state_override_static state (Map.add f fct Map.empty)),
+                                (fun (mdb : MACRO_DB) -> macro_db_override mdb (Map.add f (parameters, t) Map.empty)) )
+                            else if fct_kind f sign = Derived then 
+                                let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
+                                //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
+                                ( (fun state -> state),
+                                (fun (mdb : MACRO_DB) -> macro_db_override mdb (Map.add f (parameters, t) Map.empty)) )
+                            else failwith (sprintf "error in function definition: function '%s' is not declared as static or derived in the signature" f)
+                        result
                                                         
             let MacroDeclaration =
                 R3 (poption (kw "macro") << kw "rule" << ID_RULE) parameter_list (lit "=" << Rule)
@@ -470,8 +476,8 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
                                 (   body,
                                     opt_main_rule,
                                     match default_init with None -> [] | Some default_init -> default_init  )
-                (   let (s, rules_db) = reduce_state s
-                    (parse ||>> fun (sign, state) _ -> ((sign, state), rules_db) ) s )
+                (   let (s, (rules_db, macro_db)) = reduce_state s
+                    (parse ||>> fun (sign, state) _ -> ((sign, state), (rules_db, macro_db)) ) s )
 
             match parse_asm_rest s' with
             |   ParserFailure x -> ParserFailure x
@@ -480,7 +486,7 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
                     let rdb' : RULES_DB = List.fold (fun rdb (rname, r) -> Map.add rname r rdb) empty_rules_db rule_declarations
                     let (state', mdb') : STATE * MACRO_DB =
                         List.fold
-                            (fun (state, mdb) (fct_def, derived_fct_def) -> (fct_def state, derived_fct_def mdb))
+                            (fun (state, mdb) (fct_def, macro_fct_def) -> (fct_def state, macro_fct_def mdb))
                             (empty_state, empty_macro_db)
                             (function_definitions @ default_init)
                     if !trace > 0 then fprintf stderr "static function definitions found for: %s\n" (Map.keys state'._static |> String.concat ", ")
@@ -496,23 +502,24 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
                         definitions = {
                             state  = extend_with_carrier_sets (sign, state_override state state');   // !!! Agent, Reserve added twice ?
                             rules  = rules_db_override rules_db rdb';
-                            macros = mdb';
+                            macros = macro_db_override macro_db mdb';
                         };
                     }
                     ParserSuccess ( result, s'')
 
-let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB =
+let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB * MACRO_DB =
     match asm with
     |   ASM (asm_content) ->
             let sign  = asm_content.signature
             let state = state_with_signature asm_content.definitions.state sign
             let rdb   = asm_content.definitions.rules
-            (sign, state, rdb)
+            let mdb   = asm_content.definitions.macros
+            (sign, state, rdb, mdb)
 
 
-let parse_definitions (sign, S) s =
+let parse_definitions ((sign, S), (rules_db, macro_db)) s =
     imported_modules := Map.empty
-    let asm as ASM asm' = fst (Parser.make_parser Asm (sign, S) s)
+    let asm as ASM asm' = fst (Parser.make_parser Asm ((sign, S), (rules_db, macro_db)) s)
     if (!trace > 1) then fprintf stderr "---\n%s\n---\n" (asm'.signature |> signature_to_string)
     asm
 

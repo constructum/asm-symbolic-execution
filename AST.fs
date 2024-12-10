@@ -44,7 +44,7 @@ let get_rule rule_name (db : RULES_DB) = Map.find rule_name db
 type MACRO_DB = Map<FCT_NAME, string list * TERM>   // for derived functions = macros !!! what about types ?
 
 let empty_macro_db : MACRO_DB = Map.empty
-let macro_db_override (db1 : MACRO_DB) (db' : MACRO_DB) = Common.map_override db1 db'
+let macro_db_override (db1 : MACRO_DB) (db' : MACRO_DB) : MACRO_DB = Common.map_override db1 db'
 let add_macro macro_name ((args, t) : string list * TERM) (db : MACRO_DB) = Map.add macro_name (args, t) db
 let exists_macro macro_name (db : MACRO_DB) = Map.containsKey macro_name db
 let get_macro macro_name (db : MACRO_DB) = Map.find macro_name db

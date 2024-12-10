@@ -122,20 +122,6 @@ let ctx_to_smt (S, env, C)=
     // !!!! List.map (fun ((f, xs), t) -> smt_assert_update (S, env, C) (f, xs), t) (Map.toList C.U) |> ignore
     Set.map (fun phi -> smt_assert (signature_of S) TopLevel.smt_ctx phi) C |> ignore
 
-let smt_eval_formula (phi : TERM) (S, env, C) =
-    // precondition: term_type (signature_of S) phi = Boolean
-    // old version before using solver push and pop: // ctx_to_smt (S, env, C)
-    if !trace > 0 then fprintf stderr "smt_eval_formula(%s) -> " (term_to_string (signature_of S) phi)
-    let result =
-        if (!use_smt_solver && smt_formula_is_true (signature_of S) TopLevel.smt_ctx phi)
-        then Value (BOOL true)
-        else if (!use_smt_solver && smt_formula_is_true (signature_of S) TopLevel.smt_ctx (s_not phi))
-        then Value (BOOL false)
-        else phi
-    // old version before using solver push and pop: // smt_solver_reset TopLevel.smt_ctx
-    if !trace > 0 then fprintf stderr "%s\n" (term_to_string (signature_of S) result)
-    result
-
 //--------------------------------------------------------------------
 
 // this returns the type of an already type-checked term (i.e. it assumes that the term is type-correct)
@@ -160,7 +146,54 @@ let term_type sign (env : ENV) =
 
 //---------------------------------------------------
 
-let try_reducing_term_with_finite_range (S : S_STATE, env : ENV, C : CONTEXT) (t : TERM) : TERM =
+let rec smt_eval_formula (phi : TERM) (S, env, C) =
+    // precondition: term_type (signature_of S) phi = Boolean
+    // old version before using solver push and pop: // ctx_to_smt (S, env, C)
+    if !trace > 0 then fprintf stderr "smt_eval_formula(%s) -> " (term_to_string (signature_of S) phi)
+    let phi = expand_term phi (S, env, C)
+    let result =
+        if (!use_smt_solver && smt_formula_is_true (signature_of S) TopLevel.smt_ctx phi)
+        then Value (BOOL true)
+        else if (!use_smt_solver && smt_formula_is_true (signature_of S) TopLevel.smt_ctx (s_not phi))
+        then Value (BOOL false)
+        else phi
+    // old version before using solver push and pop: // smt_solver_reset TopLevel.smt_ctx
+    if !trace > 0 then fprintf stderr "%s\n" (term_to_string (signature_of S) result)
+    result
+
+and expand_term t (S, env, C) =
+    term_induction (fun x -> x) {
+        Value = fun x -> fun (S, env, C) -> Value x;
+        Initial = fun (f, xs) -> fun (S, env, C) -> Initial (f, xs);
+        AppTerm = fun (f, ts) -> fun (S, env, C) ->
+            let sign = signature_of S
+            match f with
+            |   FctName fct_name ->
+                    // static functions that are not primitive functions (i.e. not in the 'background') are expanded like macros
+                    if fct_kind fct_name sign = Static && not (Map.containsKey fct_name Background.state) then
+                        let (formals, body) =
+                            try Map.find fct_name (TopLevel.macros ())     // !!! should not use global TopLevel.macros
+                            with _ -> failwith (sprintf "SymbEval.expand_term: definition of static function '%s' not found in macros database" fct_name)
+                        let ts = ts >>| fun t -> t (S, env, C)
+                        let env' =
+                            List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (S, env, C), term_type (signature_of S) env arg)) env formals ts
+                        s_eval_term body (S, env', C)
+                    else AppTerm (f, ts >>| fun t -> t (S, env, C))
+        (* // from macro rule call:
+        let (formals, body) =
+            try Map.find r (TopLevel.rules ())     // !!! should not use global TopLevel.rules
+            with _ -> failwith (sprintf "SymbEval.s_eval_rule: macro rule %s not found" r)
+        let env' =
+            List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (S, env, C), term_type (signature_of S) env arg)) env formals args
+        s_eval_rule body (S, env', C)
+        *)
+            |   _ -> AppTerm (f, ts >>| fun t -> t (S, env, C));
+        CondTerm = fun (G, t1, t2) -> fun (S, env, C) -> CondTerm (G (S, env, C), t1 (S, env, C), t2 (S, env, C));
+        VarTerm = fun v -> fun (S, env, C) -> VarTerm v;
+        LetTerm = fun (v, t1, t2) -> fun (S, env, C) -> failwith "SymbEval.expand_term: LetTerm: not_implemented"   // LetTerm (v, t1 (S, env, C), t2 (S, add_binding env (v, t1 (S, env, C), type, C))
+    } t (S, env, C)
+
+and try_reducing_term_with_finite_range (S : S_STATE, env : ENV, C : CONTEXT) (t : TERM) : TERM =
     let opt_elems = try enum_finite_range (term_type (signature_of S) env t) S with _ -> None
     match t with
     |   Initial _ ->
@@ -177,7 +210,7 @@ let try_reducing_term_with_finite_range (S : S_STATE, env : ENV, C : CONTEXT) (t
                 |   Some x -> Value x
     |   _ -> t
 
-let rec try_case_distinction_for_term_with_finite_range (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts : TERM list) : TERM =
+and try_case_distinction_for_term_with_finite_range (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts : TERM list) : TERM =
     let make_case_distinction (t : TERM) (elem_term_pairs : (VALUE * TERM) list) =
         if List.isEmpty elem_term_pairs
         then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
@@ -202,9 +235,9 @@ and eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name, ts) =
         |   (t1 as Value x1 :: ts_fut)        -> F (t1 :: ts_past) ts_fut
         |   (t1 as Initial (f, xs) :: ts_fut) -> F (t1 :: ts_past) ts_fut
         |   (CondTerm (G1, t11, t12) :: ts_fut) -> s_eval_term_ (CondTerm (G1, F ts_past (t11 :: ts_fut), F ts_past (t12 :: ts_fut))) (S, env, C)
-        |   (QuantTerm :: ts_fut)           -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
-        |   (LetTerm (v, t1, t2) :: ts_fut) -> failwith "SymbEval.eval_app_term: LetTerm not implemented"
-        |   (VarTerm v :: ts_fut)           -> failwith "SymbEval.eval_app_term: VarTerm not implemented"
+        |   (QuantTerm :: ts_fut)            -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
+        |   (LetTerm (v, t1, t2) :: ts_fut)  -> failwith "SymbEval.eval_app_term: LetTerm not implemented"
+        |   (t1 as VarTerm v :: ts_fut)      -> F (s_eval_term_ t1 (S, env, C) :: ts_past) ts_fut
         |   (t1 as AppTerm (_, _) :: ts_fut) -> F (s_eval_term_ t1 (S, env, C) :: ts_past) ts_fut
         |   [] ->
                 match (fct_name, ts) with
@@ -264,7 +297,7 @@ and s_eval_term_ t ((S, env, C) : S_STATE * ENV * CONTEXT) =
         LetTerm  = fun v -> fun (S, env, _) -> failwith "s_eval_term: LetTerm: not implemented yet"  // fun (v, t1, t2) -> fun (S, env) -> t2 (S, add_binding env (v, t1 (S, env)))
     } t (S, env, C)
 
-let s_eval_term (t : TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TERM =
+and s_eval_term (t : TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TERM =
     let sign = signature_of S
     let t = s_eval_term_ t (S, env, C)
     if term_type sign env t = Boolean
@@ -315,9 +348,9 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
             |   (t1 as Initial (f, xs) :: ts_fut) -> F (t1 :: ts_past) ts_fut
             |   (CondTerm (G1, t11, t12) :: ts_fut) ->
                     s_eval_rule (CondRule (G1, F ts_past (t11 :: ts_fut), F ts_past (t12 :: ts_fut))) (S, env, C)
-            |   (QuantTerm :: ts_fut)           -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
-            |   (LetTerm (v, t1, t2) :: ts_fut) -> failwith "SymbEval.eval_app_term: LetTerm not implemented"
-            |   (VarTerm v :: ts_fut)           -> failwith "SymbEval.eval_app_term: VarTerm not implemented"
+            |   (QuantTerm :: ts_fut)            -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
+            |   (LetTerm (v, t1, t2) :: ts_fut)  -> failwith "SymbEval.eval_app_term: LetTerm not implemented"
+            |   (t1 as VarTerm v :: ts_fut)      -> F (s_eval_term_ t1 (S, env, C) :: ts_past) ts_fut
             |   (t1 as AppTerm (_, _) :: ts_fut) -> F (s_eval_term_ t1 (S, env, C) :: ts_past) ts_fut
             |   [] ->
                 match get_values (ts_past >>| fun t -> s_eval_term t (S, env, C)) with

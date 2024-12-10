@@ -337,7 +337,7 @@ let match_one_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_ty
 //     with ex -> type_error_fail ex  
 
 let match_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_types : list<TYPE list * TYPE>) : TYPE =
-    if !trace > 0 then fprintf stderr "match_fct_type(%s, %s)\n" fct_name (args_types |> type_list_to_string)
+    if !trace > 0 then fprintf stderr "\nfunction '%s': match_fct_type (%s) with:\n%s\n" fct_name (args_types |> type_list_to_string) (String.concat "," (sign_fct_types >>| fct_type_to_string))
     let rec matching_types results candidates =
         match candidates with
         |   [] -> results
@@ -348,7 +348,7 @@ let match_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_types 
                 with ex -> matching_types results candidates'
     let results = List.rev (matching_types [] sign_fct_types)
     match results with
-    |   [] -> failwith (sprintf "no matching function type found for '%s' with arguments of type(s) %s" fct_name (args_types |> type_list_to_string))
+    |   [] -> failwith (sprintf "no matching function type found for '%s' with arguments of type(s) (%s)" fct_name (args_types |> type_list_to_string))
     |   [ty] -> ty
     |   _ -> failwith (sprintf "ambiguous function call: multiple matching function types found for '%s' with arguments of type(s) %s" fct_name (args_types |> type_list_to_string))
 
