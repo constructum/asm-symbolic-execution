@@ -78,7 +78,7 @@ let rec term_induction (name : NAME -> 'name) (F : TERM_INDUCTION<'name, 'term>)
     |   AppTerm (f, ts) -> F.AppTerm (name f, List.map (fun t -> term_ind F t) ts)
     |   CondTerm (G, t1, t2) -> F.CondTerm (term_ind F G, term_ind F t1, term_ind F t2)
     |   VarTerm v -> (((F.VarTerm :string -> 'term) (v : string)) :'term)
-    |   QuantTerm -> failwith "QuantTerm not implemented"
+    |   QuantTerm -> failwith "term_induction: QuantTerm not implemented"
     |   LetTerm (x, t1, t2) -> F.LetTerm (x, term_ind F t1, term_ind F t2)
 
 //--------------------------------------------------------------------

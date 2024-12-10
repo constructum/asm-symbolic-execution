@@ -7,6 +7,10 @@ open SymbState
 
 //--------------------------------------------------------------------
 
+let trace = ref 1
+
+//--------------------------------------------------------------------
+
 type LOCATION = string * VALUE list
 
 let location_to_string : LOCATION -> string = Updates.location_to_string
@@ -17,23 +21,29 @@ type S_UPDATE = LOCATION * TERM
 type S_UPDATE_SET = Set<S_UPDATE>
 type S_UPDATE_MAP = Map<string, Map<VALUE list, TERM>>
 
-let add_s_update (U : S_UPDATE_MAP) (u as (loc as (f, args), value): S_UPDATE) =
-    Map.change f
-        ( function None -> Some (Map.add args value Map.empty)
-                 | Some table -> Some ( if Map.containsKey args table
-                                        then if value <> Map.find args table  // deal with conflicting updates
-                                             then failwith (sprintf "update set inconsistent at location %s" (loc |> location_to_string))
-                                             else table
-                                        else Map.add args value table ) )
-        U
-
-let s_update_set_to_s_update_map (U : S_UPDATE_SET) =
-    Set.fold add_s_update Map.empty U
-
 let show_s_update sign ((f, xs), t) =
     sprintf "%s := %s"
         (if List.isEmpty xs then f else sprintf "%s (%s)" f (String.concat ", " (List.map value_to_string xs)))
         (PrettyPrinting.toString 80 (pp_term sign t))
+
+let add_s_update (U : S_UPDATE_MAP) (u as (loc as (f, args), value): S_UPDATE) =
+    if !trace > 0 then fprintf stderr "add_s_update: %s\n" (show_s_update Background.signature u)
+    Map.change f
+        ( function None -> Some (Map.add args value Map.empty)
+                 | Some table ->
+                        Some (  if Map.containsKey args table
+                                then if value <> Map.find args table  // deal with conflicting updates
+                                     then failwith (sprintf
+                                            "SymbUpdates.add_s_update: update set inconsistent at location %s\n  existing update: %s\n  new_update: %s\n"
+                                                (loc |> location_to_string)
+                                                (show_s_update Background.signature (loc, Map.find args table))
+                                                (show_s_update Background.signature (loc, value)))
+                                     else table
+                                else Map.add args value table ) )
+        U
+
+let s_update_set_to_s_update_map (U : S_UPDATE_SET) =
+    Set.fold add_s_update Map.empty U
 
 let show_s_update_set sign (U :S_UPDATE_SET) =
     "{ " +

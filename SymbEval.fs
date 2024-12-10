@@ -190,7 +190,9 @@ and expand_term t (S, env, C) =
             |   _ -> AppTerm (f, ts >>| fun t -> t (S, env, C));
         CondTerm = fun (G, t1, t2) -> fun (S, env, C) -> CondTerm (G (S, env, C), t1 (S, env, C), t2 (S, env, C));
         VarTerm = fun v -> fun (S, env, C) -> VarTerm v;
-        LetTerm = fun (v, t1, t2) -> fun (S, env, C) -> failwith "SymbEval.expand_term: LetTerm: not_implemented"   // LetTerm (v, t1 (S, env, C), t2 (S, add_binding env (v, t1 (S, env, C), type, C))
+        LetTerm = fun (v, t1, t2) -> fun (S, env, C) ->
+                    let t1_val = t1 (S, env, C)
+                    t2 (S, add_binding env (v, t1_val, term_type (signature_of S) env t1_val), C)
     } t (S, env, C)
 
 and try_reducing_term_with_finite_range (S : S_STATE, env : ENV, C : CONTEXT) (t : TERM) : TERM =
@@ -232,13 +234,13 @@ and eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name, ts) =
     //if !trace > 0 then fprintfn stderr "|signature|=%d | eval_app_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) (AppTerm (fct_name, [])))
     let ts = ts >>| fun t -> t (S, env, C)
     let rec F ts_past = function
-        |   (t1 as Value x1 :: ts_fut)        -> F (t1 :: ts_past) ts_fut
-        |   (t1 as Initial (f, xs) :: ts_fut) -> F (t1 :: ts_past) ts_fut
-        |   (CondTerm (G1, t11, t12) :: ts_fut) -> s_eval_term_ (CondTerm (G1, F ts_past (t11 :: ts_fut), F ts_past (t12 :: ts_fut))) (S, env, C)
-        |   (QuantTerm :: ts_fut)            -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
-        |   (LetTerm (v, t1, t2) :: ts_fut)  -> failwith "SymbEval.eval_app_term: LetTerm not implemented"
-        |   (t1 as VarTerm v :: ts_fut)      -> F (s_eval_term_ t1 (S, env, C) :: ts_past) ts_fut
-        |   (t1 as AppTerm (_, _) :: ts_fut) -> F (s_eval_term_ t1 (S, env, C) :: ts_past) ts_fut
+        |   (t as Value x1 :: ts_fut)            -> F (t :: ts_past) ts_fut
+        |   (t as Initial (f, xs) :: ts_fut)     -> F (t :: ts_past) ts_fut
+        |   (CondTerm (G1, t11, t12) :: ts_fut)  -> s_eval_term_ (CondTerm (G1, F ts_past (t11 :: ts_fut), F ts_past (t12 :: ts_fut))) (S, env, C)
+        |   (t1 as QuantTerm :: ts_fut)          -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
+        |   (t as LetTerm (v, t1, t2) :: ts_fut) -> F (t :: ts_past) ts_fut
+        |   (t as VarTerm v :: ts_fut)           -> F (t :: ts_past) ts_fut
+        |   (t as AppTerm (_, _) :: ts_fut)      -> F (t :: ts_past) ts_fut
         |   [] ->
                 match (fct_name, ts) with
                 |   (FctName f, ts)    ->
@@ -285,8 +287,12 @@ and eval_cond_term (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) =
                         let (t1', t2') = (t1 (S, env, Set.add G C), t2 (S, env, Set.add (s_not G) C))
                         if t1' = t2' then t1' else CondTerm (G, t1', t2')
 
+and eval_let_term (S, env, C) (v, t1, t2) =
+    let t1 = t1 (S, env, C)
+    t2 (S, add_binding env (v, t1, term_type (signature_of S) env t1), C)       // !!!!! is this one correct at all?
+
 and s_eval_term_ t ((S, env, C) : S_STATE * ENV * CONTEXT) =
-//    if !trace > 0 then fprintfn stderr "|signature|=%d | s_eval_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) t)
+    //  if !trace > 0 then fprintfn stderr "|signature|=%d | s_eval_term %s%s\n" (Map.count (signature_of S)) (spaces !level) (term_to_string (signature_of S) t)
     //let t = try_reducing_term_with_finite_domain (S, env, C) t
     term_induction (fun x -> x) {
         Value    = fun x _ -> Value x;
@@ -294,7 +300,7 @@ and s_eval_term_ t ((S, env, C) : S_STATE * ENV * CONTEXT) =
         AppTerm  = fun (f, ts) -> fun (S, env, C) -> try_reducing_term_with_finite_range (S, env, C) (eval_app_term (S, env, C) (f, ts));
         CondTerm = fun (G, t1, t2) -> fun (S, env, C) -> eval_cond_term (S, env, C) (G, t1, t2);
         VarTerm  = fun v -> fun (S, env, _) -> fst (get_env env v);
-        LetTerm  = fun v -> fun (S, env, _) -> failwith "s_eval_term: LetTerm: not implemented yet"  // fun (v, t1, t2) -> fun (S, env) -> t2 (S, add_binding env (v, t1 (S, env)))
+        LetTerm  = fun (v, t1, t2) -> fun (S, env, _) -> eval_let_term (S, env, C) (v, t1, t2) //failwith "s_eval_term: LetTerm: not implemented yet"
     } t (S, env, C)
 
 and s_eval_term (t : TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TERM =
