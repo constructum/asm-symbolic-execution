@@ -105,14 +105,9 @@ let has_interpretation (S : STATE) (name : NAME) =
 
 //--------------------------------------------------------------------
 
-
-
-
-
-
 let fct_name_interpretation (S : STATE) (f : string) (args : VALUE list) =
     let kind = fct_kind f (signature_of S)
-    if !trace > 0 then fprintfn stderr "State.fct_name_interpretation: %s kind=%A" f kind
+    if !trace > 0 then fprintfn stderr "State.fct_name_interpretation: %s kind=%s" f (kind |> fct_kind_to_string)
     match kind with
     |   Constructor ->
             CELL (f, args)
@@ -127,7 +122,6 @@ let fct_name_interpretation (S : STATE) (f : string) (args : VALUE list) =
     |   _ -> failwith (sprintf "fct_name_interpretation: function '%s' is not static nor controlled" f)
 
 let interpretation (S : STATE) (name : NAME) =
-    if !trace > 0 then fprintfn stderr "|signature|=%d | State.interpretation of %A\n" (Map.count (signature_of S)) (name)
     match name with
     |   UndefConst -> (fun _ -> UNDEF)
     |   BoolConst b -> (fun _ -> BOOL b)

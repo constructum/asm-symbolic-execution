@@ -115,7 +115,6 @@ let fct_name_interpretation (S : S_STATE) (f : string) (args : VALUE list) =
 
 
 let interpretation (S : S_STATE) (name : NAME) =
-    if !trace > 0 then fprintfn stderr "|signature|=%d | SymbState.interpretation of %A\n" (Map.count (signature_of S)) (name)
     match name with
     |   UndefConst -> (fun _ -> Value UNDEF)
     |   BoolConst b -> (fun _ -> Value (BOOL b))

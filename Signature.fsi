@@ -54,6 +54,8 @@ type TYPE_KIND =
 | EnumType          // inductive types - AsmetaL: enum / abstract domains
 | SubsetType        // subset 'types'  - AsmetaL: concrete domains (i.e. subset of a basic or abstract domain)
 
+val type_kind_to_string : TYPE_KIND -> string
+
 type TYPE_INFO = {
     arity : int;
     type_kind : TYPE_KIND;

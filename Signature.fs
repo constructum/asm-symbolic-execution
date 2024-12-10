@@ -114,6 +114,12 @@ type TYPE_KIND =
 | EnumType          // inductive types - AsmetaL: enum / abstract domains
 | SubsetType        // subset 'types'  - AsmetaL: concrete domains (i.e. subset of a basic or abstract domain)
 
+let type_kind_to_string = function
+| BasicType -> "BasicType"
+| AnyType -> "AnyType"
+| EnumType -> "EnumType"
+| SubsetType -> "SubsetType"
+
 type TYPE_INFO = {
     arity : int;
     type_kind : TYPE_KIND;
@@ -203,7 +209,7 @@ let is_type_name name (sign : SIGNATURE) =
     with _ -> false
 
 let construct_type (sign : SIGNATURE) (tyname, tyargs) : TYPE =
-    if !trace > 1 then fprintf stderr "construct_type(%s, %A)\n" tyname tyargs
+    if !trace > 1 then fprintf stderr "construct_type(%s, %s)\n" tyname (tyargs |> type_list_to_string)
     if  // !!! temporary for AsmetaL compatibility: non-implemented types seen as user-defined base types
         tyname = "Complex" || tyname = "Real" || tyname = "Natural" || tyname = "Char"    // AsmetaL predefined basic domains
     then if List.isEmpty tyargs then TypeCons (tyname, tyargs) else failwith (sprintf "type '%s' does not expect type arguments" tyname)
@@ -342,7 +348,7 @@ let match_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_types 
         match candidates with
         |   [] -> results
         |   sign_fct_type :: candidates' ->
-                if !trace > 1 then fprintf stderr "  sign_fct_type = %A\n" sign_fct_type
+                if !trace > 1 then fprintf stderr "  sign_fct_type = %s\n" (sign_fct_type |> fct_type_to_string)
                 try match match_one_fct_type fct_name args_types sign_fct_type with
                     |   ty -> matching_types (ty :: results) candidates'
                 with ex -> matching_types results candidates'

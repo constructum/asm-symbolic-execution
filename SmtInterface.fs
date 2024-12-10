@@ -73,7 +73,7 @@ let smt_add_types_and_functions (C : SMT_CONTEXT) sign (new_sign : SIGNATURE, ne
                         C.typ := Map.add tyname enum_sort (!C.typ)
                         C.con := Common.map_override (!C.con) (Array.fold2 (fun m cons_name smt_expr -> Map.add cons_name smt_expr m) Map.empty constructor_names (enum_sort.Consts))
                 else    fprintf stderr "SmtInterface.add_type: warning: skipping abstract type '%s', because it has no elements (%s = { })\n" tyname tyname
-        else fprintf stderr "SmtInterface.add_type: warning: only enumerated types without type parameters are currently supported (type '%s' is of kind '%A' and has arity %d)\n" tyname kind ar
+        else fprintf stderr "SmtInterface.add_type: warning: only enumerated types without type parameters are currently supported (type '%s' is of kind '%s' and has arity %d)\n" tyname (kind |> Signature.type_kind_to_string) ar
     let add_function C fct_name =
         let (Ts_dom, T_ran) = fct_type fct_name new_sign
         let func_decl = ctx.MkFuncDecl (fct_name, Array.ofList (Ts_dom >>| smt_map_type C sign), smt_map_type C sign T_ran)
@@ -169,7 +169,6 @@ and smt_map_term sign C (t : TERM) : SMT_EXPR =
         |   CondTerm (G, t1, t2)        -> smt_map_ITE sign C (G, t1, t2)
         |   AppTerm (FctName f, ts)     -> smt_map_app_term sign C (f, ts)
         |   t -> failwith (sprintf "smt_map_term: not supported (t = %s)" (term_to_string sign t))
-    //if !trace > 0 then fprintf stderr "%A\n" (result)
     result
 
 //--------------------------------------------------------------------

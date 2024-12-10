@@ -77,7 +77,6 @@ let loadstr (asmeta_flag : bool) contents =
     initial_state_ := Some (state_with_signature (state_override (initial_state ()) new_state) (signature ()))
     rules_         := Some (rules_db_override (rules ()) new_rules_db)
     macros_        := Some (macro_db_override (macros ()) new_macro_db)
-    if !trace > 2 then fprintf stderr "%A\n---\n%A\n---\n%A\n---\n%A---\n" (signature ()) (initial_state ()) (rules ()) (macros ())
     smt_add_types_and_functions smt_ctx (signature()) (new_sign, new_state)
 
 let loadfile (asmeta_flag : bool) filename =

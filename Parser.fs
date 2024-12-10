@@ -195,13 +195,12 @@ let typecheck_app_term sign = function
     |   (fct_name, ts)  -> failwith ""
 
 let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TYPE =
+    if !trace > 0 then fprintf stderr "typecheck_term: %s\n" (t |> term_to_string sign)
     term_induction typecheck_name {
         Value    = fun x _ -> type_of_value sign x;
         AppTerm  = fun (f, ts) (sign, tyenv) ->
                         match f (sign, tyenv) with
-                        |   (FctName f, f_sign_types) ->  // fprintf stderr "typecheck_term %A\n" (f, (ts >>| fun t -> t (sign, tyenv)))
-                                                            if !trace > 0 then fprintf stderr "typecheck_term: match_fct_type 1 %A\n" (f, (ts >>| fun t -> t (sign, tyenv)))
-                                                            match_fct_type f (ts >>| fun t -> t (sign, tyenv)) f_sign_types
+                        |   (FctName f, f_sign_types) -> match_fct_type f (ts >>| fun t -> t (sign, tyenv)) f_sign_types
                         |   (_, [(_, f_ran)]) -> f_ran    // special constants UndefConst, BoolConst b, etc.
                         |   _ -> failwith "typecheck_term: AppTerm: this should not happen";
         CondTerm = fun (G, t1, t2) (sign, tyenv) ->
@@ -215,7 +214,7 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
                             else if t1 = t2 then t1
                             else failwith $"branches of conditional term have different types (then-branch: {t1 |> type_to_string}; else-branch: {t2 |> type_to_string})" )                                                  
         Initial  = fun (f, xs) (sign, tyenv) ->
-                        if !trace > 0 then fprintf stderr "typecheck_term: match_fct_type 2 %A\n" (AppTerm (FctName f, xs >>| Value) |> term_to_string sign)
+                        if !trace > 0 then fprintf stderr "typecheck_term: match_fct_type 2 %s\n" (AppTerm (FctName f, xs >>| Value) |> term_to_string sign)
                         match_fct_type f (xs >>| type_of_value sign) (fct_types f sign)
         VarTerm  = fun v -> fun (_, tyenv) -> try Map.find v tyenv with _ -> failwith $"variable '{v}' not defined";
         LetTerm  = fun (x, t1, t2) -> fun (sign, tyenv) ->
@@ -233,7 +232,6 @@ let typecheck_rule (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TY
                             let ts = ts >>| fun t -> t (sign, tyenv)
                             let t_type  = t (sign, tyenv)
                             let f_res_type = 
-                                if !trace > 0 then fprintf stderr "typecheck_rule: match_fct_type 3 %A\n" (f, ts)
                                 match_fct_type f ts (fct_types f sign)
                             if t_type <> f_res_type
                             then failwith (sprintf "type of right-hand side of update rule (%s) does not match type of function %s : %s -> %s"
@@ -488,5 +486,4 @@ let parse_rule sign s = parse_and_typecheck rule typecheck_rule (sign, empty_sta
 //let parse_definitions (sign, S) s = get_state_from_input (snd (make_parser definitions (sign, S) s))
 let parse_definitions (sign, S) s =
     let defs = fst (make_parser definitions (sign, S) s)
-    if !trace > 0 then fprintf stderr "parse_definitions: %A\n" defs
     defs

@@ -194,5 +194,6 @@ let rec pp_rule (sign : SIGNATURE) (R : RULE) =
         MacroRuleCall = fun (r, ts) -> blo0 [ str r; str "["; blo0 (pp_list [str",";brk 1] ts); str "]" ];
     } R
 
+let name_to_string t    = t |> pp_name |> PrettyPrinting.toString 80
 let term_to_string sign t    = t |> pp_term sign |> PrettyPrinting.toString 80
 let rule_to_string sign t    = t |> pp_rule sign |> PrettyPrinting.toString 80
