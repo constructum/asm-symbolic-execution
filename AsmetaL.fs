@@ -148,7 +148,11 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
         (   let AnyDomain = kw "anydomain" << ID_DOMAIN
                                 |>> fun tyname -> add_type_name tyname (0, AnyType, Some (fun _ -> TypeParam tyname))
             let EnumTD = (kw "enum" << kw "domain" << ID_DOMAIN) ++ (lit "=" << lit "{" << psep1 EnumElement (lit "," <|> lit "|") >> lit "}")
-                                |>> fun _ -> failwith "not implemented: enum type domain"
+                                |>> fun (tyname, cons_names) ->
+                                    fun sign ->
+                                    (   let sign' = add_type_name tyname (0, EnumType, Some (fun _ -> TypeCons (tyname, []))) sign
+                                        let sign'' = List.fold (fun sign f -> add_function_name f (Constructor, NonInfix, ([], TypeCons (tyname, []))) sign) sign' cons_names
+                                        sign'' )
             let AbstractTD = (popt_bool (kw "dynamic") >> kw "abstract" >> kw "domain") ++ ID_DOMAIN     // !!! what about 'dynamic'?
                                 |>> fun (is_dynamic, tyname) ->
                                         add_type_name tyname (0, EnumType, Some (fun _ -> TypeCons (tyname, [])))
