@@ -14,16 +14,20 @@ let usage () =
             "Options:"
             "  -str <strg>   load definitions specified in string <strg>"
             "                  into the top-level environment"
-            "  -file <file>  load definitions contained in file <filename>"
+            "  -file <file>  load definitions contained in file <file>"
             "                  into top-level environment"
             ""
             "  -asmeta       use AsmetaL as input language"
             ""
             "  -symbolic     symbolic execution of 'Main' rule (default)"
+            "  -steps <n>    symbolic execution of <n> steps of 'Main' rule"
+            "                  starting from initial state (default: n = 1)"
+            ""
             "  -nonsymbolic  execute 'Main' rule non-symbolically"
             ""
+            ""
             "  -turbo2basic  turbo ASM to basic ASM transformation"
-            "                (all non-static functions are uninterpreted)"
+            "                  (all non-static functions are uninterpreted)"
             ""
             "  -nosmt        do not use SMT solver"
             ""
@@ -130,6 +134,7 @@ let CLI_with_ex(args) =
     then usage (); 0
     else
         let symbolic = ref true
+        let steps = ref 1
         let turbo2basic = ref false
         let asmeta_flag = ref false
         let objects_to_load = ref []
@@ -140,6 +145,7 @@ let CLI_with_ex(args) =
                 |   "-license"     -> license (); exit 0
                 |   "-asmeta"      -> asmeta_flag := true; main_rule_name := "r_Main"; parse_arguments (i+1)
                 |   "-symbolic"    -> symbolic := true;    parse_arguments (i+1)
+                |   "-steps"       -> steps := int (args[i+1]); parse_arguments (i+2)
                 |   "-nonsymbolic" -> symbolic := false;   parse_arguments (i+1)
                 |   "-turbo2basic" -> turbo2basic := true; parse_arguments (i+1)
                 |   "-nosmt"       -> SymbEval.use_smt_solver := false; parse_arguments (i+1)
@@ -157,7 +163,7 @@ let CLI_with_ex(args) =
         if !turbo2basic
         then exec_symbolic SymbEval.symbolic_execution_for_turbo_asm_to_basic_asm_transformation (!main_rule_name)
         else if !symbolic
-        then exec_symbolic SymbEval.symbolic_execution (!main_rule_name)
+        then exec_symbolic (fun R -> SymbEval.symbolic_execution R (!steps)) (!main_rule_name)
         else exec_nonsymbolic (!main_rule_name)
         0
 
