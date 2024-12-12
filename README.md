@@ -46,7 +46,6 @@ Options:
 
   -nonsymbolic  execute 'Main' rule non-symbolically
 
-
   -turbo2basic  turbo ASM to basic ASM transformation
                   (all non-static functions are uninterpreted)
 
