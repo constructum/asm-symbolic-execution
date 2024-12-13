@@ -38,7 +38,11 @@ let rec eval_term t =
         CondTerm = fun (G, t1, t2) -> fun (S, env) -> if G (S, env) = BOOL true then t1 (S, env) else t2 (S, env);
         Initial  = fun _ -> failwith "Eval.eval_term not defined on 'InitLoc' terms";
         VarTerm  = fun v -> fun (S, env) -> get_env env v;
-        LetTerm = fun (v, t1, t2) -> fun (S, env) -> t2 (S, add_binding env (v, t1 (S, env)))
+        LetTerm = fun (v, t1, t2) -> fun (S, env) -> t2 (S, add_binding env (v, t1 (S, env)));
+        DomainTerm = fun ty -> fun (S, env) ->
+                        match enum_finite_type ty S with
+                        |   Some finset -> SET finset
+                        |   None -> failwith (sprintf "Eval.eval_term: domain of type '%s' is not enumerable" (ty |> Signature.type_to_string));
     } t
 
 //--------------------------------------------------------------------

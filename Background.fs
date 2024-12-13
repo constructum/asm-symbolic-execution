@@ -13,6 +13,7 @@ type VALUE =
 | INT of int
 | STRING of string
 | CELL of string * VALUE list     // for values of user-defined inductive data types
+| SET of VALUE Set                // for sets of values
 //| TUPLE of VALUE list
 
 let TRUE = BOOL true
@@ -23,14 +24,16 @@ let rec value_to_string = function
 |   BOOL b -> if b then "true" else "false"
 |   INT i -> i.ToString ()
 |   STRING s -> "\"" + s + "\""
+|   SET s -> "{" + (s |> Set.toList |> List.map value_to_string |> String.concat ", ") + "}"
 |   CELL (tag, args) -> if List.isEmpty args then tag else tag + " (" + (args >>| value_to_string |> String.concat ", ") + ")"
 
-let type_of_value (sign : SIGNATURE) (x : VALUE) =
+let rec type_of_value (sign : SIGNATURE) (x : VALUE) =
     match x with
     |   UNDEF    -> Undef
     |   BOOL b   -> Boolean
     |   INT i    -> Integer
     |   STRING s -> String
+    |   SET ty    -> failwith "type_of_value: SET not implemented"
     |   CELL (tag, _) -> let (_, ran) = fct_type tag sign in ran
 
 //--------------------------------------------------------------------

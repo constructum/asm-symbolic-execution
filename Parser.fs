@@ -219,7 +219,8 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
         VarTerm  = fun v -> fun (_, tyenv) -> try Map.find v tyenv with _ -> failwith $"variable '{v}' not defined";
         LetTerm  = fun (x, t1, t2) -> fun (sign, tyenv) ->
                         let t1 = t1 (sign, tyenv)
-                        t2 (sign, Map.add x t1 tyenv)
+                        t2 (sign, Map.add x t1 tyenv);
+        DomainTerm = fun ty -> fun _ -> Powerset ty
     } t (sign, tyenv)
 
 let typecheck_rule (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TYPE =

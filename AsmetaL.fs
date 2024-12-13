@@ -93,8 +93,6 @@ let alphanumeric_identifier =
 
 let identifier = alphanumeric_identifier
 
-let Term = Parser.term
-
 let (popt_bool, psep0, psep1, psep1_lit, psep2_lit, opt_psep1, opt_psep2) =
     (Parser.popt_bool, Parser.psep0, Parser.psep1, Parser.psep1_lit, Parser.psep2_lit, Parser.opt_psep1, Parser.opt_psep2)
 
@@ -111,7 +109,8 @@ let MOD_ID =
 let ID_DOMAIN = identifier   //!!!! not exactly
 let ID_ENUM = identifier      //!!!! not exactly
 let ID_FUNCTION = identifier  //!!!! not exactly
-let ID_VARIABLE = pchar '$' ++ identifier |>> fun (c, s) -> c.ToString() + s
+
+let ID_VARIABLE = ws_or_comment << (pchar '$' ++ (pletter ++ (pmany palphanum_))) |>> fun (c1, (c2, s)) -> implode (c1 :: c2 :: s)
 let ID_RULE = identifier  //!!!! not exactly
 let ID_CTL = identifier       //!!!! not exactly
 let ID_LTL = identifier
@@ -151,17 +150,29 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
                                 |>> fun (tyname, cons_names) ->
                                     fun sign ->
                                     (   let sign' = add_type_name tyname (0, EnumType, Some (fun _ -> TypeCons (tyname, []))) sign
-                                        let sign'' = List.fold (fun sign f -> add_function_name f (Constructor, NonInfix, ([], TypeCons (tyname, []))) sign) sign' cons_names
-                                        sign'' )
+                                        List.fold (fun sign f -> add_function_name f (Constructor, NonInfix, ([], TypeCons (tyname, []))) sign) sign' cons_names)
             let AbstractTD = (popt_bool (kw "dynamic") >> kw "abstract" >> kw "domain") ++ ID_DOMAIN     // !!! what about 'dynamic'?
                                 |>> fun (is_dynamic, tyname) ->
-                                        add_type_name tyname (0, EnumType, Some (fun _ -> TypeCons (tyname, [])))
+                                    if is_dynamic
+                                    then failwith (sprintf "not implemented: dynamic abstract domain ('%s')" tyname)
+                                    else add_type_name tyname (0, EnumType, Some (fun _ -> TypeCons (tyname, [])))
             let BasicTD = (kw "basic" << kw "domain" << ID_DOMAIN) |>> fun tyname -> add_basic_domain tyname
             AnyDomain <|> EnumTD <|> AbstractTD <|> BasicTD ) s
 
 let Domain (s : ParserInput<PARSER_STATE>) =
     ((ConcreteDomain <|> TypeDomain) ||>> fun (sign, state) update_sign_fct -> (update_sign_fct sign, state)) s
 
+let Term s =
+    if !trace > 0 then fprintf stderr "AsmetaL.Term\n"
+    let DomainTerm s =
+        if !trace > 0 then fprintf stderr "AsmetaL.DomainTerm\n"
+        try ( getDomainByID s )
+        with _ -> ParserFailure (combine_failures (Set.singleton (get_pos s, ($"type name expected, '{s}' found")), get_failures s))
+    let regularTerm s =
+        if !trace > 0 then fprintf stderr "Parser.term\n"
+        Parser.term s
+    (   ( DomainTerm  |>> fun tyname -> AST.DomainTerm tyname )
+    <|> ( regularTerm ) ) s
 
 let add_function_name f (kind, infix, (tys, ty)) sign =
     //!!! little hack to avoid overwriting of predefined background functions by Asmeta StandardLibrary.asm
@@ -226,19 +237,20 @@ let switch_to_cond_rule (t, cases : (TERM * RULE) list, otherwise : RULE option)
 // ---------------------------------
 
 let rec BasicRule (s : ParserInput<PARSER_STATE>) =
-    let sign = get_signature_from_input s
-    let BlockRule = kw "par" << pmany1 Rule >> kw "endpar" |>> ParRule
+    let BlockRule       = kw "par" << pmany1 Rule >> kw "endpar" |>> ParRule
     let ConditionalRule = R3 (kw "if" << Term) (kw "then" << Rule) (poption (kw "else" << Rule) |>> Option.defaultValue skipRule) >> kw "endif" |>> CondRule
-    let VariableTerm = ID_VARIABLE
+    let VariableTerm    = ID_VARIABLE
     let LetRule    = R2 (kw "let" << lit "(" << (psep1_lit ((VariableTerm >> lit "=") ++ Term) ",") >> lit ")")
-                        (kw "in" << Rule) >> (kw "endlet")
+                         (kw "in" << Rule) >> (kw "endlet")
                         |>> ( function
                                 | ([(v, t)], R) -> LetRule (v, t, R)
                                 | (v_t_list, R) -> let_rule_with_multiple_bindings v_t_list R )
-    let ChooseRule = R4 (kw "choose" << psep1_lit ((ID_VARIABLE >> kw "in") ++ Term) ",") (kw "with" << Term) (kw "do" << Rule) (poption (kw "ifnone" << Rule))
-                        |>> fun _ -> failwith "not implemented: choose rule"
-    let ForallRule = R3 (kw "forall" << psep1_lit ((ID_VARIABLE >> kw "in") ++ Term) ",") (kw "with" << Term) (kw "do" << Rule)
-                        |>> fun _ -> failwith "not implemented: forall rule"
+    let ChooseRule = R4 (kw "choose" << psep1_lit ((VariableTerm >> kw "in") ++ Term) ",")
+                        (kw "with" << Term) (kw "do" << Rule) (poption (kw "ifnone" << Rule))
+                            |>> fun _ -> failwith "not implemented: choose rule"
+    let ForallRule = R3 (kw "forall" << (psep1_lit ((VariableTerm >> kw "in") ++ Term) ","))
+                        (kw "with" << Term) (kw "do" << Rule)
+                            |>> fun _ -> failwith "not implemented: forall rule"
     (   kw "skip" |>> fun _ -> skipRule
     <|> BlockRule
     <|> ConditionalRule
@@ -252,8 +264,8 @@ let rec BasicRule (s : ParserInput<PARSER_STATE>) =
 and MacroCallRule = ((ID_RULE >> lit "[") ++ (psep0 Term (lit ",") >> lit "]")) |>> MacroRuleCall
 
 and TurboRule (s : ParserInput<PARSER_STATE>) =
-    let sign = get_signature_from_input s
-    let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
+    //let sign = get_signature_from_input s
+    //let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
     let SeqRule = kw "seq" << pmany1 Rule >> kw "endseq" |>> AST.SeqRule
     let IterateRule = kw "iterate" << Rule >> kw "enditerate" |>> IterRule
     (   SeqRule
@@ -281,12 +293,12 @@ and Rule (s : ParserInput<PARSER_STATE>) =
     let sign = get_signature_from_input s
     let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
     let UpdateRule = (R3 (Term) (lit ":=") Term) |>> fun (t1,_,t2) -> Parser.mkUpdateRule sign (t1, t2)   // !!!! not exactly as in AsmetaL grammar
-    (   UpdateRule
-    <|> BasicRule
+    (   BasicRule
     <|> TurboRule
     // <|> TurboReturnRule
     // <|> TermAsRule
     <|> DerivedRule
+    <|> UpdateRule          // update rule is last, because for the previous ones parsing failure is easy to detect
     ) s
 
 

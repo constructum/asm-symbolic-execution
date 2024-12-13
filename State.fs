@@ -93,6 +93,30 @@ let extend_with_carrier_sets (sign : SIGNATURE, S : STATE) : STATE =
                 { S with _carrier_sets = Map.add tyname (Some (Set.map (fun c -> CELL (c, [])) constructor_names)) S._carrier_sets }
     Set.fold add_carrier_set S type_names
 
+
+let boolean_carrier_set = Set.ofList [ BOOL true; BOOL false ];
+let undef_carrier_set = Set.ofList [ UNDEF ];
+
+let enum_finite_type (ty : TYPE) (S : STATE) =
+    match ty with
+    |   Boolean -> Some boolean_carrier_set
+    |   Integer -> None
+    |   String  -> None
+    |   Undef   -> Some undef_carrier_set
+    |   Rule    ->
+            try Some (Option.get (Map.find "Rule" (S._carrier_sets)))
+            with _ -> failwith "SymbState.enum_finite_type: carrier set of 'Rule' not found or not defined"  // not found: not in map; not defined: None
+    |   TypeParam _ -> None
+    |   TypeCons (tyname, []) ->
+            try Some (Option.get (Map.find tyname (S._carrier_sets)))
+            with _ -> failwith (sprintf "SymbState.enum_finite_type: carrier set of '%s' not found" tyname)
+    |   TypeCons (tyname, _)  -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for user-defined type '%s' with type arity > 0" tyname)
+    |   Prod _  -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for '%s'" (type_to_string ty))
+    |   Seq _   -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for '%s'" (type_to_string ty))
+    |   Powerset _ -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for '%s'" (type_to_string ty))
+    |   Bag _ -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for '%s'" (type_to_string ty))
+    |   Map _ -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for '%s'" (type_to_string ty))
+
 //--------------------------------------------------------------------
 
 let fct_name_has_interpretation (S : STATE) (f : string) =

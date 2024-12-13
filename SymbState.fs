@@ -55,28 +55,14 @@ let show_s_state (S : S_STATE) =
 
 //--------------------------------------------------------------------
 
-let boolean_carrier_set = Set.ofList [ BOOL true; BOOL false ];
-let undef_carrier_set = Set.ofList [ UNDEF ];
-
-let enum_finite_range (ty : TYPE) (S : S_STATE) =
-    match ty with
-    |   Boolean -> Some boolean_carrier_set
-    |   Integer -> None
-    |   String  -> None
-    |   Undef   -> Some undef_carrier_set
-    |   Rule    ->
-            try Some (Option.get (Map.find "Rule" (S._carrier_sets)))
-            with _ -> failwith "enum_finite_domain: carrier set of 'Rule' not found or not defined"  // not found: not in map; not defined: None
-    |   TypeParam _ -> None
-    |   TypeCons (tyname, []) ->
-            try Some (Option.get (Map.find tyname (S._carrier_sets)))
-            with _ -> failwith (sprintf "enum_finite_domain: carrier set of '%s' not found" tyname)
-    |   TypeCons (tyname, _)  -> failwith (sprintf "enum_finite_domain: not yet implemented for user-defined type '%s' with type arity > 0" tyname)
-    |   Prod _  -> failwith (sprintf "enum_finite_domain: not yet implemented for '%s'" (type_to_string ty))
-    |   Seq _   -> failwith (sprintf "enum_finite_domain: not yet implemented for '%s'" (type_to_string ty))
-    |   Powerset _ -> failwith (sprintf "enum_finite_domain: not yet implemented for '%s'" (type_to_string ty))
-    |   Bag _ -> failwith (sprintf "enum_finite_domain: not yet implemented for '%s'" (type_to_string ty))
-    |   Map _ -> failwith (sprintf "enum_finite_domain: not yet implemented for '%s'" (type_to_string ty))
+let enum_finite_type (ty : TYPE) (S : S_STATE) =
+    State.enum_finite_type ty {
+        _signature = S._signature;
+        _carrier_sets = S._carrier_sets;
+        _static = Map.empty;
+        _dynamic = Map.empty;
+        _dynamic_initial = Map.empty;
+    }
 
 //--------------------------------------------------------------------
 

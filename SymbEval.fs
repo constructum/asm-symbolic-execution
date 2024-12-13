@@ -142,6 +142,7 @@ let term_type sign (env : ENV) =
         CondTerm = function (G, t1, t2) -> t1;
         VarTerm  = fun v -> get_env env v |> snd;
         LetTerm  = fun _ -> failwith "term_type: LetTerm not implemented yet";
+        DomainTerm = fun ty -> Powerset ty
     }
 
 //---------------------------------------------------
@@ -192,11 +193,12 @@ and expand_term t (S, env, C) =
         VarTerm = fun v -> fun (S, env, C) -> VarTerm v;
         LetTerm = fun (v, t1, t2) -> fun (S, env, C) ->
                     let t1_val = t1 (S, env, C)
-                    t2 (S, add_binding env (v, t1_val, term_type (signature_of S) env t1_val), C)
+                    t2 (S, add_binding env (v, t1_val, term_type (signature_of S) env t1_val), C);
+        DomainTerm = fun ty -> fun (S, env, C) -> Value (SET (enum_finite_type ty S |> Option.defaultValue (failwith (sprintf "SymbEval.expand_term: domain of type '%s' is not enumerable" (ty |> type_to_string)))))
     } t (S, env, C)
 
 and try_reducing_term_with_finite_range (S : S_STATE, env : ENV, C : CONTEXT) (t : TERM) : TERM =
-    let opt_elems = try enum_finite_range (term_type (signature_of S) env t) S with _ -> None
+    let opt_elems = try enum_finite_type (term_type (signature_of S) env t) S with _ -> None
     match t with
     |   Initial _ ->
         match opt_elems with
@@ -220,7 +222,7 @@ and try_case_distinction_for_term_with_finite_range (S : S_STATE, env : ENV, C :
         Parser.switch_to_cond_term (t, List.map (fun (elem, term) -> (Value elem, term)) elem_term_pairs_without_last, snd (List.head (last_elem_term_pair)))
     let rec F past_args = function
         |   (t1 :: ts) ->
-                match (try enum_finite_range (term_type (signature_of S) env t1) S with _ -> None) with
+                match (try enum_finite_type (term_type (signature_of S) env t1) S with _ -> None) with
                 |   None ->
                         failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
                                     f (term_to_string (signature_of S) (AppTerm (FctName f, ts))))
@@ -241,6 +243,7 @@ and eval_app_term (S : S_STATE, env : ENV, C : CONTEXT) (fct_name, ts) =
         |   (t as LetTerm (v, t1, t2) :: ts_fut) -> F (t :: ts_past) ts_fut
         |   (t as VarTerm v :: ts_fut)           -> F (t :: ts_past) ts_fut
         |   (t as AppTerm (_, _) :: ts_fut)      -> F (t :: ts_past) ts_fut
+        |   (t as DomainTerm _ :: ts_fut)        -> failwith "SymbEval.eval_app_term: DomainTerm not implemented"
         |   [] ->
                 match (fct_name, ts) with
                 |   (FctName f, ts)    ->
@@ -300,7 +303,8 @@ and s_eval_term_ t ((S, env, C) : S_STATE * ENV * CONTEXT) =
         AppTerm  = fun (f, ts) -> fun (S, env, C) -> try_reducing_term_with_finite_range (S, env, C) (eval_app_term (S, env, C) (f, ts));
         CondTerm = fun (G, t1, t2) -> fun (S, env, C) -> eval_cond_term (S, env, C) (G, t1, t2);
         VarTerm  = fun v -> fun (S, env, _) -> fst (get_env env v);
-        LetTerm  = fun (v, t1, t2) -> fun (S, env, _) -> eval_let_term (S, env, C) (v, t1, t2) //failwith "s_eval_term: LetTerm: not implemented yet"
+        LetTerm  = fun (v, t1, t2) -> fun (S, env, _) -> eval_let_term (S, env, C) (v, t1, t2) //failwith "s_eval_term: LetTerm: not implemented yet";
+        DomainTerm = fun ty -> fun (S, env, C) -> Value (SET (enum_finite_type ty S |> Option.defaultValue (failwith (sprintf "SymbEval.expand_term: domain of type '%s' is not enumerable" (ty |> type_to_string)))))
     } t (S, env, C)
 
 and s_eval_term (t : TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TERM =
@@ -324,7 +328,7 @@ let rec try_case_distinction_for_update_with_finite_domain (S : S_STATE, env : E
         Parser.switch_to_cond_rule (t, List.map (fun (elem, term) -> (Value elem, term)) elem_term_pairs_without_last, snd (List.head (last_elem_term_pair)))
     let rec F past_args = function
         |   (t1 :: ts) ->
-                match (try enum_finite_range (term_type (signature_of S) env t1) S with _ -> None) with
+                match (try enum_finite_type (term_type (signature_of S) env t1) S with _ -> None) with
                 |   None ->
                         failwith (sprintf "location (%s, (%s)) on the lhs of update cannot be fully evaluated"
                                     f (String.concat "," (ts >>| term_to_string (signature_of S))))
@@ -358,6 +362,7 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
             |   (LetTerm (v, t1, t2) :: ts_fut)  -> failwith "SymbEval.eval_app_term: LetTerm not implemented"
             |   (t1 as VarTerm v :: ts_fut)      -> F (s_eval_term_ t1 (S, env, C) :: ts_past) ts_fut
             |   (t1 as AppTerm (_, _) :: ts_fut) -> F (s_eval_term_ t1 (S, env, C) :: ts_past) ts_fut
+            |   (t1 as DomainTerm _ :: ts_fut)   -> failwith "SymbEval.eval_app_term: DomainTerm not implemented"
             |   [] ->
                 match get_values (ts_past >>| fun t -> s_eval_term t (S, env, C)) with
                 |   Some xs -> S_Updates (Set.singleton ((f, xs), s_eval_term t_rhs (S, env, C)));
@@ -467,6 +472,8 @@ let rec reconvert_value x =
     |   BOOL b   -> AppTerm (BoolConst b, [])
     |   INT i    -> AppTerm (IntConst i, [])
     |   STRING s -> AppTerm (StringConst s, [])
+    |   SET fs   -> //AppTerm (FctName "asSet", ?????)
+                    failwith "reconvert_value: SET not implemented yet"
     |   CELL (tag, args) -> AppTerm (FctName tag, args >>| reconvert_value)
 
 let reconvert_term t =
@@ -477,6 +484,7 @@ let reconvert_term t =
         CondTerm = CondTerm;
         VarTerm  = VarTerm;
         LetTerm  = LetTerm;
+        DomainTerm = failwith "reconvert_term: DomainTerm not implemented yet"
     } t
 
 let reconvert_rule R = 

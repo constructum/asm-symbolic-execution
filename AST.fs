@@ -15,6 +15,7 @@ type TERM =
 | VarTerm of string
 | QuantTerm
 | LetTerm of string * TERM * TERM
+| DomainTerm of TYPE                  // AsmetaL construct: finite type (e.g. enum, abstract, subsetof) used as finite set
 //  | TupleTerm of TERM list
 
 type RULE =
@@ -67,7 +68,8 @@ type TERM_INDUCTION<'name, 'term> = {
     AppTerm  : 'name * 'term list -> 'term;
     CondTerm : 'term * 'term * 'term -> 'term;
     VarTerm  : string -> 'term;
-    LetTerm  : string * 'term * 'term -> 'term
+    LetTerm  : string * 'term * 'term -> 'term;
+    DomainTerm : TYPE -> 'term;
 }
 
 let rec term_induction (name : NAME -> 'name) (F : TERM_INDUCTION<'name, 'term>) (t : TERM) :'term =
@@ -80,6 +82,7 @@ let rec term_induction (name : NAME -> 'name) (F : TERM_INDUCTION<'name, 'term>)
     |   VarTerm v -> (((F.VarTerm :string -> 'term) (v : string)) :'term)
     |   QuantTerm -> failwith "term_induction: QuantTerm not implemented"
     |   LetTerm (x, t1, t2) -> F.LetTerm (x, term_ind F t1, term_ind F t2)
+    |   DomainTerm tyname -> F.DomainTerm tyname
 
 //--------------------------------------------------------------------
 
@@ -122,6 +125,7 @@ let rec term_size t =
         Initial = fun _ -> 1;
         VarTerm = fun _ -> 1;
         LetTerm = fun (x, t1, t2) -> 1 + t1 + t2;
+        DomainTerm = fun _ -> 1;
     } t
 
 let rule_size = rule_induction term_size {
@@ -175,6 +179,7 @@ let rec pp_term (sign : SIGNATURE) (t : TERM) =
         Initial  = fun (f, xs) -> pp_location_term "initial" (f, xs);
         VarTerm = fun x -> str x;
         LetTerm = fun (v, t1, t2) -> blo0 [ str "let "; str v; str " = "; t1; line_brk; str "in "; t2; line_brk; str "endlet" ];
+        DomainTerm = fun tyname -> str (type_to_string tyname);
     } t
 
 let rec pp_rule (sign : SIGNATURE) (R : RULE) =
