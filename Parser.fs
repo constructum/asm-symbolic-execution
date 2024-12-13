@@ -251,6 +251,10 @@ let typecheck_rule (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TY
         SeqRule    = fun Rs (sign, tyenv) -> let _ = Rs >>| fun R -> R (sign, tyenv) in Rule;
         IterRule   = fun R (sign, tyenv) -> let _ = R (sign, tyenv) in Rule;
         LetRule    = fun (v, t, R) (sign, tyenv) -> R (sign, Map.add v (t (sign, tyenv)) tyenv);
+        ForallRule = fun (v, t_set, t_filter, R) (sign, tyenv) ->
+                        match t_set (sign, tyenv) with
+                        |   Powerset ty -> let _ = t_filter (sign, Map.add v ty tyenv) in R (sign, Map.add v ty tyenv)
+                        |   _ -> failwith "typecheck_rule: ForallRule: type error";
         MacroRuleCall = fun (r, ts) (sign, tyenv) -> let _ = ts >>| fun t -> t (sign, tyenv) in Rule;  //!!! tbd: type-check types that types of terms matches parameter types
     } R (sign, tyenv)
 

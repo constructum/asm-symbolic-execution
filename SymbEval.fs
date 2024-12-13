@@ -180,14 +180,6 @@ and expand_term t (S, env, C) =
                             List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (S, env, C), term_type (signature_of S) env arg)) env formals ts
                         s_eval_term body (S, env', C)
                     else AppTerm (f, ts >>| fun t -> t (S, env, C))
-        (* // from macro rule call:
-        let (formals, body) =
-            try Map.find r (TopLevel.rules ())     // !!! should not use global TopLevel.rules
-            with _ -> failwith (sprintf "SymbEval.s_eval_rule: macro rule %s not found" r)
-        let env' =
-            List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (S, env, C), term_type (signature_of S) env arg)) env formals args
-        s_eval_rule body (S, env', C)
-        *)
             |   _ -> AppTerm (f, ts >>| fun t -> t (S, env, C));
         CondTerm = fun (G, t1, t2) -> fun (S, env, C) -> CondTerm (G (S, env, C), t1 (S, env, C), t2 (S, env, C));
         VarTerm = fun v -> fun (S, env, C) -> VarTerm v;
@@ -438,6 +430,16 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
     and eval_let (v, t, R) (S, env, C) =
         s_eval_rule R (S, add_binding env (v, s_eval_term t (S, env, C), term_type (signature_of S) env t), C)       // !!!!! is this one correct at all?
 
+    and eval_forall (v, ts, G, R) (S, env, C) =
+        match ts with
+        |   Value (SET xs) ->
+                let eval_instance x =
+                    let env' = add_binding env (v, Value x, term_type (signature_of S) env (Value x))
+                    CondRule (s_eval_term G (S, env', C), s_eval_rule R (S, env', C), skipRule)
+                let Rs = List.map (fun x -> eval_instance x) (Set.toList xs)
+                s_eval_rule (ParRule Rs) (S, env, C)
+        |   _ -> failwith (sprintf "SymbEval.forall_rule: not a set (%A)" ts)
+
     and eval_macro_rule_call (r, args) (S, env, C) =
         let (formals, body) =
             try Map.find r (TopLevel.rules ())     // !!! should not use global TopLevel.rules
@@ -454,6 +456,7 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
         |   SeqRule Rs              -> eval_seq Rs (S, env, C)
         |   IterRule R              -> eval_iter R (S, env, C)
         |   LetRule (v, t, R)       -> eval_let (v, t, R) (S, env, C) 
+        |   ForallRule (v, t, G, R) -> eval_forall (v, t, G, R) (S, env, C) 
         |   MacroRuleCall (r, args) -> eval_macro_rule_call (r, args) (S, env, C)
         |   S_Updates S             -> S_Updates S
 
@@ -496,6 +499,7 @@ let reconvert_rule R =
         IterRule   = IterRule;
         LetRule    = LetRule;
         MacroRuleCall = MacroRuleCall;
+        ForallRule = ForallRule;
         S_Updates  = fun upds -> ParRule (List.map (fun ((f, xs), t_rhs) -> UpdateRule ((f, xs >>| Value), reconvert_term t_rhs)) (Set.toList upds))
     } R
 
@@ -509,6 +513,7 @@ let count_s_updates = rule_induction (fun _ -> ()) {
     IterRule  = fun _ -> failwith "there should be no IterRule here";
     LetRule   = fun _ -> failwith "there should be no LetRule here";
     MacroRuleCall = fun _ -> failwith "there should be no MacroRuleCall here";
+    ForallRule = fun _ -> failwith "there should be no ForallRule here";
     S_Updates = fun _ -> 1;   // not relevant, but define somehow to allow printing for debugging
 }
 

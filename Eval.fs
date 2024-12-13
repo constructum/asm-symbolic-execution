@@ -57,14 +57,24 @@ let rec iterate R (S : STATE, env : ENV) =
         then U
         else Updates.seq_merge_2 U (iterate R (Updates.sequel_state S U, env))
 
+let forall_rule (v, ts, G, R) (S : STATE, env : ENV) : Updates.UPDATE_SET=
+    match ts (S, env) with
+    |   SET xs ->
+            let eval_instance x =
+                let env' = add_binding env (v, x)
+                in if G (S, env') = BOOL true then R (S, env') else Set.empty
+            Set.fold (fun U1 x -> Set.union U1 (eval_instance x)) Set.empty xs
+    |   _ -> failwith "Eval.forall_rule: not a set"
+
 let eval_rule = rule_induction eval_term ({
     S_Updates = fun s_updates -> fun (S, env) -> Set.unionMany (List.map (fun (loc, t_rhs) -> Set.singleton (loc, eval_term t_rhs (S, env))) (Set.toList s_updates))
     UpdateRule = fun ((f, ts), t) -> fun (S : STATE, env : ENV) -> Set.singleton ((f, ts >>| fun t -> t (S, env)), t (S, env));
-    CondRule = fun (G, R1, R2) -> fun (S, env) -> if G (S, env) = BOOL true then R1 (S, env) else R2 (S, env);
-    ParRule = fun Rs -> fun (S, env) -> Set.unionMany (Rs >>| fun R -> R (S, env));
-    SeqRule = fun Rs -> List.fold binary_seq (fun (S, env) -> Set.empty) Rs;
-    IterRule = iterate;
-    LetRule = fun (v, t, R) -> fun (S, env) -> R (S, add_binding env (v, t (S, env)));
+    CondRule  = fun (G, R1, R2) -> fun (S, env) -> if G (S, env) = BOOL true then R1 (S, env) else R2 (S, env);
+    ParRule   = fun Rs -> fun (S, env) -> Set.unionMany (Rs >>| fun R -> R (S, env));
+    SeqRule   = fun Rs -> List.fold binary_seq (fun (S, env) -> Set.empty) Rs;
+    IterRule  = iterate;
+    LetRule   = fun (v, t, R) -> fun (S, env) -> R (S, add_binding env (v, t (S, env)));
+    ForallRule = fun (v, t_set, t_filter, R) -> fun (S, env) -> forall_rule (v, t_set, t_filter, R) (S, env);
     MacroRuleCall = fun (r, ts) -> fun (S, env) -> failwith (sprintf "Eval.eval_rule not implemented on MacroRuleCall '%s'" r);
 })
 

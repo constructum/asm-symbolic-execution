@@ -231,6 +231,13 @@ let let_rule_with_multiple_bindings v_t_list R =
     |   (v, t) :: v_t_list -> LetRule (v, t, mk_let_rule v_t_list)
     in mk_let_rule v_t_list
 
+let forall_rule_with_multiple_bindings v_tset_list t_filter R =
+    let rec mk_forall_rule = function
+    |   [] -> failwith "forall_rule_with_multiple_bindings: empty list of bindings"
+    |   [(v, t)] -> ForallRule (v, t, t_filter, R)
+    |   (v, t) :: v_t_list -> ForallRule (v, t, AppTerm (BoolConst true, []), mk_forall_rule v_t_list)
+    in mk_forall_rule v_tset_list
+
 let switch_to_cond_rule (t, cases : (TERM * RULE) list, otherwise : RULE option) =
     Parser.switch_to_cond_rule (t, cases, match otherwise with Some R -> R | None -> skipRule)
 
@@ -250,7 +257,7 @@ let rec BasicRule (s : ParserInput<PARSER_STATE>) =
                             |>> fun _ -> failwith "not implemented: choose rule"
     let ForallRule = R3 (kw "forall" << (psep1_lit ((VariableTerm >> kw "in") ++ Term) ","))
                         (kw "with" << Term) (kw "do" << Rule)
-                            |>> fun _ -> failwith "not implemented: forall rule"
+                            |>> fun (v_tset_list, t_filter, R) -> forall_rule_with_multiple_bindings v_tset_list t_filter R
     (   kw "skip" |>> fun _ -> skipRule
     <|> BlockRule
     <|> ConditionalRule

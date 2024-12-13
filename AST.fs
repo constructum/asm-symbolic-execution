@@ -26,6 +26,7 @@ type RULE =
 | SeqRule of RULE list
 | IterRule of RULE
 | LetRule of string * TERM * RULE
+| ForallRule of string * TERM * TERM * RULE
 | MacroRuleCall of RULE_NAME * TERM list
 
 let skipRule = ParRule []
@@ -94,6 +95,7 @@ type RULE_INDUCTION<'term, 'rule> = {
     SeqRule : 'rule list -> 'rule;
     IterRule : 'rule -> 'rule;
     LetRule : string * 'term * 'rule -> 'rule;
+    ForallRule : string * 'term * 'term * 'rule -> 'rule;
     MacroRuleCall : RULE_NAME * 'term list -> 'rule;     // Map<FCT_NAME * VALUE list, 'term> -> 'rule;
 }
 
@@ -107,6 +109,7 @@ let rec rule_induction (term : TERM -> 'term) (F : RULE_INDUCTION<'term, 'rule>)
     |   SeqRule Rs -> F.SeqRule (List.map (rule_ind F) Rs)
     |   IterRule R -> F.IterRule (rule_ind F R)
     |   LetRule (v, t, R) -> F.LetRule (v, term t, (rule_ind F) R)
+    |   ForallRule (v, t_set, t_filter, R) -> F.ForallRule (v, term t_set, term t_filter, (rule_ind F) R)
     |   MacroRuleCall (r, ts) -> F.MacroRuleCall (r, List.map term ts)
 
 //--------------------------------------------------------------------
@@ -136,6 +139,7 @@ let rule_size = rule_induction term_size {
     SeqRule = fun Rs -> 1 + List.sum Rs;
     IterRule = fun R' -> 1 + R';
     LetRule = fun (_, t, R) -> 1 + t + R;
+    ForallRule = fun (_, t_set, t_filter, R) -> 1 + t_set + t_filter + R;
     MacroRuleCall = fun (r, ts) -> 1 + 1 + List.sum ts;
 }
 
@@ -196,6 +200,7 @@ let rec pp_rule (sign : SIGNATURE) (R : RULE) =
         SeqRule = fun Rs -> blo0 [ str "seq"; line_brk; blo2 (pp_list [line_brk] Rs); line_brk; str "endseq" ];
         IterRule = fun R' -> blo0 [ str "iterate "; line_brk; blo2 [ R' ]; line_brk; str "enditerate" ];
         LetRule = fun (v, t, R) -> blo0 [ str "let "; str v; str " = "; t; line_brk; str "in "; R; line_brk; str "endlet" ];
+        ForallRule = fun (v, t_set, t_filter, R) -> blo0 [ str "forall "; str v; str " in "; t_set; str " with "; t_filter; str " do"; line_brk; blo2 [ R ]; line_brk; str "endforall" ];
         MacroRuleCall = fun (r, ts) -> blo0 [ str r; str "["; blo0 (pp_list [str",";brk 1] ts); str "]" ];
     } R
 
