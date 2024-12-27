@@ -51,10 +51,26 @@ let (>>=) (p: Parser<'a, 'state>) (f: 'a -> Parser<'b, 'state>) : Parser<'b, 'st
         |   ParserSuccess(x, rest) -> (f x) rest
         |   ParserFailure failures -> ParserFailure failures
 
+let combine_loc_pos (loc0, pos0) (loc1, pos1) =
+    if loc0 <> loc1
+    then failwith (sprintf "combine_loc_pos: locations do not match (%s, %s)" (src_loc_to_string loc0) (src_loc_to_string loc1))
+    else (loc0, pos0, pos1)
+
+let (>>==) (p: Parser<'a, 'state>) (f: (SrcLoc * SrcPos * SrcPos) -> 'state -> 'a -> Parser<'b, 'state>) : Parser<'b, 'state> =
+    fun input ->
+        let (_, loc0, pos0, state0, _) = input
+        match p input with
+        |   ParserSuccess(x, rest) ->
+                let (_, loc1, pos1, _, _) = rest
+                let (loc, pos_start, pos_end) = combine_loc_pos (loc0, pos0) (loc1, pos1)
+                (f (loc, pos_start, pos_end) state0 x) rest
+        |   ParserFailure failures -> ParserFailure failures
+
 let (||>>) (p: Parser<'a, 'state1>) (f: 'state1 -> 'a -> 'state2) (s : ParserInput<'state1>): ParserResult<'a, 'state2> =
     match p s with
     |   ParserSuccess (result, (failure', loc, pos', state', stream')) -> ParserSuccess (result, (failure', loc, pos', f state' result, stream'))
     |   ParserFailure failures -> ParserFailure failures
+
 
 let combine_failures (failures1 : Set<FailedAt>, failures2 : Set<FailedAt>) =
     if Set.isEmpty failures1 then failures2
@@ -80,6 +96,8 @@ let pfail_msg name msg : Parser<'a, 'state> = fun input -> ParserFailure (combin
 //msg
     
 let (|>>) p f : Parser<'b, 'state> = p >>= (fun x -> preturn (f x))
+
+let (|||>>) p f : Parser<'b, 'state> = p >>== (fun (loc0, pos0, pos1) state0 x -> preturn (f (loc0, pos0, pos1) state0 x))
 
 
 let pcharsat c_pred expected : Parser<char, 'state> =
