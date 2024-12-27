@@ -93,10 +93,11 @@ let match_type (ty : TYPE) (ty_sign : TYPE) (ty_env : Map<string, TYPE>) : Map<s
             failwith (sprintf "%s: type parameter not allowed in concrete type to be matched to signature type %s"
                 (type_to_string ty) (type_to_string ty_sign))
     |   _ ->
-            if ty = Undef || ty_sign = Undef then
+            (*if ty = Undef || ty_sign = Undef then
                 //!!!!!!!!!!!!! make everything compatible with undef for the moment - but this should be done properly
                 Map.empty
-            else if ty = ty_sign then
+            else*)
+            if ty = ty_sign then
                 Map.empty
             else
                 match ty_sign with

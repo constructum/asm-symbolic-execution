@@ -2,26 +2,41 @@ module ParserCombinators
 
 open Common
 
-type Position = { abs : int; line : int; col : int; }
+type SrcPos = { abs : int; line : int; col : int; }
+
+type SrcLoc =
+|   File of string ref      // name of file containing source code
+|   Strg of string ref      // string containing source code
+
+let src_loc_to_string = function
+|   File f -> sprintf "file '%s'" !f
+|   Strg s -> sprintf "string '%s'" !s
+
+type SrcReg = SrcLoc * SrcPos * SrcPos     // file name, position before region, position after region
+
+let src_reg_to_string = function
+    (loc, pos1, pos2) -> sprintf "region (%s: [%d:%d]-[%d:%d])" (src_loc_to_string loc) pos1.line pos1.col pos2.line pos2.col
+
 let initial_position = { abs = 0; line = 1; col = 1; }
 
-type FailedAt = Position * string
-type 'parser_state ParserInput = Set<FailedAt> * Position * 'parser_state * char list             // position, stream
+type FailedAt = SrcPos * string
+type 'parser_state ParserInput = Set<FailedAt> * SrcLoc * SrcPos * 'parser_state * char list             // position, stream
 
-let parser_input_in_state_from_string state0 s = (Set.empty, initial_position, state0, explode s)
-let get_failures : 'a ParserInput -> Set<FailedAt> = fun (failures, _, _, _) -> failures
-let get_pos : 'a ParserInput -> Position = fun (_, pos, _, _) -> pos
-let get_parser_state : 'a ParserInput -> 'a = fun (_, _, parser_state, _) -> parser_state
-let chg_parser_state : 'a ParserInput -> 'b -> 'b ParserInput = fun (failure, pos, _, stream) parser_state' -> (failure, pos, parser_state', stream)
-let get_stream : 'a ParserInput -> char list = fun (_, _, _,stream) -> stream
+let parser_input_in_state_from_string initial_location state0 s = (Set.empty, (initial_location : SrcLoc), (initial_position : SrcPos), state0, explode s)
+let get_failures : 'a ParserInput -> Set<FailedAt> = fun (failures, _, _, _, _) -> failures
+let get_loc : 'a ParserInput -> SrcLoc = fun (_, loc, _, _, _) -> loc
+let get_pos : 'a ParserInput -> SrcPos = fun (_, _, pos, _, _) -> pos
+let get_parser_state : 'a ParserInput -> 'a = fun (_, _, _, parser_state, _) -> parser_state
+let chg_parser_state : 'a ParserInput -> 'b -> 'b ParserInput = fun (failure, loc, pos, _, stream) parser_state' -> (failure, loc, pos, parser_state', stream)
+let get_stream : 'a ParserInput -> char list = fun (_, _, _, _,stream) -> stream
 
-let input_abs_pos (_, pos, _, _) = pos.abs
+let input_abs_pos (_, _, pos, _, _) = pos.abs
 
 let parser_input_getc : 'a ParserInput -> option<char> * 'a ParserInput = function
-|   (failures, pos, state, []) -> (None, (failures, pos, state, []))
-|   (failures, {abs=abs;line=line;col=_}, state, '\r' :: '\n' :: cs) -> (Some '\n', (failures, { abs = abs + 2; line = line + 1; col = 1; }, state, cs))
-|   (failures, {abs=abs;line=line;col=col}, state, '\n' :: cs)       -> (Some '\n', (failures, { abs = abs + 1; line = line + 1; col = 1; }, state, cs))
-|   (failures, {abs=abs;line=line;col=col}, state, c :: cs)          -> (Some c,    (failures, { abs = abs + 1; line = line; col = col + 1; }, state, cs))
+|   (failures, loc, pos, state, []) -> (None, (failures, loc, pos, state, []))
+|   (failures, loc, {abs=abs;line=line;col=_}, state, '\r' :: '\n' :: cs) -> (Some '\n', (failures, loc, { abs = abs + 2; line = line + 1; col = 1; }, state, cs))
+|   (failures, loc, {abs=abs;line=line;col=col}, state, '\n' :: cs)       -> (Some '\n', (failures, loc, { abs = abs + 1; line = line + 1; col = 1; }, state, cs))
+|   (failures, loc, {abs=abs;line=line;col=col}, state, c :: cs)          -> (Some c,    (failures, loc, { abs = abs + 1; line = line; col = col + 1; }, state, cs))
 
 type ('result, 'state) ParserResult =
 |   ParserSuccess of 'result * 'state ParserInput
@@ -38,7 +53,7 @@ let (>>=) (p: Parser<'a, 'state>) (f: 'a -> Parser<'b, 'state>) : Parser<'b, 'st
 
 let (||>>) (p: Parser<'a, 'state1>) (f: 'state1 -> 'a -> 'state2) (s : ParserInput<'state1>): ParserResult<'a, 'state2> =
     match p s with
-    |   ParserSuccess (result, (failure', pos', state', stream')) -> ParserSuccess (result, (failure', pos', f state' result, stream'))
+    |   ParserSuccess (result, (failure', loc, pos', state', stream')) -> ParserSuccess (result, (failure', loc, pos', f state' result, stream'))
     |   ParserFailure failures -> ParserFailure failures
 
 let combine_failures (failures1 : Set<FailedAt>, failures2 : Set<FailedAt>) =
@@ -99,19 +114,20 @@ let (<|>) (p1: Parser<'a, 'state>) (p2: Parser<'a, 'state>) : Parser<'a, 'state>
     fun stream ->
         match p1 stream with
         |   ParserFailure failures1 ->
-                let stream' = (failures1, get_pos stream, get_parser_state stream, get_stream stream)
+                let stream' = (failures1, get_loc stream, get_pos stream, get_parser_state stream, get_stream stream)
                 (   match p2 stream' with
                     |   ParserFailure failures2 ->
                             ParserFailure (combine_failures (failures1, failures2))
-                    |   ParserSuccess (result2, (failures2, pos2, state, stream2)) ->
-                            ParserSuccess (result2, (combine_failures (failures1, failures2), pos2, state, stream2)) )
+                    |   ParserSuccess (result2, (failures2, loc, pos2, state, stream2)) ->
+                            ParserSuccess (result2, (combine_failures (failures1, failures2), loc, pos2, state, stream2)) )
         |   res as ParserSuccess _ -> res
 
 let rec pmany p : Parser<'a list, 'state> =
-    let rec F (result, (input0 as (failures0, pos0, state0, stream0))) =
+    let rec F (result, input0) =
+        let (failures0, loc, pos0, state0, stream0) = input0
         match p input0 with
         |   ParserSuccess (x, stream') -> F (x :: result, stream')
-        |   ParserFailure failures -> ParserSuccess (List.rev result, (combine_failures (failures0, failures), pos0, state0, stream0))
+        |   ParserFailure failures -> ParserSuccess (List.rev result, (combine_failures (failures0, failures), loc, pos0, state0, stream0))
     fun stream -> F ([], stream)
 
 let pmany1 p = ((p ++ pmany p) |>> fun (x, xs) -> x :: xs)
@@ -122,8 +138,10 @@ let poption p =
 
 let pchoice ps : Parser<'a, 'state> = Seq.reduce (fun (p1: Parser<'a, 'state>) (p2: Parser<'a, 'state>) -> p1 <|> p2) ps
 
-let prun (p: Parser<'a, 'state>) (state0 :'state) (s: string) = p (parser_input_in_state_from_string state0 s)
-
+let prun (p: Parser<'a, 'state>) src_loc (state0 :'state) (s: string) =
+    match p (parser_input_in_state_from_string src_loc state0 s) with
+    |   ParserSuccess (result, _) -> result
+    |   ParserFailure failures -> failwith (sprintf "parsing failed: %s" (parser_msg (ParserFailure failures)))
 
 let pstring (s: string) input0 =
     let rec F = function
@@ -148,5 +166,5 @@ let pint s =
 
 let peos s =
     ( function
-    |   (failures, pos, state, []) -> ParserSuccess ((), (failures, pos, state, []))
-    |   (failures, pos, _, s)  -> ParserFailure (combine_failures (Set.singleton (pos, "end-of-stream expected"), failures)) ) s
+    |   (failures, loc, pos, state, []) -> ParserSuccess ((), (failures, loc, pos, state, []))
+    |   (failures, _, pos, _, s)  -> ParserFailure (combine_failures (Set.singleton (pos, "end-of-stream expected"), failures)) ) s

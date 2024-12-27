@@ -471,24 +471,24 @@ let rec definitions (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * S
 
 //--------------------------------------------------------------------
 
-let make_parser parse_fct parser_state s =
-    match (parse_fct >> ws_or_comment) (parser_input_in_state_from_string parser_state s) with
+let make_parser parse_fct initial_location parser_state s =
+    match (parse_fct >> ws_or_comment) (parser_input_in_state_from_string initial_location parser_state s) with
     |   ParserSuccess (result, parser_state) -> (result, parser_state)
     |   ParserFailure errors -> failwith (parser_msg (ParserFailure errors))
 
 //--------------------------------------------------------------------
 // parser "API"
 
-let parse_and_typecheck (parsing_fct : Parser<'a, PARSER_STATE>) typechecking_fct parser_state (s : string) =
+let parse_and_typecheck (parsing_fct : Parser<'a, PARSER_STATE>) typechecking_fct initial_location parser_state (s : string) =
     let sign = get_signature parser_state
-    let (ast, parser_state') = make_parser parsing_fct parser_state s
+    let (ast, parser_state') = make_parser parsing_fct initial_location parser_state s
     let _   = typechecking_fct ast (sign, Map.empty)   // function result is discarded, but exceptions are thrown on typing errors
     ast
 
-let parse_name sign s = parse_and_typecheck (name : Parser<NAME, PARSER_STATE>) typecheck_name (sign, empty_state) s
-let parse_term sign s = parse_and_typecheck term typecheck_term (sign, empty_state) s
-let parse_rule sign s = parse_and_typecheck rule typecheck_rule (sign, empty_state) s
+let parse_name initial_location sign s = parse_and_typecheck (name : Parser<NAME, PARSER_STATE>) typecheck_name initial_location (sign, empty_state) s
+let parse_term initial_location sign s = parse_and_typecheck term typecheck_term initial_location (sign, empty_state) s
+let parse_rule initial_location sign s = parse_and_typecheck rule typecheck_rule initial_location (sign, empty_state) s
 //let parse_definitions (sign, S) s = get_state_from_input (snd (make_parser definitions (sign, S) s))
-let parse_definitions (sign, S) s =
-    let defs = fst (make_parser definitions (sign, S) s)
+let parse_definitions initial_location (sign, S) s =
+    let defs = fst (make_parser definitions initial_location (sign, S) s)
     defs

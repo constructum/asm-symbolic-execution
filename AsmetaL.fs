@@ -341,7 +341,7 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
             // that may be imported in the imported module
             System.IO.Directory.SetCurrentDirectory new_dir
             let text = Common.readfile full_path
-            let parse = Parser.make_parser Asm ((sign, state), rules_db)
+            let parse = Parser.make_parser Asm (ParserCombinators.File (ref full_path)) ((sign, state), rules_db)
             let imported_module = fst (parse text)        // !!! checks missing (e.g. check that it is a 'module' and not an 'asm', etc.)
             // move to original directory (where the importing file is located)
             System.IO.Directory.SetCurrentDirectory saved_dir
@@ -539,9 +539,9 @@ let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB *
             (sign, state, rdb, mdb)
 
 
-let parse_definitions ((sign, S), (rules_db, macro_db)) s =
+let parse_definitions initial_location ((sign, S), (rules_db, macro_db)) s =
     imported_modules := Map.empty
-    let asm as ASM asm' = fst (Parser.make_parser Asm ((sign, S), (rules_db, macro_db)) s)
+    let asm as ASM asm' = fst (Parser.make_parser Asm initial_location ((sign, S), (rules_db, macro_db)) s)
     if (!trace > 1) then fprintf stderr "---\n%s\n---\n" (asm'.signature |> signature_to_string)
     asm
 

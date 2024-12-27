@@ -66,11 +66,11 @@ let reset asmeta_flag =
 
 //--------------------------------------------------------------------
 
-let loadstr (asmeta_flag : bool) contents =
+let load (asmeta_flag : bool) initial_location contents =
     let parse_definitions (sign : SIGNATURE, S : STATE) s : SIGNATURE * STATE * RULES_DB * MACRO_DB =
         if not asmeta_flag
-        then (fun (sign, S, rules_db) -> (sign, S, rules_db, Map.empty)) (Parser.parse_definitions (sign, S) s)
-        else AsmetaL.parse_definitions ((sign, S), ((Map.empty : RULES_DB), (Map.empty : MACRO_DB))) s |> AsmetaL.extract_definitions_from_asmeta
+        then (fun (sign, S, rules_db) -> (sign, S, rules_db, Map.empty)) (Parser.parse_definitions initial_location (sign, S) s)
+        else AsmetaL.parse_definitions initial_location ((sign, S), ((Map.empty : RULES_DB), (Map.empty : MACRO_DB))) s |> AsmetaL.extract_definitions_from_asmeta
     // note: exceptions are thrown if the environment (signature, initial state, rules) is not initialised (by 'Option.get')
     let (new_sign, new_state, new_rules_db, new_macro_db) = parse_definitions (signature (), initial_state ()) contents
     signature_     := Some (signature_override (signature ()) new_sign)  //
@@ -79,9 +79,12 @@ let loadstr (asmeta_flag : bool) contents =
     macros_        := Some (macro_db_override (macros ()) new_macro_db)
     smt_add_types_and_functions smt_ctx (signature()) (new_sign, new_state)
 
+let loadstr (asmeta_flag : bool) contents =
+    load asmeta_flag (ParserCombinators.Strg (ref contents)) contents
+
 let loadfile (asmeta_flag : bool) filename =
     if (!trace > 0) then fprintf stderr "load_file: %s\n" filename
-    Common.readfile (filename) |> loadstr asmeta_flag
+    Common.readfile (filename) |> load asmeta_flag (ParserCombinators.File (ref filename))
     if (!trace > 0) then fprintf stderr "---\n%s\n---\n" (signature_to_string (signature ()))
 
 //--------------------------------------------------------------------
