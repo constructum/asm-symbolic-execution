@@ -186,7 +186,7 @@ and expand_term t (S, env, C) =
         LetTerm = fun (v, t1, t2) -> fun (S, env, C) ->
                     let t1_val = t1 (S, env, C)
                     t2 (S, add_binding env (v, t1_val, term_type (signature_of S) env t1_val), C);
-        DomainTerm = fun ty -> fun (S, env, C) -> Value (SET (enum_finite_type ty S |> Option.defaultValue (failwith (sprintf "SymbEval.expand_term: domain of type '%s' is not enumerable" (ty |> type_to_string)))))
+        DomainTerm = fun ty -> fun (S, env, C) -> match enum_finite_type ty S with Some xs -> Value (SET xs) | _ -> failwith (sprintf "SymbEval.expand_term: domain of type '%s' is not enumerable" (ty |> type_to_string))
     } t (S, env, C)
 
 and try_reducing_term_with_finite_range (S : S_STATE, env : ENV, C : CONTEXT) (t : TERM) : TERM =
@@ -296,7 +296,7 @@ and s_eval_term_ t ((S, env, C) : S_STATE * ENV * CONTEXT) =
         CondTerm = fun (G, t1, t2) -> fun (S, env, C) -> eval_cond_term (S, env, C) (G, t1, t2);
         VarTerm  = fun v -> fun (S, env, _) -> fst (get_env env v);
         LetTerm  = fun (v, t1, t2) -> fun (S, env, _) -> eval_let_term (S, env, C) (v, t1, t2) //failwith "s_eval_term: LetTerm: not implemented yet";
-        DomainTerm = fun ty -> fun (S, env, C) -> Value (SET (enum_finite_type ty S |> Option.defaultValue (failwith (sprintf "SymbEval.expand_term: domain of type '%s' is not enumerable" (ty |> type_to_string)))))
+        DomainTerm = fun ty -> fun (S, env, C) -> match enum_finite_type ty S with Some xs -> Value (SET xs) | None -> failwith (sprintf "SymbEval.expand_term: domain of type '%s' is not enumerable" (ty |> type_to_string))
     } t (S, env, C)
 
 and s_eval_term (t : TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TERM =
@@ -431,14 +431,14 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
         s_eval_rule R (S, add_binding env (v, s_eval_term t (S, env, C), term_type (signature_of S) env t), C)       // !!!!! is this one correct at all?
 
     and eval_forall (v, ts, G, R) (S, env, C) =
-        match ts with
+        match s_eval_term ts (S, env, C) with
         |   Value (SET xs) ->
                 let eval_instance x =
                     let env' = add_binding env (v, Value x, term_type (signature_of S) env (Value x))
                     CondRule (s_eval_term G (S, env', C), s_eval_rule R (S, env', C), skipRule)
                 let Rs = List.map (fun x -> eval_instance x) (Set.toList xs)
                 s_eval_rule (ParRule Rs) (S, env, C)
-        |   _ -> failwith (sprintf "SymbEval.forall_rule: not a set (%A)" ts)
+        |   x -> failwith (sprintf "SymbEval.forall_rule: not a set (%A): %A v" ts x)
 
     and eval_macro_rule_call (r, args) (S, env, C) =
         let (formals, body) =
@@ -487,7 +487,7 @@ let reconvert_term t =
         CondTerm = CondTerm;
         VarTerm  = VarTerm;
         LetTerm  = LetTerm;
-        DomainTerm = failwith "reconvert_term: DomainTerm not implemented yet"
+        DomainTerm = DomainTerm;
     } t
 
 let reconvert_rule R = 
