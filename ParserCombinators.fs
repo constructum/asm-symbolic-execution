@@ -15,7 +15,21 @@ let src_loc_to_string = function
 type SrcReg = SrcLoc * SrcPos * SrcPos     // file name, position before region, position after region
 
 let src_reg_to_string = function
-    (loc, pos1, pos2) -> sprintf "region (%s: [%d:%d]-[%d:%d])" (src_loc_to_string loc) pos1.line pos1.col pos2.line pos2.col
+    (loc, pos1, pos2) -> sprintf "%s: [%d:%d]-[%d:%d]:" (src_loc_to_string loc) pos1.line pos1.col pos2.line pos2.col
+
+let opt_src_reg_to_string = function
+|   None -> ""
+|   Some reg -> sprintf "  at %s\n" (src_reg_to_string reg)
+
+let merge_opt_src_reg (reg1 : SrcReg option) (reg2 : SrcReg option) =
+    match (reg1, reg2) with
+    |   (Some (loc1, pos1, pos2), Some (loc2, pos3, pos4)) ->
+            if loc1 <> loc2
+            then failwith (sprintf "merge_regions: locations of regions do not match (%s, %s)" (src_loc_to_string loc1) (src_loc_to_string loc2))
+            else Some (loc1, pos1, pos4)
+    |   (Some (loc1, pos1, pos2), None) -> Some (loc1, pos1, pos2)
+    |   (None, Some (loc2, pos3, pos4)) -> Some (loc2, pos3, pos4)
+    |   (None, None) -> None
 
 let initial_position = { abs = 0; line = 1; col = 1; }
 

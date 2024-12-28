@@ -1,5 +1,7 @@
 module Parser
 
+let module_name = "Parser" 
+
 open Common
 open Background
 open ParserCombinators
@@ -10,6 +12,16 @@ open AST
 //--------------------------------------------------------------------
 
 let trace = ref 0
+
+type ErrorDetails =
+|   TypeCheckingError of string
+
+exception Error of string * SrcReg option * ErrorDetails
+
+let error_msg (fct : string, reg : SrcReg option, err : ErrorDetails) = 
+    sprintf "error in module %s, function %s:\n%s  " module_name fct (ParserCombinators.opt_src_reg_to_string reg) +
+    match err with
+    |   TypeCheckingError msg -> sprintf "type checking error: %s" msg
 
 //--------------------------------------------------------------------
 
@@ -194,29 +206,34 @@ let typecheck_name name (sign : SIGNATURE, _ : Map<string, TYPE>) =
 let typecheck_app_term sign = function
     |   (fct_name, ts)  -> failwith ""
 
-let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TYPE =
+let rec typecheck_term reg (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TYPE =
     if !trace > 0 then fprintf stderr "typecheck_term: %s\n" (t |> term_to_string sign)
     term_induction typecheck_name {
         Value    = fun x _ -> type_of_value sign x;
         AppTerm  = fun (f, ts) (sign, tyenv) ->
                         match f (sign, tyenv) with
-                        |   (FctName f, f_sign_types) -> match_fct_type f (ts >>| fun t -> t (sign, tyenv)) f_sign_types
+                        |   (FctName f, f_sign_types) ->
+                                try match_fct_type f (ts >>| fun t -> t (sign, tyenv)) f_sign_types
+                                with _ -> raise (Error ("typecheck_term", reg, TypeCheckingError (sprintf "function '%s' applied to wrong arguments" f)))
                         |   (_, [(_, f_ran)]) -> f_ran    // special constants UndefConst, BoolConst b, etc.
                         |   _ -> failwith "typecheck_term: AppTerm: this should not happen";
         CondTerm = fun (G, t1, t2) (sign, tyenv) ->
                         if G (sign, tyenv) <> Boolean
-                        then failwith "typecheck_term: type of guard in conditional term must be Boolean)"
+                        then raise (Error ("typecheck_term", reg, TypeCheckingError "type of guard in conditional term must be Boolean"))
                         else
                         (   let (t1, t2) = (t1 (sign, tyenv), t2 (sign, tyenv))
                             //!!!!!!!!!!!!! make everything compatible with undef for the moment - but this should be done properly
-                            if t1 = Undef then t2
+                            (*if t1 = Undef then t2
                             else if t2 = Undef then t1
-                            else if t1 = t2 then t1
-                            else failwith $"branches of conditional term have different types (then-branch: {t1 |> type_to_string}; else-branch: {t2 |> type_to_string})" )                                                  
+                            else*)
+                            if t1 = t2 then t1
+                            else raise (Error ("typecheck_term", reg, TypeCheckingError $"branches of conditional term have different types (then-branch: {t1 |> type_to_string}; else-branch: {t2 |> type_to_string})")) );
         Initial  = fun (f, xs) (sign, tyenv) ->
                         if !trace > 0 then fprintf stderr "typecheck_term: match_fct_type 2 %s\n" (AppTerm (FctName f, xs >>| Value) |> term_to_string sign)
                         match_fct_type f (xs >>| type_of_value sign) (fct_types f sign)
-        VarTerm  = fun v -> fun (_, tyenv) -> try Map.find v tyenv with _ -> failwith $"variable '{v}' not defined";
+        VarTerm  = fun v -> fun (_, tyenv) ->
+                        try Map.find v tyenv
+                        with _ -> raise (Error ("typecheck_term", reg, TypeCheckingError $"variable '{v}' not defined"));
         LetTerm  = fun (x, t1, t2) -> fun (sign, tyenv) ->
                         let t1 = t1 (sign, tyenv)
                         t2 (sign, Map.add x t1 tyenv);
@@ -224,7 +241,7 @@ let rec typecheck_term (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYPE>) 
     } t (sign, tyenv)
 
 let typecheck_rule (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TYPE =
-    rule_induction typecheck_term {
+    rule_induction (typecheck_term None) {
         S_Updates  = fun _ -> failwith "not implemented"
         UpdateRule = fun ((f, ts), t) (sign, tyenv) ->
                         let kind = fct_kind f sign
@@ -414,20 +431,20 @@ let fct_parameter_types (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE list
     ) s
 
 let fct_initially (s : ParserInput<PARSER_STATE>) : ParserResult<Map<VALUE list, VALUE>, PARSER_STATE> =
-    let (sign, state) = get_parser_state s
     // for the time being, only 0-ary functions can be initialised
     (       ( ((kw "initially") << term)
-                |>> fun t -> let _ = typecheck_term t (sign, Map.empty)
-                             Map.add [] (Eval.eval_term t (state, Map.empty)) Map.empty )
+                |||>> fun reg (sign, state) t ->
+                            let _ = typecheck_term (Some reg) t (sign, Map.empty)
+                            Map.add [] (Eval.eval_term t (state, Map.empty)) Map.empty )
     ) s
 
 let fct_eqdef (s : ParserInput<PARSER_STATE>) : ParserResult<VALUE list -> VALUE, PARSER_STATE> =
-    let sign = get_signature_from_input s
     // for the time being, only 0-ary functions can be initialised
     (       ( ((kw "=") << term)
-                |>> fun t -> let _ = typecheck_term t (sign, Map.empty)
-                             let t_val = Eval.eval_term t (State.background_state  (* !!! use only background !!! *), Map.empty)
-                             (function [] -> t_val | _ -> UNDEF) )
+                |||>> fun reg (sign, _) t ->
+                        let _ = typecheck_term (Some reg) t (sign, Map.empty)
+                        let t_val = Eval.eval_term t (State.background_state  (* !!! use only background !!! *), Map.empty)
+                        (function [] -> t_val | _ -> UNDEF) )
     ) s
 
 let definition (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE * RULES_DB, PARSER_STATE> =
@@ -486,7 +503,7 @@ let parse_and_typecheck (parsing_fct : Parser<'a, PARSER_STATE>) typechecking_fc
     ast
 
 let parse_name initial_location sign s = parse_and_typecheck (name : Parser<NAME, PARSER_STATE>) typecheck_name initial_location (sign, empty_state) s
-let parse_term initial_location sign s = parse_and_typecheck term typecheck_term initial_location (sign, empty_state) s
+let parse_term initial_location sign s = parse_and_typecheck term (typecheck_term None) initial_location (sign, empty_state) s
 let parse_rule initial_location sign s = parse_and_typecheck rule typecheck_rule initial_location (sign, empty_state) s
 //let parse_definitions (sign, S) s = get_state_from_input (snd (make_parser definitions (sign, S) s))
 let parse_definitions initial_location (sign, S) s =

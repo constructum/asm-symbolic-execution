@@ -9,6 +9,8 @@ open Microsoft.Z3
 
 let trace = ref 0
 
+let typecheck_term = Parser.typecheck_term None
+
 type SMT_CONTEXT = {
     ctx : Context ref;
     slv : Solver ref;
@@ -133,7 +135,7 @@ and smt_map_term_user_defined_function sign C (f, ts) : SMT_EXPR =
 
 and smt_map_ITE sign C (G, t1, t2) : SMT_EXPR =
     let ctx = !C.ctx
-    let typecheck t = Parser.typecheck_term t (sign, Map.empty)
+    let typecheck t = typecheck_term t (sign, Map.empty)
     match (smt_map_term sign C G, typecheck G, smt_map_term sign C t1, typecheck t1, smt_map_term sign C t2, typecheck t2) with
     |   (SMT_BoolExpr G, Boolean, SMT_BoolExpr t1, Boolean, SMT_BoolExpr t2, Boolean) ->
             SMT_BoolExpr (ctx.MkITE (G, t1 :> Expr, t2 :> Expr) :?> BoolExpr)
@@ -174,21 +176,21 @@ and smt_map_term sign C (t : TERM) : SMT_EXPR =
 //--------------------------------------------------------------------
 
 let smt_assert sign C (phi : TERM) =
-    if Parser.typecheck_term phi (sign, Map.empty) = Boolean
+    if typecheck_term phi (sign, Map.empty) = Boolean
     then match smt_map_term sign C phi with
          | SMT_BoolExpr be -> (!C.slv).Assert be
          | _ -> failwith (sprintf "smt_assert: error converting Boolean term (term = %s)" (term_to_string sign phi))
     else failwith (sprintf "'smt_assert' expects a Boolean term, %s found instead " (term_to_string sign phi))
 
 let smt_formula_is_true sign C (phi : TERM) =
-    if Parser.typecheck_term phi (sign, Map.empty) = Boolean
+    if typecheck_term phi (sign, Map.empty) = Boolean
     then match smt_map_term sign C phi with
          | SMT_BoolExpr be -> ((!C.slv).Check ((!C.ctx).MkNot be) = Status.UNSATISFIABLE)
          | _ -> failwith (sprintf "smt_assert: error converting Boolean term (term = %s)" (term_to_string sign phi))
     else failwith (sprintf "'smt_check' expects a Boolean term, %s found instead " (term_to_string sign phi))
 
 let smt_formula_is_false sign C (phi : TERM) =
-    if Parser.typecheck_term phi (sign, Map.empty) = Boolean
+    if typecheck_term phi (sign, Map.empty) = Boolean
     then match smt_map_term sign C phi with
          | SMT_BoolExpr be -> ((!C.slv).Check be = Status.UNSATISFIABLE)
          | _ -> failwith (sprintf "smt_assert: error converting Boolean term (term = %s)" (term_to_string sign phi))

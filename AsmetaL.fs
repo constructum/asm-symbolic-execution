@@ -402,7 +402,7 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
             
             let FunctionDefinition =
                 R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
-                |>> fun (f, param_list, t) ->
+                |||>> fun reg _ (f, param_list, t) ->
                     //!!!! no type checking
                     if !trace > 0 then fprintf stderr "|signature| = %d - FunctionDefinition '%s'\n" (Map.count sign) f
                     if not (is_function_name f sign) then
@@ -410,7 +410,7 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
                     else if fct_kind f sign = Constructor then
                         failwith (sprintf "error in function definition: function '%s' is a constructor, cannot be redefined" f)
                     else 
-                        let _ = Parser.typecheck_term t (sign, Map.ofSeq param_list)
+                        let _ = Parser.typecheck_term (Some reg) t (sign, Map.ofSeq param_list)
                         //!!! to do: proper handling of function overloading
                         // !!! types of parameters are currently ignored
                         let result =
@@ -466,12 +466,12 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
                                             |>> fun (id, _) -> failwith (sprintf "not implemented: initialization of domains ('%s')" id)
             let FunctionInitialization =
                 R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
-                |>> fun (f, param_list, t) ->
+                |||>> fun reg _ (f, param_list, t) ->
                     //!!!! no type checking
                     if not (is_function_name f sign) then
                         failwith (sprintf "error in function definition: function '%s' is not declared in the signature" f)
                     else
-                        let _ = Parser.typecheck_term t (sign, Map.ofSeq param_list)
+                        let _ = Parser.typecheck_term (Some reg) t (sign, Map.ofSeq param_list)
                         if fct_kind f sign = Controlled then 
                             let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
                             let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) (state_with_signature state sign), Map.ofList (List.zip parameters xs))

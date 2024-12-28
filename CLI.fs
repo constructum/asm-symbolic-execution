@@ -170,4 +170,5 @@ let CLI(args) =
     try
         CLI_with_ex(args)
     with
-        Failure s -> writeln_err $"exception:\n{s}"; 1
+    |   Parser.Error (fct, reg, err) -> writeln_err (Parser.error_msg (fct, reg, err)); 1
+    |   Failure s -> writeln_err $"exception:\n{s}"; 1
