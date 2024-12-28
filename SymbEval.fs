@@ -213,13 +213,13 @@ and try_case_distinction_for_term_with_finite_range (S : S_STATE, env : ENV, C :
         let (elem_term_pairs_without_last, last_elem_term_pair) = List.splitAt (List.length elem_term_pairs - 1) elem_term_pairs
         Parser.switch_to_cond_term (t, List.map (fun (elem, term) -> (Value elem, term)) elem_term_pairs_without_last, snd (List.head (last_elem_term_pair)))
     let rec F past_args = function
-        |   (t1 :: ts) ->
+        |   (t1 :: ts') ->
                 match (try enum_finite_type (term_type (signature_of S) env t1) S with _ -> None) with
                 |   None ->
                         failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
                                     f (term_to_string (signature_of S) (AppTerm (FctName f, ts))))
                 |   Some elems ->
-                        let case_dist = make_case_distinction t1 (List.map (fun elem -> (elem, F (Value elem :: past_args) ts)) (Set.toList elems))
+                        let case_dist = make_case_distinction t1 (List.map (fun elem -> (elem, F (Value elem :: past_args) ts')) (Set.toList elems))
                         s_eval_term_ case_dist (S, env, C)    // simplify generated conditional term
         |   [] -> AppTerm (FctName f, List.rev past_args)
     F [] ts
