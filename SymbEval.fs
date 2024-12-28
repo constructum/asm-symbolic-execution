@@ -357,7 +357,7 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
             |   (t1 as DomainTerm _ :: ts_fut)   -> failwith "SymbEval.eval_app_term: DomainTerm not implemented"
             |   [] ->
                 match get_values (ts_past >>| fun t -> s_eval_term t (S, env, C)) with
-                |   Some xs -> S_Updates (Set.singleton ((f, xs), s_eval_term t_rhs (S, env, C)));
+                |   Some xs -> S_Updates (Set.singleton ((f, List.rev xs), s_eval_term t_rhs (S, env, C)));
                 |   None -> try_case_distinction_for_update_with_finite_domain (S, env, C) f ts t_rhs
             F [] ts
 
