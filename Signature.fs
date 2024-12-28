@@ -82,12 +82,34 @@ and fct_type_to_string (args_type, res_type) =
 
 //--------------------------------------------------------------------
 
-exception TypeMismatch of TYPE * TYPE
+type ErrorDetails =
+|   TypeMismatch of TYPE * TYPE
+|   FunctionCallTypeMismatch of (string * TYPE list * TYPE) * TYPE list
+|   TypeOfResultUnknown of string * TYPE list * TYPE
+|   NoMatchingFunctionType of string * TYPE list
+|   AmbiguousFunctionCall of string * TYPE list
+
+exception Error of ErrorDetails
+
+let error_msg (err : ErrorDetails) =
+    match err with
+    |   TypeMismatch (ty, ty_sign) ->
+            sprintf "type mismatch: %s does not match %s" (ty |> type_to_string) (ty_sign |> type_to_string)
+    |   FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types) ->
+            sprintf "function '%s : %s -> %s' called with arguments of type(s) %s"
+                fct_name (sign_args_types |> type_list_to_string) (sign_res_type |> type_to_string) (args_types |> type_list_to_string)
+    |   TypeOfResultUnknown (fct_name, sign_args_types, sign_res_type) ->
+            sprintf "type of result of function %s : %s -> %s is unknown (type parameter '%s cannot be instantiated)"
+                fct_name (sign_args_types |> type_list_to_string) (sign_res_type |> type_to_string) (sign_res_type |> type_to_string)
+    |   NoMatchingFunctionType (fct_name, args_types) ->
+            sprintf "no matching function type found for '%s' with arguments of type(s) (%s)" fct_name (args_types |> type_list_to_string)
+    |   AmbiguousFunctionCall (fct_name, args_types) ->
+            sprintf "ambiguous function call: multiple matching function types found for '%s' with arguments of type(s) %s" fct_name (args_types |> type_list_to_string)
+
+//--------------------------------------------------------------------
 
 let match_type (ty : TYPE) (ty_sign : TYPE) (ty_env : Map<string, TYPE>) : Map<string, TYPE> =
     if !trace > 0 then fprintf stderr "match_type(%s, %s)\n" (ty |> type_to_string) (ty_sign |> type_to_string)
-    let error_msg () =
-        sprintf ("type %s does not match %s") (ty |> type_to_string) (ty_sign |> type_to_string)
     match ty with
     |   TypeParam a ->
             failwith (sprintf "%s: type parameter not allowed in concrete type to be matched to signature type %s"
@@ -105,9 +127,9 @@ let match_type (ty : TYPE) (ty_sign : TYPE) (ty_env : Map<string, TYPE>) : Map<s
                         if Map.containsKey a ty_env then
                             if (ty = Map.find a ty_env)
                             then ty_env
-                            else raise (TypeMismatch (ty, ty_sign))
+                            else raise (Error (TypeMismatch (ty, ty_sign)))
                         else Map.add a ty ty_env
-                |   _ -> raise (TypeMismatch (ty, ty_sign))
+                |   _ -> raise (Error (TypeMismatch (ty, ty_sign)))
 
 type TYPE_KIND =
 | BasicType
@@ -295,36 +317,13 @@ let precedence fct_name (sign : SIGNATURE) =
 
 //--------------------------------------------------------------------
 
-exception FunctionCallTypeMismatch of (string * TYPE list * TYPE) * TYPE list
-exception TypeOfResultUnknown of string * TYPE list * TYPE
-
-let type_error_msg (e : exn) =
-    match e with
-    |   TypeMismatch (ty, ty_sign) ->
-            sprintf "type mismatch: %s does not match %s" (ty |> type_to_string) (ty_sign |> type_to_string)
-    |   FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types) ->
-            sprintf "function '%s : %s -> %s' called with arguments of type(s) %s"
-                fct_name (sign_args_types |> type_list_to_string) (sign_res_type |> type_to_string) (args_types |> type_list_to_string)
-    |   TypeOfResultUnknown (fct_name, sign_args_types, sign_res_type) ->
-            sprintf "type of result of function %s : %s -> %s is unknown (type parameter '%s cannot be instantiated)"
-                fct_name (sign_args_types |> type_list_to_string) (sign_res_type |> type_to_string) (sign_res_type |> type_to_string)
-    |   _ -> "unknown type error"
-
-let type_error_fail (e : exn) =
-    try let msg = type_error_msg e 
-        failwith msg
-    with _ -> raise e
-
 let match_one_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_type : TYPE list * TYPE) : TYPE =
     let (sign_args_types, sign_res_type) = sign_fct_type
-    let error_msg () =
-        sprintf "function '%s : %s -> %s' called with arguments of type(s) %s"
-            fct_name (sign_args_types |> type_list_to_string) (sign_res_type |> type_to_string) (args_types |> type_list_to_string)
     let result_type sign_res_type ty_env =
         match sign_res_type with
         |   TypeParam a ->
                 try Map.find a ty_env
-                with _ -> raise (TypeOfResultUnknown (fct_name, sign_args_types, sign_res_type))
+                with _ -> raise (Error (TypeOfResultUnknown (fct_name, sign_args_types, sign_res_type)))
         |   _ -> sign_res_type
     let rec match_types = function
         |   ([], [], ty_env : Map<string, TYPE>) ->
@@ -332,10 +331,10 @@ let match_one_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_ty
         |   (arg_type :: args_types', sign_arg_type :: sign_arg_types', ty_env) -> 
                 let ty_env_1 =
                     try match_type arg_type sign_arg_type ty_env
-                    with _ -> raise (FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types))
+                    with _ -> raise (Error (FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types)))
                 match_types (args_types', sign_arg_types', ty_env_1)
         |   (_, _, _) -> // arity does not match
-                raise (FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types))
+                raise (Error (FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types)))
     let (_, result_type) = match_types (args_types, sign_args_types, Map.empty)
     result_type
 
@@ -355,8 +354,8 @@ let match_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_types 
                 with ex -> matching_types results candidates'
     let results = List.rev (matching_types [] sign_fct_types)
     match results with
-    |   [] -> failwith (sprintf "no matching function type found for '%s' with arguments of type(s) (%s)" fct_name (args_types |> type_list_to_string))
+    |   [] -> raise (Error (NoMatchingFunctionType (fct_name, args_types)))
     |   [ty] -> ty
-    |   _ -> failwith (sprintf "ambiguous function call: multiple matching function types found for '%s' with arguments of type(s) %s" fct_name (args_types |> type_list_to_string))
+    |   _ -> raise (Error (AmbiguousFunctionCall (fct_name, args_types)))
 
 //--------------------------------------------------------------------

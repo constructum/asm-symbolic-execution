@@ -430,7 +430,8 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
                                                         
             let MacroDeclaration =
                 R3 (poption (kw "macro") << kw "rule" << ID_RULE) parameter_list (lit "=" << Rule)
-                |>> fun (rname, param_list, r) ->
+                |||>> fun reg _ (rname, param_list, r) ->
+                        let _ = Parser.typecheck_rule (Some reg) r (sign, Map.ofSeq param_list)
                         if List.length param_list > 0
                         then (rname, (List.map fst param_list, r))    // !!! types are currently ignored
                         else (rname, ([], r))

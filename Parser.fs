@@ -14,14 +14,24 @@ open AST
 let trace = ref 0
 
 type ErrorDetails =
-|   TypeCheckingError of string
+|   SignatureError of Signature.ErrorDetails
+|   CondTermGuardNotBoolean
+|   CondTermBranchesWithDifferentTypes of TYPE * TYPE
+|   UndefinedVariable of string
 
 exception Error of string * SrcReg option * ErrorDetails
 
 let error_msg (fct : string, reg : SrcReg option, err : ErrorDetails) = 
     sprintf "error in module %s, function %s:\n%s  " module_name fct (ParserCombinators.opt_src_reg_to_string reg) +
     match err with
-    |   TypeCheckingError msg -> sprintf "type checking error: %s" msg
+    |   SignatureError details ->
+            sprintf "type error:\n%s\n" (Signature.error_msg details)
+    |   CondTermGuardNotBoolean ->
+            "type error: guard of conditional term is not of type Boolean"
+    |   CondTermBranchesWithDifferentTypes (t1, t2) ->
+            sprintf "branches of conditional term have different types (then-branch: %s; else-branch: %s)" (t1 |> type_to_string) (t2 |> type_to_string)
+    |   UndefinedVariable v ->
+            sprintf "variable '%s' is not defined" v
 
 //--------------------------------------------------------------------
 
@@ -57,15 +67,9 @@ let comment (s : ParserInput<'state>) : ParserResult<string, 'state> =
     |>> fun s' -> ( (if !trace > 0 then fprintf stderr "comment:\n%s\n" s' else ());
                     s' )   )    s
 
-// let ws_or_comment (s : ParserInput<'state>) : ParserResult<string, 'state> =
-//     ( (pwhitespace ++ (pmany (comment << pwhitespace))) |>> fun (strg, strg_list : string list) -> strg + String.concat "" strg_list) s
-
 let ws_or_comment (s : ParserInput<'state>) : ParserResult<string, 'state> =
     ( pwhitespace ++ (pmany (comment ++ pwhitespace))
         |>> fun (strg, strg_list : (string*string) list) -> strg + String.concat "" (List.map (fun (s1, s2) -> s1+s2) strg_list) ) s
-
-// let ws_or_comment (s : ParserInput<'state>) : ParserResult<char list, 'state> =
-//     ( ( pwhitespace <|> comment ) >> (pmany (pwhitespace <|> comment)) |>> List.concat ) s
 
 let skip_to_eos (s : ParserInput<'state>) : ParserResult<string, 'state> =
     ( ws_or_comment >> peos ) s
@@ -214,12 +218,12 @@ let rec typecheck_term reg (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYP
                         match f (sign, tyenv) with
                         |   (FctName f, f_sign_types) ->
                                 try match_fct_type f (ts >>| fun t -> t (sign, tyenv)) f_sign_types
-                                with _ -> raise (Error ("typecheck_term", reg, TypeCheckingError (sprintf "function '%s' applied to wrong arguments" f)))
+                                with Signature.Error details -> raise (Error ("typecheck_term", reg, SignatureError details))
                         |   (_, [(_, f_ran)]) -> f_ran    // special constants UndefConst, BoolConst b, etc.
                         |   _ -> failwith "typecheck_term: AppTerm: this should not happen";
         CondTerm = fun (G, t1, t2) (sign, tyenv) ->
                         if G (sign, tyenv) <> Boolean
-                        then raise (Error ("typecheck_term", reg, TypeCheckingError "type of guard in conditional term must be Boolean"))
+                        then raise (Error ("typecheck_term", reg, CondTermGuardNotBoolean))
                         else
                         (   let (t1, t2) = (t1 (sign, tyenv), t2 (sign, tyenv))
                             //!!!!!!!!!!!!! make everything compatible with undef for the moment - but this should be done properly
@@ -227,20 +231,20 @@ let rec typecheck_term reg (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYP
                             else if t2 = Undef then t1
                             else*)
                             if t1 = t2 then t1
-                            else raise (Error ("typecheck_term", reg, TypeCheckingError $"branches of conditional term have different types (then-branch: {t1 |> type_to_string}; else-branch: {t2 |> type_to_string})")) );
+                            else raise (Error ("typecheck_term", reg, CondTermBranchesWithDifferentTypes (t1, t2))) );
         Initial  = fun (f, xs) (sign, tyenv) ->
                         if !trace > 0 then fprintf stderr "typecheck_term: match_fct_type 2 %s\n" (AppTerm (FctName f, xs >>| Value) |> term_to_string sign)
                         match_fct_type f (xs >>| type_of_value sign) (fct_types f sign)
         VarTerm  = fun v -> fun (_, tyenv) ->
                         try Map.find v tyenv
-                        with _ -> raise (Error ("typecheck_term", reg, TypeCheckingError $"variable '{v}' not defined"));
+                        with _ -> raise (Error ("typecheck_term", reg, UndefinedVariable v));
         LetTerm  = fun (x, t1, t2) -> fun (sign, tyenv) ->
                         let t1 = t1 (sign, tyenv)
                         t2 (sign, Map.add x t1 tyenv);
         DomainTerm = fun ty -> fun _ -> Powerset ty
     } t (sign, tyenv)
 
-let typecheck_rule (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TYPE =
+let typecheck_rule reg (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TYPE =
     rule_induction (typecheck_term None) {
         S_Updates  = fun _ -> failwith "not implemented"
         UpdateRule = fun ((f, ts), t) (sign, tyenv) ->
@@ -471,8 +475,8 @@ let definition (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE 
                             opt_state_initialisation (Signature.Controlled) f (tys_ran, ty_dom) (None, opt_initially),
                             empty_rules_db ) )
         <|> ( ((kw "rule" << new_rule_name) ++ (kw "=" << rule))
-                |>> fun (rule_name, R) ->
-                        let _ = typecheck_rule R (sign, Map.empty)
+                |||>> fun reg _ (rule_name, R) ->
+                        let _ = typecheck_rule reg R (sign, Map.empty)
                         (   add_rule_name rule_name [] Signature.empty_signature,
                             empty_state,
                             add_rule rule_name ([], R) empty_rules_db ) )   // parameterless rule: empty type list
@@ -504,7 +508,7 @@ let parse_and_typecheck (parsing_fct : Parser<'a, PARSER_STATE>) typechecking_fc
 
 let parse_name initial_location sign s = parse_and_typecheck (name : Parser<NAME, PARSER_STATE>) typecheck_name initial_location (sign, empty_state) s
 let parse_term initial_location sign s = parse_and_typecheck term (typecheck_term None) initial_location (sign, empty_state) s
-let parse_rule initial_location sign s = parse_and_typecheck rule typecheck_rule initial_location (sign, empty_state) s
+let parse_rule initial_location sign s = parse_and_typecheck rule (typecheck_rule None) initial_location (sign, empty_state) s
 //let parse_definitions (sign, S) s = get_state_from_input (snd (make_parser definitions (sign, S) s))
 let parse_definitions initial_location (sign, S) s =
     let defs = fst (make_parser definitions initial_location (sign, S) s)

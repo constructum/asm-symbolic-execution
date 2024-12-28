@@ -79,6 +79,16 @@ type NAME_INFO =
 
 type SIGNATURE = Map<FCT_NAME, NAME_INFO>
 
+type ErrorDetails =
+|   TypeMismatch of TYPE * TYPE
+|   FunctionCallTypeMismatch of (string * TYPE list * TYPE) * TYPE list
+|   TypeOfResultUnknown of string * TYPE list * TYPE
+|   NoMatchingFunctionType of string * TYPE list
+|   AmbiguousFunctionCall of string * TYPE list
+
+exception Error of ErrorDetails
+val error_msg : ErrorDetails -> string
+
 val empty_signature : SIGNATURE
 val signature_override : SIGNATURE -> SIGNATURE -> SIGNATURE
 
