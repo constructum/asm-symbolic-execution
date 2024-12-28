@@ -245,7 +245,7 @@ let rec typecheck_term reg (t : TERM) (sign : SIGNATURE, tyenv : Map<string, TYP
     } t (sign, tyenv)
 
 let typecheck_rule reg (R : RULE) (sign : SIGNATURE, tyenv : Map<string, TYPE>) : TYPE =
-    rule_induction (typecheck_term None) {
+    rule_induction (typecheck_term reg) {
         S_Updates  = fun _ -> failwith "not implemented"
         UpdateRule = fun ((f, ts), t) (sign, tyenv) ->
                         let kind = fct_kind f sign
@@ -476,7 +476,7 @@ let definition (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE 
                             empty_rules_db ) )
         <|> ( ((kw "rule" << new_rule_name) ++ (kw "=" << rule))
                 |||>> fun reg _ (rule_name, R) ->
-                        let _ = typecheck_rule reg R (sign, Map.empty)
+                        let _ = typecheck_rule (Some reg) R (sign, Map.empty)
                         (   add_rule_name rule_name [] Signature.empty_signature,
                             empty_state,
                             add_rule rule_name ([], R) empty_rules_db ) )   // parameterless rule: empty type list
@@ -509,7 +509,7 @@ let parse_and_typecheck (parsing_fct : Parser<'a, PARSER_STATE>) typechecking_fc
 let parse_name initial_location sign s = parse_and_typecheck (name : Parser<NAME, PARSER_STATE>) typecheck_name initial_location (sign, empty_state) s
 let parse_term initial_location sign s = parse_and_typecheck term (typecheck_term None) initial_location (sign, empty_state) s
 let parse_rule initial_location sign s = parse_and_typecheck rule (typecheck_rule None) initial_location (sign, empty_state) s
-//let parse_definitions (sign, S) s = get_state_from_input (snd (make_parser definitions (sign, S) s))
+
 let parse_definitions initial_location (sign, S) s =
     let defs = fst (make_parser definitions initial_location (sign, S) s)
     defs
