@@ -111,7 +111,7 @@ let opt_psep2 encl_begin p sep encl_end =
 
 /// Parse keywords
 let kw kw_name s =
-    (   (   (   (ws_or_comment << (pmany1 pletter) >> pwhitespace))
+    (   (   (   (ws_or_comment << (pletter ++ (pmany palphanum_) |>> fun (c, cs) -> c :: cs) >> pwhitespace))
             <|> (ws_or_comment << (pmany1 symb_ident_char) >> pwhitespace) )
                     >>= fun s ->
                         let s = implode s
