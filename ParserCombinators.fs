@@ -9,8 +9,8 @@ type SrcLoc =
 |   Strg of string ref      // string containing source code
 
 let src_loc_to_string = function
-|   File f -> sprintf "file '%s'" !f
-|   Strg s -> sprintf "string '%s'" !s
+|   File f -> sprintf "%s" !f
+|   Strg s -> sprintf "in string '%s'" !s
 
 type SrcReg = SrcLoc * SrcPos * SrcPos     // file name, position before region, position after region
 
@@ -19,22 +19,50 @@ let src_reg_to_string = function
 
 let opt_src_reg_to_string = function
 |   None -> ""
-|   Some reg -> sprintf "  at %s\n" (src_reg_to_string reg)
+|   Some reg -> sprintf "%s\n" (src_reg_to_string reg)
+
+let merge_src_reg (reg1 as (loc1, pos11, pos12) : SrcReg) (reg2 as (loc2, pos21, pos22) : SrcReg) =
+    if loc1 <> loc2
+    then failwith (sprintf "merge_regions: locations of regions do not match (%s, %s)" (src_loc_to_string loc1) (src_loc_to_string loc2))
+    else (loc1, pos11, pos22)
 
 let merge_opt_src_reg (reg1 : SrcReg option) (reg2 : SrcReg option) =
     match (reg1, reg2) with
-    |   (Some (loc1, pos1, pos2), Some (loc2, pos3, pos4)) ->
-            if loc1 <> loc2
-            then failwith (sprintf "merge_regions: locations of regions do not match (%s, %s)" (src_loc_to_string loc1) (src_loc_to_string loc2))
-            else Some (loc1, pos1, pos4)
-    |   (Some (loc1, pos1, pos2), None) -> Some (loc1, pos1, pos2)
-    |   (None, Some (loc2, pos3, pos4)) -> Some (loc2, pos3, pos4)
+    |   (Some (loc1, pos11, pos12), Some (loc2, pos21, pos22)) -> Some (merge_src_reg (loc1, pos11, pos12) (loc2, pos21, pos22))
+    |   (Some reg1, None) -> Some reg1
+    |   (None, Some reg2) -> Some reg2
     |   (None, None) -> None
 
 let initial_position = { abs = 0; line = 1; col = 1; }
 
 type FailedAt = SrcPos * string
+
+let failure (pos, strg) = Set.singleton (pos, strg)
+
+let combine_failures (failures1 : Set<FailedAt>, failures2 : Set<FailedAt>) =
+    if Set.isEmpty failures1 then failures2
+    else if Set.isEmpty failures2 then failures1
+    else let compare ((pos1, _) : SrcPos * string) ((pos2, _) : SrcPos * string) = -(compare pos1.abs pos2.abs)
+         let failures = Set.union failures1 failures2
+         if Set.isEmpty failures
+         then   Set.empty
+         else   let es = Seq.sortWith compare failures
+                let max_pos = (fst (Seq.head es)).abs
+                let rec F result es =
+                    if Seq.isEmpty es
+                    then result
+                    else let e = Seq.head es
+                         if (fst e).abs = max_pos then F (e :: result) (Seq.tail es) else result
+                F [] es |> Set.ofSeq
+
+let failure_msg (failures : Set<FailedAt>) =
+    let output_failures = String.concat "\n" (Set.toList failures >>| fun (pos, msg) -> $"[{pos.line}:{pos.col}] unexpected '{msg}'")
+    sprintf $"parsing failed:\n{output_failures}"
+
+
 type 'parser_state ParserInput = Set<FailedAt> * SrcLoc * SrcPos * 'parser_state * char list             // position, stream
+
+exception SyntaxError of string * Set<FailedAt>
 
 let parser_input_in_state_from_string initial_location state0 s = (Set.empty, (initial_location : SrcLoc), (initial_position : SrcPos), state0, explode s)
 let get_failures : 'a ParserInput -> Set<FailedAt> = fun (failures, _, _, _, _) -> failures
@@ -75,10 +103,25 @@ let (>>==) (p: Parser<'a, 'state>) (f: (SrcLoc * SrcPos * SrcPos) -> 'state -> '
         let (_, loc0, pos0, state0, _) = input
         match p input with
         |   ParserSuccess(x, rest) ->
-                let (_, loc1, pos1, _, _) = rest
+                let (_, loc1, pos1, state1, _) = rest
                 let (loc, pos_start, pos_end) = combine_loc_pos (loc0, pos0) (loc1, pos1)
                 (f (loc, pos_start, pos_end) state0 x) rest
         |   ParserFailure failures -> ParserFailure failures
+
+let no_backtrack (context : string) (p: Parser<'a, 'state>) : Parser<'a, 'state> =
+    fun input ->
+        let (_, loc0, pos0, _, _) = input
+        match p input with
+        |   ParserSuccess(x, rest) -> ParserSuccess(x, rest)
+        |   ParserFailure failures -> raise (SyntaxError (context, failures))
+
+let chg_state (f :'a -> 'state -> 'state) (x :'a) : Parser<'a, 'state> =
+    fun (input as (failures, loc, pos, state, stream)) ->
+        ParserSuccess (x, (failures, loc, pos, f x state, stream))
+
+// let with_state (f :'a -> 'state -> 'state) (x :'a) (p : Parser<'a, 'state>): Parser<'a, 'state> =
+//     fun (input as (failures, loc, pos, state, stream)) ->
+//         p (failures, loc, pos, f x state, stream)
 
 let (||>>) (p: Parser<'a, 'state1>) (f: 'state1 -> 'a -> 'state2) (s : ParserInput<'state1>): ParserResult<'a, 'state2> =
     match p s with
@@ -86,27 +129,12 @@ let (||>>) (p: Parser<'a, 'state1>) (f: 'state1 -> 'a -> 'state2) (s : ParserInp
     |   ParserFailure failures -> ParserFailure failures
 
 
-let combine_failures (failures1 : Set<FailedAt>, failures2 : Set<FailedAt>) =
-    if Set.isEmpty failures1 then failures2
-    else if Set.isEmpty failures2 then failures1
-    else
-        match (Seq.head failures1, Seq.head failures2) with
-        |   ((pos1,_), (pos2,_)) ->
-                let (pos1, pos2) = (pos1.abs, pos2.abs)
-                if pos1 > pos2 then failures1
-                else if pos1 = pos2 then Set.union failures1 failures2
-                else failures2
-
 let parser_msg = function
 |   ParserSuccess _ -> "parsing succeeded"
-|   ParserFailure failures ->
-        let output_failures = String.concat "\n" (Set.toList failures >>| fun (pos, msg) -> $"[{pos.line}:{pos.col}] {msg}")
-        sprintf $"parsing failed:\n{output_failures}"
-            
+|   ParserFailure failures -> failure_msg failures
 
 let preturn x : Parser<'a, 'state> = fun input -> ParserSuccess (x, input)
-let pfail     : Parser<'a, 'state> = fun input -> ParserFailure (combine_failures (Set.singleton (get_pos input, "always failing parser"), get_failures input))   // !!!! ?????
-let pfail_msg name msg : Parser<'a, 'state> = fun input -> ParserFailure (combine_failures (Set.singleton (get_pos input, msg), get_failures input))
+let pfail_msg msg : Parser<'a, 'state> = fun input -> ParserFailure (combine_failures (failure (get_pos input, msg), get_failures input))
 //msg
     
 let (|>>) p f : Parser<'b, 'state> = p >>= (fun x -> preturn (f x))
@@ -114,16 +142,22 @@ let (|>>) p f : Parser<'b, 'state> = p >>= (fun x -> preturn (f x))
 let (|||>>) p f : Parser<'b, 'state> = p >>== (fun (loc0, pos0, pos1) state0 x -> preturn (f (loc0, pos0, pos1) state0 x))
 
 
+let (||||>>) p f : Parser<'b, 'state> =
+    p >>== (fun (loc0, pos0, pos1) state0 x ->
+                let (result, state1) = f (loc0, pos0, pos1) state0 x
+                fun (failures, loc, pos, _, stream)  -> ParserSuccess (result, (failures, loc, pos, state1, stream)))
+
 let pcharsat c_pred expected : Parser<char, 'state> =
     fun input ->
         match parser_input_getc input with
         |   (Some c, input') ->
                 if c_pred c
                 then ParserSuccess (c, input')
-                else //ParserFailure (combine_failures (Set.singleton (get_pos input, $"character did not match: {expected} expected, '{c}' found"), get_failures input))
-                     ParserFailure (combine_failures (Set.empty, get_failures input))
+                else // ... is this the best way to handle this?
+                     ParserFailure (get_failures input)
         |   (None, _) ->
-                ParserFailure (combine_failures (Set.empty, (*Set.singleton (get_pos input, $"{expected} expected, end-of-stream found."),*) get_failures input))
+                // ... is this the best way to handle this?
+                ParserFailure (get_failures input)
 
 let pchar c0 s = pcharsat (fun c -> c = c0) ("\""+(c0.ToString())+"\"") s
 let pdigit s = pcharsat (fun c -> System.Char.IsDigit c) "digit" s
@@ -143,11 +177,11 @@ let R6 p1 p2 p3 p4 p5 p6: Parser<'a * 'b * 'c * 'd * 'e * 'f, 'state> = p1 >>= (
 
 
 let (<|>) (p1: Parser<'a, 'state>) (p2: Parser<'a, 'state>) : Parser<'a, 'state> =
-    fun stream ->
-        match p1 stream with
+    fun input ->
+        match p1 input with
         |   ParserFailure failures1 ->
-                let stream' = (failures1, get_loc stream, get_pos stream, get_parser_state stream, get_stream stream)
-                (   match p2 stream' with
+                let input' = (failures1, get_loc input, get_pos input, get_parser_state input, get_stream input)
+                (   match p2 input' with
                     |   ParserFailure failures2 ->
                             ParserFailure (combine_failures (failures1, failures2))
                     |   ParserSuccess (result2, (failures2, loc, pos2, state, stream2)) ->
@@ -170,11 +204,6 @@ let poption p =
 
 let pchoice ps : Parser<'a, 'state> = Seq.reduce (fun (p1: Parser<'a, 'state>) (p2: Parser<'a, 'state>) -> p1 <|> p2) ps
 
-let prun (p: Parser<'a, 'state>) src_loc (state0 :'state) (s: string) =
-    match p (parser_input_in_state_from_string src_loc state0 s) with
-    |   ParserSuccess (result, _) -> result
-    |   ParserFailure failures -> failwith (sprintf "parsing failed: %s" (parser_msg (ParserFailure failures)))
-
 let pstring (s: string) input0 =
     let rec F = function
         |   (result, [], input) ->
@@ -185,8 +214,8 @@ let pstring (s: string) input0 =
                 |   ParserFailure _ ->
                         let (pos, pos0) = (input_abs_pos input, input_abs_pos input0)
                         if get_stream input = []
-                        then ParserFailure (combine_failures (Set.singleton (get_pos input0, sprintf "string \"%s\" expected, end-of-stream found" s), get_failures input0))
-                        else ParserFailure (combine_failures (Set.singleton (get_pos input0, sprintf "string \"%s\" expected, \"%s\" found" s ((input0 |> get_stream |> implode)[0..pos-pos0] )), get_failures input0)) )
+                        then ParserFailure (combine_failures (failure (get_pos input0, "<end-of-stream>"), get_failures input0))
+                        else ParserFailure (combine_failures (failure (get_pos input0, ((input0 |> get_stream |> implode)[0..pos-pos0] )), get_failures input0)) )
     F ([], [for c in s -> c], input0)
 
 let pwhitespace s =
@@ -194,9 +223,9 @@ let pwhitespace s =
 
 let pint s =
     ( ((pchar '+' <|> pchar '-') <|> preturn '+')  ++  (pmany1 pdigit)
-        >>= fun (s, d) -> preturn (int (implode (s::d))) ) s
+        >>= (fun (s, d) -> preturn (int (implode (s::d)))) ) s
 
 let peos s =
     ( function
     |   (failures, loc, pos, state, []) -> ParserSuccess ((), (failures, loc, pos, state, []))
-    |   (failures, _, pos, _, s)  -> ParserFailure (combine_failures (Set.singleton (pos, "end-of-stream expected"), failures)) ) s
+    |   (failures, _, pos, _, s)  -> ParserFailure (combine_failures (failure (pos, "not <end-of-stream>"), failures)) ) s

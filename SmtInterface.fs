@@ -9,8 +9,6 @@ open Microsoft.Z3
 
 let trace = ref 0
 
-let typecheck_term = Parser.typecheck_term None
-
 type SMT_CONTEXT = {
     ctx : Context ref;
     slv : Solver ref;
@@ -113,7 +111,7 @@ let rec smt_map_term_background_function sign C (f, ts) : SMT_EXPR =
     |   ("+",       [ SMT_IntExpr e1;  SMT_IntExpr e2 ])  -> SMT_IntExpr (ctx.MkAdd (e1, e2) :?> IntExpr)
     |   ("-",       [ SMT_IntExpr e1;  SMT_IntExpr e2 ])  -> SMT_IntExpr (ctx.MkSub (e1, e2) :?> IntExpr)
     |   ("*",       [ SMT_IntExpr e1;  SMT_IntExpr e2 ])  -> SMT_IntExpr (ctx.MkMul (e1, e2) :?> IntExpr)
-    |   _ -> failwith (sprintf "smt_map_term_background_function: error (t = %s)" (term_to_string sign (AppTerm (FctName f, ts))))
+    |   _ -> failwith (sprintf "smt_map_term_background_function: error (t = %s)" (term_to_string sign (AppTerm' (snd (fct_type f sign), (FctName f, ts)))))
 
 and smt_map_term_user_defined_function sign C (f, ts) : SMT_EXPR =
     let (ctx, fct) = (!C.ctx, !C.fct)
@@ -130,20 +128,19 @@ and smt_map_term_user_defined_function sign C (f, ts) : SMT_EXPR =
                 let (kind, ar) = (type_kind tyname sign, type_arity tyname sign)
                 if kind <> EnumType || ar <> 0 then failwith (sprintf "smt_map_term_user_defined_function: types in function '%s : %s -> %s' not supported" f (type_list_to_string dom) (type_to_string ran))
                 try SMT_Expr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr))) with _ -> fail (f, dom, ran)
-        |   _ -> failwith (sprintf "smt_map_term_user_defined_function : error (t = %s)" (term_to_string sign (AppTerm (FctName f, ts))))
+        |   (f, (_, ran), _) -> failwith (sprintf "smt_map_term_user_defined_function : error (t = %s)" (term_to_string sign (AppTerm' (ran, (FctName f, ts)))))
     else failwith (sprintf "smt_map_term_user_defined_function: unsupported function kind '%s' of function '%s'" (fct_kind f sign |> fct_kind_to_string) f)
 
 and smt_map_ITE sign C (G, t1, t2) : SMT_EXPR =
     let ctx = !C.ctx
-    let typecheck t = typecheck_term t (sign, Map.empty)
-    match (smt_map_term sign C G, typecheck G, smt_map_term sign C t1, typecheck t1, smt_map_term sign C t2, typecheck t2) with
+    match (smt_map_term sign C G, get_type G, smt_map_term sign C t1, get_type t1, smt_map_term sign C t2, get_type t2) with
     |   (SMT_BoolExpr G, Boolean, SMT_BoolExpr t1, Boolean, SMT_BoolExpr t2, Boolean) ->
             SMT_BoolExpr (ctx.MkITE (G, t1 :> Expr, t2 :> Expr) :?> BoolExpr)
     |   (SMT_BoolExpr G, Boolean, SMT_IntExpr t1, Integer, SMT_IntExpr t2, Integer) ->
             SMT_IntExpr (ctx.MkITE (G, t1 :> Expr, t2 :> Expr) :?> IntExpr)
     |   (_, T_G, _, T_t1, _, T_t2) ->
             failwith (sprintf "smt_map_ITE: type error: for term %s the expected type is (Boolean, T, T) with T in { Boolean, Integer }, type (%s, %s, %s) found instead"
-                (term_to_string sign (CondTerm (G, t1, t2))) (type_to_string T_G) (type_to_string T_t1) (type_to_string T_t2) )
+                (term_to_string sign (CondTerm' (get_type t1, (G, t1, t2)))) (type_to_string T_G) (type_to_string T_t1) (type_to_string T_t2) )
 
 and smt_map_app_term sign C (f, ts) : SMT_EXPR =
     if (Set.contains f (fct_names Background.signature))
@@ -157,40 +154,40 @@ and smt_map_initial sign C (f, ts) : SMT_EXPR =
     then smt_map_term_user_defined_function sign C (f, ts)
     else failwith (sprintf "smt_map_app_term: '%s' is not a controlled function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
-and smt_map_term sign C (t : TERM) : SMT_EXPR =
+and smt_map_term sign C (t : TYPED_TERM) : SMT_EXPR =
     //if !trace > 0 then fprintf stderr "smt_map_term: %s -> " (term_to_string sign t)
     let ctx = !C.ctx
     let result = 
         match t with
-        |   AppTerm (IntConst i, [])    -> SMT_IntExpr (ctx.MkInt i)
-        |   Value (INT i)               -> SMT_IntExpr (ctx.MkInt i)
-        |   AppTerm (BoolConst b, [])   -> SMT_BoolExpr (ctx.MkBool b)
-        |   Value (BOOL b)              -> SMT_BoolExpr (ctx.MkBool b)
-        |   Value (CELL (cons, []))     -> SMT_Expr (Map.find cons (!C.con))
-        |   Initial (f, xs)             -> smt_map_initial sign C (f, xs >>| Value)
-        |   CondTerm (G, t1, t2)        -> smt_map_ITE sign C (G, t1, t2)
-        |   AppTerm (FctName f, ts)     -> smt_map_app_term sign C (f, ts)
+        |   AppTerm' (_, (IntConst i, []))    -> SMT_IntExpr (ctx.MkInt i)
+        |   Value' (_, (INT i))               -> SMT_IntExpr (ctx.MkInt i)
+        |   AppTerm' (_, (BoolConst b, []))   -> SMT_BoolExpr (ctx.MkBool b)
+        |   Value' (_, (BOOL b))              -> SMT_BoolExpr (ctx.MkBool b)
+        |   Value' (_, (CELL (cons, [])))     -> SMT_Expr (Map.find cons (!C.con))
+        |   Initial' (_, (f, xs))             -> smt_map_initial sign C (f, xs >>| mkValue sign)
+        |   CondTerm' (_, (G, t1, t2))        -> smt_map_ITE sign C (G, t1, t2)
+        |   AppTerm' (_, (FctName f, ts)) -> smt_map_app_term sign C (f, ts)
         |   t -> failwith (sprintf "smt_map_term: not supported (t = %s)" (term_to_string sign t))
     result
 
 //--------------------------------------------------------------------
 
-let smt_assert sign C (phi : TERM) =
-    if typecheck_term phi (sign, Map.empty) = Boolean
+let smt_assert sign C (phi : TYPED_TERM) =
+    if get_type phi = Boolean
     then match smt_map_term sign C phi with
          | SMT_BoolExpr be -> (!C.slv).Assert be
          | _ -> failwith (sprintf "smt_assert: error converting Boolean term (term = %s)" (term_to_string sign phi))
     else failwith (sprintf "'smt_assert' expects a Boolean term, %s found instead " (term_to_string sign phi))
 
-let smt_formula_is_true sign C (phi : TERM) =
-    if typecheck_term phi (sign, Map.empty) = Boolean
+let smt_formula_is_true sign C (phi : TYPED_TERM) =
+    if get_type phi = Boolean
     then match smt_map_term sign C phi with
          | SMT_BoolExpr be -> ((!C.slv).Check ((!C.ctx).MkNot be) = Status.UNSATISFIABLE)
          | _ -> failwith (sprintf "smt_assert: error converting Boolean term (term = %s)" (term_to_string sign phi))
     else failwith (sprintf "'smt_check' expects a Boolean term, %s found instead " (term_to_string sign phi))
 
-let smt_formula_is_false sign C (phi : TERM) =
-    if typecheck_term phi (sign, Map.empty) = Boolean
+let smt_formula_is_false sign C (phi : TYPED_TERM) =
+    if get_type phi = Boolean
     then match smt_map_term sign C phi with
          | SMT_BoolExpr be -> ((!C.slv).Check be = Status.UNSATISFIABLE)
          | _ -> failwith (sprintf "smt_assert: error converting Boolean term (term = %s)" (term_to_string sign phi))

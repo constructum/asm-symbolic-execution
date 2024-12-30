@@ -7,27 +7,46 @@ open PrettyPrinting
 
 //--------------------------------------------------------------------
 
-type TERM =
-| Value of VALUE                     // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
-| Initial of FCT_NAME * VALUE list   // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
-| AppTerm of NAME * TERM list
-| CondTerm of TERM * TERM * TERM
-| VarTerm of string
-| QuantTerm
-| LetTerm of string * TERM * TERM
-| DomainTerm of TYPE                  // AsmetaL construct: finite type (e.g. enum, abstract, subsetof) used as finite set
-//  | TupleTerm of TERM list
+type 'annotation ANN_TERM =
+| Value'      of 'annotation * (VALUE)                     // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
+| Initial'    of 'annotation * (FCT_NAME * VALUE list)   // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
+| AppTerm'    of 'annotation * (NAME * 'annotation ANN_TERM list)
+| CondTerm'   of 'annotation * ('annotation ANN_TERM * 'annotation ANN_TERM * 'annotation ANN_TERM)
+| VarTerm'    of 'annotation * (string)
+| QuantTerm'  of 'annotation
+| LetTerm'    of 'annotation * (string * 'annotation ANN_TERM * 'annotation ANN_TERM)
+| DomainTerm' of 'annotation * TYPE                  // AsmetaL construct: finite type (e.g. enum, abstract, subsetof) used as finite set
+//  | TupleTerm   of 'annotation * ('annotation ANN_TERM list)
+
+let get_annotation = function
+|   Value' (ann, _) -> ann
+|   Initial' (ann, _) -> ann
+|   AppTerm' (ann, _) -> ann
+|   CondTerm' (ann, _) -> ann
+|   VarTerm' (ann, _) -> ann
+|   QuantTerm' ann -> ann
+|   LetTerm' (ann, _) -> ann
+|   DomainTerm' (ann, _) -> ann
+//  |   TupleTerm (ann, _) -> ann
+
+type TYPED_TERM = TYPE ANN_TERM
+let get_type : TYPED_TERM -> TYPE = get_annotation
+
+let mkValue sign x = Value' (type_of_value sign x, x)
+let mkInitial sign (f, xs) = Initial' (match_fct_type f (xs >>| type_of_value sign) (fct_types f sign), (f, xs))    // !!!!!! very inefficient
+
+//--------------------------------------------------------------------
 
 type RULE =
-| S_Updates of Set<(FCT_NAME * VALUE list) * TERM>  //Map<FCT_NAME * VALUE list, TERM>   // used for special purposes (symbolic evaluation): "partially interpreted rules", not actual rules of the language
-| UpdateRule of (FCT_NAME * TERM list) * TERM
-| CondRule of TERM * RULE * RULE
+| S_Updates of Set<(FCT_NAME * VALUE list) * TYPED_TERM>  //Map<FCT_NAME * VALUE list, TERM>   // used for special purposes (symbolic evaluation): "partially interpreted rules", not actual rules of the language
+| UpdateRule of (FCT_NAME * TYPED_TERM list) * TYPED_TERM
+| CondRule of TYPED_TERM * RULE * RULE
 | ParRule of RULE list
 | SeqRule of RULE list
 | IterRule of RULE
-| LetRule of string * TERM * RULE
-| ForallRule of string * TERM * TERM * RULE
-| MacroRuleCall of RULE_NAME * TERM list
+| LetRule of string * TYPED_TERM * RULE
+| ForallRule of string * TYPED_TERM * TYPED_TERM * RULE
+| MacroRuleCall of RULE_NAME * TYPED_TERM list
 
 let skipRule = ParRule []
 
@@ -43,52 +62,52 @@ let get_rule rule_name (db : RULES_DB) = Map.find rule_name db
 
 //--------------------------------------------------------------------
 
-type MACRO_DB = Map<FCT_NAME, string list * TERM>   // for derived functions = macros !!! what about types ?
+type MACRO_DB = Map<FCT_NAME, string list * TYPED_TERM>   // for derived functions = macros !!! what about types ?
 
 let empty_macro_db : MACRO_DB = Map.empty
 let macro_db_override (db1 : MACRO_DB) (db' : MACRO_DB) : MACRO_DB = Common.map_override db1 db'
-let add_macro macro_name ((args, t) : string list * TERM) (db : MACRO_DB) = Map.add macro_name (args, t) db
+let add_macro macro_name ((args, t) : string list * TYPED_TERM) (db : MACRO_DB) = Map.add macro_name (args, t) db
 let exists_macro macro_name (db : MACRO_DB) = Map.containsKey macro_name db
 let get_macro macro_name (db : MACRO_DB) = Map.find macro_name db
 
 //--------------------------------------------------------------------
 
-let int_term n = AppTerm (IntConst n, [])
-let str_term s = AppTerm (StringConst s, [])
+let int_term n = AppTerm' (Integer, (IntConst n, []))
+let str_term s = AppTerm' (Strg, (StringConst s, []))
 
 //--------------------------------------------------------------------
 
 type FUNC_EXPR =
-| LambdaTerm of string list * TERM
+| LambdaTerm of string list * TYPED_TERM
 
 //--------------------------------------------------------------------
 
-type TERM_INDUCTION<'name, 'term> = {
-    Value    : VALUE -> 'term;
-    Initial  : string * VALUE list -> 'term;
-    AppTerm  : 'name * 'term list -> 'term;
-    CondTerm : 'term * 'term * 'term -> 'term;
-    VarTerm  : string -> 'term;
-    LetTerm  : string * 'term * 'term -> 'term;
-    DomainTerm : TYPE -> 'term;
+type ANN_TERM_INDUCTION<'annotation, 'name, 'term> = {
+    Value      : 'annotation * (VALUE) -> 'term;
+    Initial    : 'annotation * (string * VALUE list) -> 'term;
+    AppTerm    : 'annotation * ('name * 'term list) -> 'term;
+    CondTerm   : 'annotation * ('term * 'term * 'term) -> 'term;
+    VarTerm    : 'annotation * (string) -> 'term;
+    LetTerm    : 'annotation * (string * 'term * 'term) -> 'term;
+    DomainTerm : 'annotation * (TYPE) -> 'term;
 }
 
-let rec term_induction (name : NAME -> 'name) (F : TERM_INDUCTION<'name, 'term>) (t : TERM) :'term =
-    let term_ind = term_induction name
+let rec ann_term_induction (name : NAME -> 'name) (F : ANN_TERM_INDUCTION<'annotation, 'name, 'term>) (t : 'annotation ANN_TERM) :'term =
+    let term_ind = ann_term_induction name
     match t with
-    |   Value x -> F.Value x
-    |   Initial (f, xs) -> F.Initial (f, xs);
-    |   AppTerm (f, ts) -> F.AppTerm (name f, List.map (fun t -> term_ind F t) ts)
-    |   CondTerm (G, t1, t2) -> F.CondTerm (term_ind F G, term_ind F t1, term_ind F t2)
-    |   VarTerm v -> (((F.VarTerm :string -> 'term) (v : string)) :'term)
-    |   QuantTerm -> failwith "term_induction: QuantTerm not implemented"
-    |   LetTerm (x, t1, t2) -> F.LetTerm (x, term_ind F t1, term_ind F t2)
-    |   DomainTerm tyname -> F.DomainTerm tyname
+    |   Value' (ann, x)              -> F.Value   (ann, x)
+    |   Initial' (ann, (f, xs))      -> F.Initial (ann, (f, xs))
+    |   AppTerm'  (ann, (f, ts))     -> F.AppTerm (ann, (name f, List.map (fun t -> term_ind F t) ts))
+    |   CondTerm' (ann, (G, t1, t2)) -> F.CondTerm (ann, (term_ind F G, term_ind F t1, term_ind F t2))
+    |   VarTerm' (ann, v)            -> F.VarTerm (ann, v)
+    |   QuantTerm' ann -> failwith "term_induction: QuantTerm not implemented"
+    |   LetTerm' (ann, (x, t1, t2))  -> F.LetTerm (ann, (x, term_ind F t1, term_ind F t2))
+    |   DomainTerm' (ann, tyname)    -> F.DomainTerm (ann, tyname)
 
 //--------------------------------------------------------------------
 
 type RULE_INDUCTION<'term, 'rule> = {
-    S_Updates : Set<(FCT_NAME * VALUE list) * TERM> -> 'rule;
+    S_Updates : Set<(FCT_NAME * VALUE list) * TYPED_TERM> -> 'rule;     // what not ""... * 'term>" ?
     UpdateRule : (FCT_NAME * 'term list) * 'term -> 'rule;
     CondRule : 'term * 'rule * 'rule -> 'rule;
     ParRule : 'rule list -> 'rule;
@@ -99,7 +118,7 @@ type RULE_INDUCTION<'term, 'rule> = {
     MacroRuleCall : RULE_NAME * 'term list -> 'rule;     // Map<FCT_NAME * VALUE list, 'term> -> 'rule;
 }
 
-let rec rule_induction (term : TERM -> 'term) (F : RULE_INDUCTION<'term, 'rule>) (R : RULE) : 'rule =
+let rec rule_induction (term : TYPED_TERM -> 'term) (F : RULE_INDUCTION<'term, 'rule>) (R : RULE) : 'rule =
     let rule_ind = rule_induction term
     match R with
     |   S_Updates U -> F.S_Updates U   // F.S_Updates (Map.map (fun loc -> fun t_rhs -> term t_rhs) U)
@@ -121,14 +140,14 @@ let rec rule_induction (term : TERM -> 'term) (F : RULE_INDUCTION<'term, 'rule>)
 let name_size name = 1
 
 let rec term_size t =
-    term_induction name_size {
-        Value = fun _ -> 1;
-        AppTerm = fun (f, ts : int list) -> 1 + f + List.sum ts;
-        CondTerm = fun (G, t1, t2) -> 1 + G + t1 + t2;
-        Initial = fun _ -> 1;
-        VarTerm = fun _ -> 1;
-        LetTerm = fun (x, t1, t2) -> 1 + t1 + t2;
-        DomainTerm = fun _ -> 1;
+    ann_term_induction name_size {
+        Value = fun (_, _) -> 1;
+        AppTerm = fun (_, (f, ts : int list)) -> 1 + f + List.sum ts;
+        CondTerm = fun (_, (G, t1, t2)) -> 1 + G + t1 + t2;
+        Initial = fun (_, _) -> 1;
+        VarTerm = fun (_, _) -> 1;
+        LetTerm = fun (_, (x, t1, t2)) -> 1 + t1 + t2;
+        DomainTerm = fun (_, _) -> 1;
     } t
 
 let rule_size = rule_induction term_size {
@@ -174,16 +193,16 @@ let pp_location_term sign prefix = function
             blo0 [ str (prefix+"["); str f; str ", "; str "("; blo0 (pp_list [str",";brk 1] (List.map (fun x -> str (value_to_string x)) xs)); str ")]" ]
     |   (f, _) -> blo0 [ str $"{prefix}[{f}]" ]
 
-let rec pp_term (sign : SIGNATURE) (t : TERM) =
+let rec pp_term (sign : SIGNATURE) (t : TYPED_TERM) =
     let (pp_app_term, pp_location_term) = (pp_app_term sign, pp_location_term sign)
-    term_induction (fun x -> x) {
-        AppTerm  = fun (f, ts) -> pp_app_term (f, ts);
-        CondTerm = fun (G, t1, t2) -> blo0 [ str "if "; G; line_brk; str "then "; t1; line_brk; str "else "; t2; line_brk; str "endif" ];
-        Value    = fun x -> str (value_to_string x);
-        Initial  = fun (f, xs) -> pp_location_term "initial" (f, xs);
-        VarTerm = fun x -> str x;
-        LetTerm = fun (v, t1, t2) -> blo0 [ str "let "; str v; str " = "; t1; line_brk; str "in "; t2; line_brk; str "endlet" ];
-        DomainTerm = fun tyname -> str (type_to_string tyname);
+    ann_term_induction (fun x -> x) {
+        AppTerm  = fun (_, (f, ts)) -> pp_app_term (f, ts);
+        CondTerm = fun (_, (G, t1, t2)) -> blo0 [ str "if "; G; line_brk; str "then "; t1; line_brk; str "else "; t2; line_brk; str "endif" ];
+        Value    = fun (_, x) -> str (value_to_string x);
+        Initial  = fun (_, (f, xs)) -> pp_location_term "initial" (f, xs);
+        VarTerm = fun (_, x) -> str x;
+        LetTerm = fun (_, (v, t1, t2)) -> blo0 [ str "let "; str v; str " = "; t1; line_brk; str "in "; t2; line_brk; str "endlet" ];
+        DomainTerm = fun (_, tyname) -> str (type_to_string tyname);
     } t
 
 let rec pp_rule (sign : SIGNATURE) (R : RULE) =

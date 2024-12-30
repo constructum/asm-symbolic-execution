@@ -11,7 +11,7 @@ let trace = ref 0
 
 //--------------------------------------------------------------------
 
-type S_DYNAMIC_STATE = Map<string, Map<VALUE list, TERM>>
+type S_DYNAMIC_STATE = Map<string, Map<VALUE list, TYPED_TERM>>
 
 type S_STATE = { _signature : SIGNATURE; _carrier_sets : State.CARRIER_SETS; _static : STATIC_STATE; _dynamic : S_DYNAMIC_STATE; _dynamic_initial : STATIC_STATE; }
 
@@ -30,7 +30,7 @@ let state_to_s_state (S : State.STATE) : S_STATE = {
     _signature = S._signature;
     _carrier_sets = S._carrier_sets;
     _static    = S._static;
-    _dynamic   = Map.map (fun f -> fun f_table -> Map.map (fun loc -> fun x -> Value x) f_table) S._dynamic;
+    _dynamic   = Map.map (fun f -> fun f_table -> Map.map (fun loc -> fun x -> mkValue (S._signature) x) f_table) S._dynamic;
     _dynamic_initial = S._dynamic_initial;
 }
 
@@ -77,6 +77,8 @@ let has_interpretation (S : S_STATE) (name : NAME) =
 //--------------------------------------------------------------------
 
 let fct_name_interpretation (S : S_STATE) (f : string) (args : VALUE list) =
+    let sign = signature_of S
+    let Value = mkValue sign
     let kind =
         try fct_kind f (signature_of S)
         with _ -> failwith (sprintf "function '%s' not defined in signature" f)
@@ -95,17 +97,17 @@ let fct_name_interpretation (S : S_STATE) (f : string) (args : VALUE list) =
         (   try Map.find args (Map.find f (S._dynamic))
             with _ ->
                 try Value (Map.find f (S._dynamic_initial) args)
-                with _ -> Initial (f, args)  )
+                with _ -> mkInitial sign (f, args)  )
     |   _ ->
         failwith (sprintf "unsupported function kind '%s' for function name '%s'" (fct_kind_to_string kind) f)
 
 
 let interpretation (S : S_STATE) (name : NAME) =
     match name with
-    |   UndefConst -> (fun _ -> Value UNDEF)
-    |   BoolConst b -> (fun _ -> Value (BOOL b))
-    |   IntConst i -> (fun _ -> Value (INT i))
-    |   StringConst s -> (fun _ -> Value (STRING s))
+    |   UndefConst -> (fun _ -> Value' (Undef, UNDEF))
+    |   BoolConst b -> (fun _ -> Value' (Boolean, BOOL b))
+    |   IntConst i -> (fun _ -> Value' (Integer, INT i))
+    |   StringConst s -> (fun _ -> Value' (String, STRING s))
     |   FctName f -> (fun (args : VALUE list) -> (fct_name_interpretation S) f args)
   
 //--------------------------------------------------------------------

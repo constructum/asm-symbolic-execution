@@ -11,13 +11,13 @@ open Common
 
 type t =
 |   Block of t list * int * int
-|   String of string
+|   Strg of string
 |   Break of int
 |   Line_Break
 
 let rec breakdist = function
 |   (Block(_,_,len)::es, after) -> len + breakdist (es, after)
-|   (String s   :: es, after)   -> String.length s + breakdist (es, after)
+|   (Strg s     :: es, after)   -> String.length s + breakdist (es, after)
 |   (Break _    :: es, after)   -> 0
 |   (Line_Break :: es, after)   -> 0
 |   ([], after)                 -> after
@@ -33,7 +33,7 @@ let pr (os : System.IO.TextWriter) margin e =
     |   (e::es, blockspace, after) ->
             (   match e with
                 |   Block (bes, indent, len) -> printing (bes, !space-indent, breakdist(es, after))
-                |   String s -> output "%s" s; space := !space - String.length s
+                |   Strg s -> output "%s" s; space := !space - String.length s
                 |   Break len ->
                         if len + breakdist (es, after) <= !space
                         then blanks len
@@ -49,11 +49,11 @@ let toString margin e =
 
 let length = function
 |   (Block(_, _, len)) -> len
-|   (String s)         -> String.length s
+|   (Strg s)         -> String.length s
 |   (Break len)        -> len
 |   (Line_Break)       -> 0
 
-let (str, brk, line_brk) = (String, Break, Line_Break)
+let (str, brk, line_brk) = (Strg, Break, Line_Break)
 
 let blo (indent, es) =
     Block (es, indent, List.fold (fun sum -> fun e -> length e + sum) 0 es)

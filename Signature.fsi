@@ -3,13 +3,6 @@ module Signature
 type FCT_NAME = string
 type RULE_NAME = string
 
-type NAME =
-| UndefConst
-| BoolConst of bool
-| IntConst of int
-| StringConst of string
-| FctName of FCT_NAME
-
 type ASSOCIATIVITY =
 | LeftAssoc
 | RightAssoc
@@ -43,6 +36,13 @@ type TYPE =
 | Powerset of TYPE
 | Bag of TYPE
 | Map of TYPE * TYPE
+
+type NAME =
+| UndefConst
+| BoolConst of bool
+| IntConst of int
+| StringConst of string
+| FctName of FCT_NAME
 
 val type_to_string : TYPE -> string
 val type_list_to_string : TYPE list -> string
@@ -85,9 +85,19 @@ type ErrorDetails =
 |   TypeOfResultUnknown of string * TYPE list * TYPE
 |   NoMatchingFunctionType of string * TYPE list
 |   AmbiguousFunctionCall of string * TYPE list
+|   NotAFunctionName of string
+|   VariableAlreadyInUse of string
+|   UnknownVariable of string
 
 exception Error of ErrorDetails
 val error_msg : ErrorDetails -> string
+
+module TypeEnv =
+    type TYPE_ENV = Map<string, TYPE>
+    val empty : TYPE_ENV
+    val get : string -> TYPE_ENV -> TYPE
+    val add_distinct : string -> TYPE -> TYPE_ENV -> TYPE_ENV
+    val add_overwrite : string -> TYPE -> TYPE_ENV -> TYPE_ENV
 
 val empty_signature : SIGNATURE
 val signature_override : SIGNATURE -> SIGNATURE -> SIGNATURE

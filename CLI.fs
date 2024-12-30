@@ -154,8 +154,8 @@ let CLI_with_ex(args) =
         let rec load_everything L =
             match L with
             |   [] -> () 
-            |   (Str s) :: rest  -> writeln_err $"-str {s}"; TopLevel.loadstr !asmeta_flag s; load_everything rest
-            |   (File f) :: rest -> writeln_err $"-file {f}"; loadfile !asmeta_flag f; load_everything rest
+            |   (Str s) :: rest  -> TopLevel.loadstr !asmeta_flag s; load_everything rest
+            |   (File f) :: rest -> loadfile !asmeta_flag f; load_everything rest
         parse_arguments 0
         let _ = TopLevel.init !asmeta_flag
         load_everything (List.rev !objects_to_load)
@@ -170,5 +170,6 @@ let CLI(args) =
     try
         CLI_with_ex(args)
     with
-    |   Parser.Error (fct, reg, err) -> writeln_err (Parser.error_msg (fct, reg, err)); 1
-    |   Failure s -> writeln_err $"exception:\n{s}"; 1
+    |   Parser.Error (fct, reg, err)  -> writeln_err ("\n" + Parser.error_msg (fct, reg, err)); 1
+    |   AsmetaL.Error (fct, reg, err) -> writeln_err ("\n" + AsmetaL.error_msg (fct, reg, err)); 1
+    |   Failure s -> writeln_err $"\nexception:\n{s}"; 1

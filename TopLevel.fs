@@ -40,7 +40,7 @@ let initial_state_ : State.STATE option ref = ref None
 let rules_         : AST.RULES_DB option ref = ref None
 let macros_        : AST.MACRO_DB option ref = ref None
 
-let initially     : Set<TERM> ref = ref Set.empty     // conditions in initial state (specified by 'initially')
+let initially     : Set<TYPED_TERM> ref = ref Set.empty     // conditions in initial state (specified by 'initially')
 
 let smt_ctx       : SMT_CONTEXT = new_smt_context ()
 

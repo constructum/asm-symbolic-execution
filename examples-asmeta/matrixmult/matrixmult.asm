@@ -1,6 +1,6 @@
 asm matrixmult
 
-import ../STDL/StandardLibrary.asm
+import ../STDL/StandardLibrary
 
 
 signature:

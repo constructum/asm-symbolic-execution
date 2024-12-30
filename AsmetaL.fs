@@ -11,6 +11,34 @@ open AST
 
 let trace = ref 0
 
+let module_name = "AsmetaL"
+
+type ErrorDetails =
+|   SyntaxError of string
+|   NotFiniteSet of string * TYPE
+|   FunctionNameNotInSignature of string
+|   ConstructorCannotBeRedefined of string
+|   FunctionNotDeclaredAsControlled of string
+|   FunctionNotDeclaredAsStaticOrDerived of string
+
+exception Error of string * SrcReg option * ErrorDetails
+
+let error_msg (fct : string, reg : SrcReg option, err : ErrorDetails) = 
+    sprintf "error - function %s.%s:\n%s" module_name fct (ParserCombinators.opt_src_reg_to_string reg) +
+    match err with
+    |   SyntaxError where ->
+            sprintf "syntax error in %s" where
+    |   NotFiniteSet (v, ty) ->
+            sprintf "range of variable '%s' must be a finite set (value of type '%s' found instead)" v (type_to_string ty)
+    |   FunctionNameNotInSignature f ->
+            sprintf "error in function definition: function name '%s' is not declared in the signature" f
+    |   ConstructorCannotBeRedefined f ->
+            sprintf "error in function definition: constructor '%s' cannot be redefined" f
+    |   FunctionNotDeclaredAsControlled f ->
+            sprintf "error in function initialisation: function '%s' is not declared as controlled in the signature" f
+    |   FunctionNotDeclaredAsStaticOrDerived f ->
+            sprintf "error in function definition: function '%s' is not declared as static or derived in the signature" f
+
 //--------------------------------------------------------------------
 
 type ASM_Definitions = {
@@ -71,21 +99,13 @@ let get_state_from_input = Parser.get_state_from_input
 //--------------------------------------------------------------------
 
 let pcharf = Parser.pcharf
-let one_line_comment = Parser.one_line_comment
-let ML_multiline_comment = Parser.ML_multiline_comment
-let C_multiline_comment = Parser.C_multiline_comment
-let comment = Parser.comment
 let ws_or_comment = Parser.ws_or_comment
 let skip_to_eos = Parser.skip_to_eos
 let lit = Parser.lit
-let int = Parser.int
 
 let kw kw_name =
-    (   (ws_or_comment << (pmany1 pletter)) )
-            >>= fun s ->
-                    let s = implode s 
-                    if s = kw_name then preturn s
-                    else pfail_msg "keyword" ($"keyword '{kw_name}' expected, '{s}' found")
+    (ws_or_comment << (pmany1 pletter))
+        >>= fun s -> let s = implode s in if s = kw_name then preturn s else pfail_msg s
 
 let alphanumeric_identifier =
     ws_or_comment << (pletter ++ (pmany palphanum_))
@@ -96,7 +116,6 @@ let identifier = alphanumeric_identifier
 let (popt_bool, psep0, psep1, psep1_lit, psep2_lit, opt_psep1, opt_psep2) =
     (Parser.popt_bool, Parser.psep0, Parser.psep1, Parser.psep1_lit, Parser.psep2_lit, Parser.opt_psep1, Parser.opt_psep2)
 
-
 let MOD_ID =
     let escaped_char = pchar '\\' << pcharf (fun c -> c <> ' ')
     let non_quote_char = pcharf (fun c -> c <> '\"')
@@ -104,7 +123,6 @@ let MOD_ID =
         (   ( (pchar '\"' << (pmany (escaped_char <|> non_quote_char)) >> pchar '\"') |>> fun chars -> (implode chars) )
         <|> ( (poption (pletter >> pchar ':')) ++ (pmany1 (palphanum_ <|> pcharf (fun c -> c = '\\' || c = '/' || c = '.' || c = '-' )))
                 |>> function (None, path) -> implode path | (Some drive_letter, path) -> (implode (drive_letter :: ':' :: path)) ) )
-
 
 let ID_DOMAIN = identifier   //!!!! not exactly
 let ID_ENUM = identifier      //!!!! not exactly
@@ -116,7 +134,6 @@ let ID_CTL = identifier       //!!!! not exactly
 let ID_LTL = identifier
 
 let EnumElement = ID_ENUM
-
 
 let add_basic_domain s sign =
     if s <> "Boolean" && s <> "Integer" && s <> "String" && s <> "Undef" && s <> "Rule"
@@ -162,7 +179,7 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
 let Domain (s : ParserInput<PARSER_STATE>) =
     ((ConcreteDomain <|> TypeDomain) ||>> fun (sign, state) update_sign_fct -> (update_sign_fct sign, state)) s
 
-let Term s =
+let Term env s : ParserResult<TYPED_TERM, PARSER_STATE> =
     if !trace > 0 then fprintf stderr "AsmetaL.Term\n"
     let DomainTerm s =
         if !trace > 0 then fprintf stderr "AsmetaL.DomainTerm\n"
@@ -171,8 +188,8 @@ let Term s =
     let regularTerm s =
         if !trace > 0 then fprintf stderr "Parser.term\n"
         Parser.term s
-    (   ( DomainTerm  |>> fun tyname -> AST.DomainTerm tyname )
-    <|> ( regularTerm ) ) s
+    (   ( DomainTerm  |>> fun tyname -> Parser.mkDomainTerm tyname (*!!!! AST.DomainTerm' tyname*) )
+    <|> ( regularTerm env ) ) s
 
 let add_function_name f (kind, infix, (tys, ty)) sign =
     //!!! little hack to avoid overwriting of predefined background functions by Asmeta StandardLibrary.asm
@@ -182,7 +199,7 @@ let add_function_name f (kind, infix, (tys, ty)) sign =
     else fprintf stderr "warning: ignoring declaration of function '%s' already present in background signature\n" f; sign
 
 let Function (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
-    let (sign, state) = get_parser_state s
+    let (sign, _) = get_parser_state s
     // any function f : Prod(T1,...,Tn) -> T is converted into an n-ary function f : T1,...,Tn -> T  [n >= 0]
     let to_fct_type (tys : TYPE, ty_opt : TYPE option) =
         match (tys, ty_opt) with
@@ -231,88 +248,111 @@ let let_rule_with_multiple_bindings v_t_list R =
     |   (v, t) :: v_t_list -> LetRule (v, t, mk_let_rule v_t_list)
     in mk_let_rule v_t_list
 
-let forall_rule_with_multiple_bindings v_tset_list t_filter R =
+let forall_rule_with_multiple_bindings reg sign v_tset_list t_filter R =
     let rec mk_forall_rule = function
     |   [] -> failwith "forall_rule_with_multiple_bindings: empty list of bindings"
     |   [(v, t)] -> ForallRule (v, t, t_filter, R)
-    |   (v, t) :: v_t_list -> ForallRule (v, t, AppTerm (BoolConst true, []), mk_forall_rule v_t_list)
+    |   (v, t) :: v_t_list -> ForallRule (v, t, Parser.mkAppTerm (Some reg) sign (BoolConst true, []), mk_forall_rule v_t_list)
     in mk_forall_rule v_tset_list
 
-let switch_to_cond_rule (t, cases : (TERM * RULE) list, otherwise : RULE option) =
-    Parser.switch_to_cond_rule (t, cases, match otherwise with Some R -> R | None -> skipRule)
+let switch_to_cond_rule reg sign (t, cases : (TYPED_TERM * RULE) list, otherwise : RULE option) =
+    Parser.switch_to_cond_rule reg sign (t, cases, match otherwise with Some R -> R | None -> skipRule)
 
 // ---------------------------------
 
-let rec BasicRule (s : ParserInput<PARSER_STATE>) =
-    let BlockRule       = kw "par" << pmany1 Rule >> kw "endpar" |>> ParRule
-    let ConditionalRule = R3 (kw "if" << Term) (kw "then" << Rule) (poption (kw "else" << Rule) |>> Option.defaultValue skipRule) >> kw "endif" |>> CondRule
+let rec BasicRule env0 (s : ParserInput<PARSER_STATE>) =
+    let Term_in_env = Term
+    let Rule_in_env = Rule
+    let Term = Term env0
+    let Rule = Rule env0
+    let BlockRule       = pmany1 Rule >> kw "endpar" |>> ParRule
+    let ConditionalRule = R3 (Term) (kw "then" << Rule) (poption (kw "else" << Rule) |>> Option.defaultValue skipRule) >> kw "endif" |>> CondRule
     let VariableTerm    = ID_VARIABLE
-    let LetRule    = R2 (kw "let" << lit "(" << (psep1_lit ((VariableTerm >> lit "=") ++ Term) ",") >> lit ")")
-                         (kw "in" << Rule) >> (kw "endlet")
-                        |>> ( function
-                                | ([(v, t)], R) -> LetRule (v, t, R)
-                                | (v_t_list, R) -> let_rule_with_multiple_bindings v_t_list R )
+    let LetRule =
+        // !!! temporary: only one binding allowed
+        //let p1 = (kw "let" << lit "(" << (psep1_lit ((VariableTerm >> lit "=") ++ Term) ",") >> lit ")")
+        let p1 = (lit "(" << VariableTerm) ++ (lit "=" << Term >> lit ")")
+        let p2 env (v, t1) = kw "in" << Rule_in_env (TypeEnv.add_distinct v (get_type t1) env) >> kw "endlet"
+        (p1 >>= fun (v, t1) -> p2 env0 (v, t1) >>= fun R -> preturn (LetRule (v, t1, R)) )
+    (*  // original rule:
+        R2 (kw "let" << lit "(" << (psep1_lit ((VariableTerm >> lit "=") ++ Term) ",") >> lit ")") (kw "in" << Rule) >> (kw "endlet")
+            |>> ( function
+                    | ([(v, t)], R) -> LetRule (v, t, R)
+                    | (v_t_list, R) -> let_rule_with_multiple_bindings v_t_list R )
+    *)
     let ChooseRule = R4 (kw "choose" << psep1_lit ((VariableTerm >> kw "in") ++ Term) ",")
                         (kw "with" << Term) (kw "do" << Rule) (poption (kw "ifnone" << Rule))
                             |>> fun _ -> failwith "not implemented: choose rule"
-    let ForallRule = R3 (kw "forall" << (psep1_lit ((VariableTerm >> kw "in") ++ Term) ","))
-                        (kw "with" << Term) (kw "do" << Rule)
-                            |>> fun (v_tset_list, t_filter, R) -> forall_rule_with_multiple_bindings v_tset_list t_filter R
-    (   kw "skip" |>> fun _ -> skipRule
-    <|> BlockRule
-    <|> ConditionalRule
-    <|> LetRule
+    let ForallRule =
+        // !!! temporary: only one binding allowed
+        let p1 = (VariableTerm) ++ (kw "in" << Term)
+            |||>> fun reg (sign, _) (v, t_range) ->
+                    // !!!! tbd: check that t_range is really a finite set, e.g. not Powerset(Integer)
+                    match get_type t_range with
+                    |   Powerset v_type -> ((v, v_type), t_range)
+                    |   _ -> raise (Error ("BasicRule.ForallRule", Some reg, NotFiniteSet (v, get_type t_range)))
+        let p2 env (v, v_type) =
+            let env' = TypeEnv.add_distinct v v_type env
+            in (kw "with" << Term_in_env env') ++ (kw "do" << Rule_in_env env')
+        (p1 >>= fun ((v, v_type), t_range) -> p2 env0 (v, v_type) >>= fun (t_filter, R) -> preturn (ForallRule (v, t_range, t_filter, R)) )
+
+    (   (kw "skip" |>> fun _ -> skipRule)
+    <|> (kw "par"    << no_backtrack "'par' rule" BlockRule)
+    <|> (kw "if"     << no_backtrack "conditional rule" ConditionalRule)
+    <|> (kw "let"    << no_backtrack "'let' rule" LetRule)
+    <|> (kw "forall" << no_backtrack "'forall' rule" ForallRule)
+    <|> MacroCallRule env0
     <|> ChooseRule
-    <|> ForallRule
-    <|> MacroCallRule
     // <|> ExtendRule
     ) s
 
-and MacroCallRule = ((ID_RULE >> lit "[") ++ (psep0 Term (lit ",") >> lit "]")) |>> MacroRuleCall
+and MacroCallRule env = ((ID_RULE >> lit "[") ++ (psep0 (Term env) (lit ",") >> lit "]")) |>> MacroRuleCall
 
-and TurboRule (s : ParserInput<PARSER_STATE>) =
-    //let sign = get_signature_from_input s
-    //let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
-    let SeqRule = kw "seq" << pmany1 Rule >> kw "endseq" |>> AST.SeqRule
-    let IterateRule = kw "iterate" << Rule >> kw "enditerate" |>> IterRule
-    (   SeqRule
-    <|> IterateRule
+and TurboRule env (s : ParserInput<PARSER_STATE>) =
+    let Rule = Rule env
+    let SeqRule = pmany1 Rule >> kw "endseq" |>> AST.SeqRule
+    let IterateRule = Rule >> kw "enditerate" |>> IterRule
+    (   (kw "seq"     << no_backtrack "'seq' rule" SeqRule)
+    <|> (kw "iterate" << no_backtrack "'iterate' rule" IterateRule)
     // <|> TurboCallRule
     // <|> TurboLocalStateRule
     ) s
 
-and DerivedRule (s : ParserInput<PARSER_STATE>) =
-    let sign = get_signature_from_input s
-    let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
-    let CaseRule = R3 (kw "switch" << Term) (pmany1 ((kw "case" << Term >> lit ":") ++ Rule)) ((poption (kw "otherwise" << Rule)) >> (kw "endswitch")) |>> switch_to_cond_rule
-    let BasicDerivedRule = CaseRule
-    let IterativeWhileRule = (kw "while" << Term) ++ (kw "do" << Rule)
+and DerivedRule env (s : ParserInput<PARSER_STATE>) =
+    let Term = Term env
+    let Rule = Rule env
+    let CaseRule = R3 (Term) (pmany1 ((kw "case" << Term >> lit ":") ++ Rule)) ((poption (kw "otherwise" << Rule)) >> (kw "endswitch"))
+                        |||>> fun reg (sign, _) (t, cases, otherwise) -> switch_to_cond_rule (Some reg) sign (t, cases, otherwise)
+    let BasicDerivedRule   = (kw "switch" << no_backtrack "'switch' rule" CaseRule)
+    let IterativeWhileRule = (kw "while" << no_backtrack "'while' rule"
+                                (Term ++ (kw "do" << Rule)) )
                                 |>> fun (G, R) -> IterRule (CondRule (G, R, skipRule))
     let TurboDerivedRule =
-            // RecursiveWhileRule <|>   // !!! ?
+        //  RecursiveWhileRule <|>   // what is this ?
             IterativeWhileRule
     (   BasicDerivedRule
     <|> TurboDerivedRule
     ) s
 
-
-and Rule (s : ParserInput<PARSER_STATE>) =
-    let sign = get_signature_from_input s
-    let Term s = Term (chg_parser_state s (sign, Parser.get_state_from_input s))    // !!! temporary
-    let UpdateRule = (R3 (Term) (lit ":=") Term) |>> fun (t1,_,t2) -> Parser.mkUpdateRule sign (t1, t2)   // !!!! not exactly as in AsmetaL grammar
-    (   BasicRule
-    <|> TurboRule
+and Rule env (s : ParserInput<PARSER_STATE>) =
+    let Term = Term env
+    let UpdateRule = (R3 (Term) (lit ":=") Term) |||>> fun reg (sign, _) (t1,_,t2) -> Parser.mkUpdateRule (Some reg) sign (t1, t2)   // !!!! not exactly as in AsmetaL grammar
+    (   BasicRule env
+    <|> TurboRule env
     // <|> TurboReturnRule
     // <|> TermAsRule
-    <|> DerivedRule
-    <|> UpdateRule          // update rule is last, because for the previous ones parsing failure is easy to detect
+    <|> DerivedRule env
+    <|> UpdateRule
     ) s
-
 
 // !!! temporary: global mutable variable to keep track of imported modules - to be replaced with 'modules' component of parser state
 let imported_modules = ref (Map.empty : Map<string, ASM>)
 
-let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDED_PARSER_STATE>  =
+let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDED_PARSER_STATE>  =
+    let Term_in_env = Term
+    let Rule_in_env = Rule
+    let Term = Term env0
+    let Rule = Rule env0
     //let (sign, state) = get_parser_state s
     let reduce_state (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserInput<PARSER_STATE> * (RULES_DB * MACRO_DB) =
         let ((sign, state), (rules_db, macro_db)) = get_parser_state s
@@ -341,7 +381,7 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
             // that may be imported in the imported module
             System.IO.Directory.SetCurrentDirectory new_dir
             let text = Common.readfile full_path
-            let parse = Parser.make_parser Asm (ParserCombinators.File (ref full_path)) ((sign, state), rules_db)
+            let parse = Parser.make_parser (Asm TypeEnv.empty) (ParserCombinators.File (ref full_path)) ((sign, state), rules_db)
             let imported_module = fst (parse text)        // !!! checks missing (e.g. check that it is a 'module' and not an 'asm', etc.)
             // move to original directory (where the importing file is located)
             System.IO.Directory.SetCurrentDirectory saved_dir
@@ -396,44 +436,43 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
             let ((sign, state), (rules_db, macro_db)) : EXTENDED_PARSER_STATE = get_parser_state s'
             if !trace > 0 then fprintf stderr "parse_asm_with_header: |signature|=%d\n" (Map.count sign)
 
-            let Term s = Term (chg_parser_state s (sign, state))    // !!! temporary
-            let parameter_list = opt_psep1 "(" ((ID_VARIABLE >> (kw "in")) ++ getDomainByID) "," ")"
+            let parameter_list = (opt_psep1 "(" ( ((ID_VARIABLE >> (kw "in")) ++ getDomainByID) ) "," ")")
+            let extend_env env param_list = List.fold (fun env (v, t) -> TypeEnv.add_distinct v t env) env param_list
+
             let DomainDefinition = (kw "domain" << ID_DOMAIN) ++ (lit "=" << Term)
             
             let FunctionDefinition =
-                R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
-                |||>> fun reg _ (f, param_list, t) ->
-                    //!!!! no type checking
-                    if !trace > 0 then fprintf stderr "|signature| = %d - FunctionDefinition '%s'\n" (Map.count sign) f
-                    if not (is_function_name f sign) then
-                        failwith (sprintf "error in function definition: function '%s' is not declared in the signature" f)
-                    else if fct_kind f sign = Constructor then
-                        failwith (sprintf "error in function definition: function '%s' is a constructor, cannot be redefined" f)
-                    else 
-                        let _ = Parser.typecheck_term (Some reg) t (sign, Map.ofSeq param_list)
-                        //!!! to do: proper handling of function overloading
-                        // !!! types of parameters are currently ignored
-                        let result =
-                            if fct_kind f sign = Static then 
-                                let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
-                                let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) (state_with_signature state sign), Map.ofList (List.zip parameters xs))
-                                //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
-                                ( (fun (state : STATE) -> state_override_static state (Map.add f fct Map.empty)),
-                                (fun (mdb : MACRO_DB) -> macro_db_override mdb (Map.add f (parameters, t) Map.empty)) )
-                            else if fct_kind f sign = Derived then 
-                                let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
-                                //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
-                                ( (fun state -> state),
-                                (fun (mdb : MACRO_DB) -> macro_db_override mdb (Map.add f (parameters, t) Map.empty)) )
-                            else failwith (sprintf "error in function definition: function '%s' is not declared as static or derived in the signature" f)
-                        result
+                let p1 = (kw "function" << ID_FUNCTION) ++ parameter_list
+                let p2 env param_list = (lit "=" << Term_in_env (extend_env env param_list))
+                let p3 = (p1 >>= fun (f, param_list) -> p2 env0 param_list >>= fun t -> preturn (f, param_list, t))
+                p3 |||>> fun reg (_, _) (f, param_list, t) ->
+                        if !trace > 0 then fprintf stderr "|signature| = %d - FunctionDefinition '%s'\n" (Map.count sign) f
+                        if not (is_function_name f sign) then
+                            raise (Error ("Asm", Some reg, FunctionNameNotInSignature f))
+                        else if fct_kind f sign = Constructor then
+                            raise (Error ("Asm", Some reg, ConstructorCannotBeRedefined f))
+                        else 
+                            //!!! to do: proper handling of function overloading
+                            let result =
+                                if fct_kind f sign = Static then 
+                                    let parameters = List.map (fun (v, t) -> v) param_list
+                                    let fct = function (xs : VALUE list) -> Eval.eval_term t ((state_with_signature state sign), Map.ofList (List.zip parameters xs))
+                                    ( (fun (state : STATE) -> state_override_static state (Map.add f fct Map.empty)),
+                                    (fun (mdb : MACRO_DB) -> macro_db_override mdb (Map.add f (parameters, t) Map.empty)) )
+                                else if fct_kind f sign = Derived then 
+                                    let parameters = List.map (fun (v, t) -> v) param_list
+                                    ( (fun state -> state),
+                                    (fun (mdb : MACRO_DB) -> macro_db_override mdb (Map.add f (parameters, t) Map.empty)) )
+                                else raise (Error ("Asm", Some reg, FunctionNotDeclaredAsStaticOrDerived f))
+                            result
                                                         
             let MacroDeclaration =
-                R3 (poption (kw "macro") << kw "rule" << ID_RULE) parameter_list (lit "=" << Rule)
-                |||>> fun reg _ (rname, param_list, r) ->
-                        let _ = Parser.typecheck_rule (Some reg) r (sign, Map.ofSeq param_list)
+                let p1 = (poption (kw "macro") << kw "rule" << ID_RULE) ++ parameter_list
+                let p2 env param_list = (lit "=" << Rule_in_env (extend_env env param_list))
+                let p3 = (p1 >>= fun (f, param_list) -> p2 env0 param_list >>= fun t -> preturn (f, param_list, t))
+                p3 |||>> fun reg _ (rname, param_list, r) ->
                         if List.length param_list > 0
-                        then (rname, (List.map fst param_list, r))    // !!! types are currently ignored
+                        then (rname, (List.map fst param_list, r))
                         else (rname, ([], r))
             let TurboDeclaration = R4 (kw "turbo" << kw "rule" << ID_RULE) parameter_list (poption (kw "in" << getDomainByID)) (lit "=" << Rule)
                                         |>> fun (rname, _, _, _) -> failwith (sprintf "not implemented: turbo rule declaration ('%s')" rname)
@@ -466,21 +505,22 @@ let rec Asm (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDE
             let DomainInitialization = (kw "domain" << ID_DOMAIN) ++ (lit "=" << Term)
                                             |>> fun (id, _) -> failwith (sprintf "not implemented: initialization of domains ('%s')" id)
             let FunctionInitialization =
-                R3 (kw "function" << ID_FUNCTION) parameter_list (lit "=" << Term)
-                |||>> fun reg _ (f, param_list, t) ->
-                    //!!!! no type checking
+                let p1 = (kw "function" << ID_FUNCTION) ++ parameter_list
+                let p2 env param_list = (lit "=" << Term_in_env (extend_env env param_list))
+                let p3 = (p1 >>= fun (f, param_list) -> p2 env0 param_list >>= fun t -> preturn (f, param_list, t))
+                p3 |||>> fun reg _ (f, param_list, t) ->
                     if not (is_function_name f sign) then
-                        failwith (sprintf "error in function definition: function '%s' is not declared in the signature" f)
+                        raise (Error ("Asm", Some reg, FunctionNameNotInSignature f))
                     else
-                        let _ = Parser.typecheck_term (Some reg) t (sign, Map.ofSeq param_list)
                         if fct_kind f sign = Controlled then 
-                            let parameters = List.map (fun (v, t) -> v  (* !!! the type is not checked and discarded for the moment *) ) param_list
-                            let fct = function (xs : VALUE list) -> Eval.eval_term t ((* !!! should also use prev. def. functions *) (state_with_signature state sign), Map.ofList (List.zip parameters xs))
-                            //failwith (sprintf "not implemented: definition of function ('%s') with arity > 0" f)
+                            let parameters = List.map (fun (v, t) -> v) param_list
+                            let fct = function (xs : VALUE list) -> Eval.eval_term t ((state_with_signature state sign), Map.ofList (List.zip parameters xs))
                             ((fun (state : STATE) -> state_override_dynamic_initial state (Map.add f fct Map.empty)), (fun (mdb : MACRO_DB) -> mdb))
-                        else failwith (sprintf "error in function initialization: function '%s' is not declared as controlled in the signature" f)
+                        else 
+                            raise (Error ("Asm", Some reg, FunctionNotDeclaredAsControlled f))
+                        
 
-            let AgentInitialization = (kw "agent" << ID_DOMAIN) ++ (lit ":" << MacroCallRule)
+            let AgentInitialization = (kw "agent" << ID_DOMAIN) ++ (lit ":" << (MacroCallRule env0))
                                             |>> fun (id, _) -> failwith (sprintf "not implemented: initialization of agent ('%s')" id)
             let Initialization = R4 (kw "init" << identifier >> lit ":")
                                     (pmany DomainInitialization)
@@ -539,10 +579,9 @@ let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB *
             let mdb   = asm_content.definitions.macros
             (sign, state, rdb, mdb)
 
-
 let parse_definitions initial_location ((sign, S), (rules_db, macro_db)) s =
     imported_modules := Map.empty
-    let asm as ASM asm' = fst (Parser.make_parser Asm initial_location ((sign, S), (rules_db, macro_db)) s)
+    let asm as ASM asm' = fst (Parser.make_parser (Asm TypeEnv.empty) initial_location ((sign, S), (rules_db, macro_db)) s)
     if (!trace > 1) then fprintf stderr "---\n%s\n---\n" (asm'.signature |> signature_to_string)
     asm
 

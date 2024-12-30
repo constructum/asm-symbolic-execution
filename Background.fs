@@ -119,6 +119,11 @@ let _iff = function
 | [ BOOL x; BOOL y ] -> BOOL (x = y)
 | _ -> UNDEF
 
+let set_interval _ = 
+    failwith "set_interval: not implemented"
+
+
+
 let const_static_fct (const_val : VALUE) (args : VALUE list) = const_val
 
 //--------------------------------------------------------------------
@@ -154,6 +159,7 @@ let background_functions =
         ("-",       minus,      ([Integer; Integer], Integer), Infix (LeftAssoc, 6));
         ("*",       times,      ([Integer; Integer], Integer), Infix (LeftAssoc, 7));
         ("div",     div,        ([Integer; Integer], Integer), Infix (LeftAssoc, 7));
+        ("set_interval", set_interval, ([Integer; Integer; Integer], Powerset Integer), NonInfix);
     ]
 
 let signature =

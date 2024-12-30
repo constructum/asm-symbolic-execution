@@ -7,13 +7,6 @@ let trace = ref 0
 type FCT_NAME = string
 type RULE_NAME = string
 
-type NAME =
-| UndefConst
-| BoolConst of bool
-| IntConst of int
-| StringConst of string
-| FctName of FCT_NAME
-
 type ASSOCIATIVITY =
 | LeftAssoc
 | RightAssoc
@@ -59,6 +52,13 @@ type TYPE =         // !!! AsmetaL note: Complex, Real, Natural, Char not implem
 | Bag of TYPE
 | Map of TYPE * TYPE
 
+type NAME =
+| UndefConst
+| BoolConst of bool
+| IntConst of int
+| StringConst of string
+| FctName of FCT_NAME
+
 let rec type_to_string ty =
     match ty with
     |   TypeParam a -> "'" ^ a
@@ -88,6 +88,9 @@ type ErrorDetails =
 |   TypeOfResultUnknown of string * TYPE list * TYPE
 |   NoMatchingFunctionType of string * TYPE list
 |   AmbiguousFunctionCall of string * TYPE list
+|   NotAFunctionName of string
+|   VariableAlreadyInUse of string
+|   UnknownVariable of string
 
 exception Error of ErrorDetails
 
@@ -105,6 +108,27 @@ let error_msg (err : ErrorDetails) =
             sprintf "no matching function type found for '%s' with arguments of type(s) (%s)" fct_name (args_types |> type_list_to_string)
     |   AmbiguousFunctionCall (fct_name, args_types) ->
             sprintf "ambiguous function call: multiple matching function types found for '%s' with arguments of type(s) %s" fct_name (args_types |> type_list_to_string)
+    |   NotAFunctionName name ->
+            sprintf "there is no function name '%s' in the signature" name
+    |   VariableAlreadyInUse v ->
+            sprintf "variable '%s' already in use" v
+    |   UnknownVariable v ->
+            sprintf "unknown variable '%s'" v
+
+//--------------------------------------------------------------------
+
+module TypeEnv =
+    type TYPE_ENV = Map<string, TYPE>
+    let empty : TYPE_ENV = Map.empty
+    let get v (env : TYPE_ENV) = try Map.find v env with _ -> raise (Error (UnknownVariable v))
+    let add_distinct v ty (env : TYPE_ENV) =
+        if Map.containsKey v env
+        then raise (Error (VariableAlreadyInUse v))
+        else Map.add v ty env
+    let add_overwrite v ty (env : TYPE_ENV) =
+        Map.add v ty env
+
+type TYPE_ENV = TypeEnv.TYPE_ENV
 
 //--------------------------------------------------------------------
 
@@ -284,10 +308,9 @@ let get_fct_info msg fct_name (sign : SIGNATURE) f =
     if !trace > 0 then fprintf stderr "(|signature| = %d) " (Map.count sign)
     if !trace > 0 then fprintf stderr "get_fct_info(%s, %s)\n" msg fct_name
     if !trace > 0 then fprintf stderr $"{Map.containsKey fct_name sign}\n"
-    assert (Map.containsKey fct_name sign)
-//    assert is_function_name fct_name sign
-    (Map.find fct_name sign)
-    |> function FctInfo fi -> f fi | _ -> failwith (sprintf "Signature.%s: '%s' is not a function name" msg fct_name)
+    //assert (Map.containsKey fct_name sign)
+    (try (Map.find fct_name sign) with _ -> raise (Error (NotAFunctionName fct_name)))
+    |> function FctInfo fi -> f fi | _ -> raise (Error (NotAFunctionName fct_name))
 
 let fct_kind fct_name (sign : SIGNATURE) = 
     get_fct_info "fct_kind" fct_name sign (fun fi -> fi.fct_kind)
@@ -337,10 +360,6 @@ let match_one_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_ty
                 raise (Error (FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types)))
     let (_, result_type) = match_types (args_types, sign_args_types, Map.empty)
     result_type
-
-// let match_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_type : TYPE list * TYPE) : TYPE =
-//     try match_one_fct_type fct_name args_types sign_fct_type
-//     with ex -> type_error_fail ex  
 
 let match_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_types : list<TYPE list * TYPE>) : TYPE =
     if !trace > 0 then fprintf stderr "\nfunction '%s': match_fct_type (%s) with:\n%s\n" fct_name (args_types |> type_list_to_string) (String.concat "," (sign_fct_types >>| fct_type_to_string))

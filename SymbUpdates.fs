@@ -17,9 +17,9 @@ let location_to_string : LOCATION -> string = Updates.location_to_string
     
 //--------------------------------------------------------------------
 
-type S_UPDATE = LOCATION * TERM
+type S_UPDATE = LOCATION * TYPED_TERM
 type S_UPDATE_SET = Set<S_UPDATE>
-type S_UPDATE_MAP = Map<string, Map<VALUE list, TERM>>
+type S_UPDATE_MAP = Map<string, Map<VALUE list, TYPED_TERM>>
 
 let show_s_update sign ((f, xs), t) =
     sprintf "%s := %s"
@@ -79,7 +79,7 @@ let seq_merge_n (Us : S_UPDATE_SET list) : S_UPDATE_SET =
 // type DYNAMIC_STATE = Map<string, Map<VALUE list, VALUE>>
 
 let apply_s_update_map (S : S_STATE) (U : S_UPDATE_MAP) =
-    let update_dynamic_function_table (f_table : Map<VALUE list, TERM>) (updates_of_f : Map<VALUE list, TERM>) =
+    let update_dynamic_function_table (f_table : Map<VALUE list, TYPED_TERM>) (updates_of_f : Map<VALUE list, TYPED_TERM>) =
             Map.fold (fun table -> fun args -> fun value -> Map.add args value table) f_table updates_of_f
     let apply_to_s_dynamic_state (dS : S_DYNAMIC_STATE) (U : S_UPDATE_MAP) =
             Map.fold
