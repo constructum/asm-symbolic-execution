@@ -20,6 +20,7 @@ type ErrorDetails =
 |   ConstructorCannotBeRedefined of string
 |   FunctionNotDeclaredAsControlled of string
 |   FunctionNotDeclaredAsStaticOrDerived of string
+|   CannotImportModule of string * string option * string option
 
 exception Error of string * SrcReg option * ErrorDetails
 
@@ -38,6 +39,16 @@ let error_msg (fct : string, reg : SrcReg option, err : ErrorDetails) =
             sprintf "error in function initialisation: function '%s' is not declared as controlled in the signature" f
     |   FunctionNotDeclaredAsStaticOrDerived f ->
             sprintf "error in function definition: function '%s' is not declared as static or derived in the signature" f
+    |   CannotImportModule (mod_id, opt_dir, opt_full_path) ->
+            sprintf "error in module import: cannot import module '%s'\n" mod_id +
+            match (opt_dir, opt_full_path) with
+            |   (Some dir, _) -> sprintf "(directory '%s' not found)\n" dir
+            |   (None, Some full_path) -> sprintf "(cannot open file '%s')\n" full_path
+            |   _ -> ""
+
+//--------------------------------------------------------------------
+
+let add_var_distinct = Parser.add_var_distinct
 
 //--------------------------------------------------------------------
 
@@ -272,8 +283,8 @@ let rec BasicRule env0 (s : ParserInput<PARSER_STATE>) =
         // !!! temporary: only one binding allowed
         //let p1 = (kw "let" << lit "(" << (psep1_lit ((VariableTerm >> lit "=") ++ Term) ",") >> lit ")")
         let p1 = (lit "(" << VariableTerm) ++ (lit "=" << Term >> lit ")")
-        let p2 env (v, t1) = kw "in" << Rule_in_env (TypeEnv.add_distinct v (get_type t1) env) >> kw "endlet"
-        (p1 >>= fun (v, t1) -> p2 env0 (v, t1) >>= fun R -> preturn (LetRule (v, t1, R)) )
+        let p2 reg env (v, t1) = kw "in" << Rule_in_env (add_var_distinct reg (v, get_type t1) env) >> kw "endlet"
+        (p1 >>== fun reg _ (v, t1) -> p2 reg env0 (v, t1) >>= fun R -> preturn (LetRule (v, t1, R)) )
     (*  // original rule:
         R2 (kw "let" << lit "(" << (psep1_lit ((VariableTerm >> lit "=") ++ Term) ",") >> lit ")") (kw "in" << Rule) >> (kw "endlet")
             |>> ( function
@@ -291,10 +302,10 @@ let rec BasicRule env0 (s : ParserInput<PARSER_STATE>) =
                     match get_type t_range with
                     |   Powerset v_type -> ((v, v_type), t_range)
                     |   _ -> raise (Error ("BasicRule.ForallRule", Some reg, NotFiniteSet (v, get_type t_range)))
-        let p2 env (v, v_type) =
-            let env' = TypeEnv.add_distinct v v_type env
+        let p2 reg env (v, v_type) =
+            let env' = add_var_distinct reg (v, v_type) env
             in (kw "with" << Term_in_env env') ++ (kw "do" << Rule_in_env env')
-        (p1 >>= fun ((v, v_type), t_range) -> p2 env0 (v, v_type) >>= fun (t_filter, R) -> preturn (ForallRule (v, t_range, t_filter, R)) )
+        (p1 >>== fun reg _ ((v, v_type), t_range) -> p2 reg env0 (v, v_type) >>= fun (t_filter, R) -> preturn (ForallRule (v, t_range, t_filter, R)) )
 
     (   (kw "skip" |>> fun _ -> skipRule)
     <|> (kw "par"    << no_backtrack "'par' rule" BlockRule)
@@ -365,8 +376,7 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
             (   ( (poption (kw "asyncr")) ++ (kw "asm" << identifier) |>> fun (asyncr, name) -> (asyncr.IsSome, false, name) )
             <|> ( (poption (kw "asyncr")) ++ (kw "module" << identifier) |>> fun (asyncr, name) -> (asyncr.IsSome, true, name) )
                 ||>> fun (sign, state) _ -> ((sign, state), (rules_db, macro_db))  ) s
-
-    
+   
     let parse_imported_module mod_id (sign, state, rules_db) =
         if (!trace > 0) then fprintf stderr "importing module: '%s'\n" mod_id
         let saved_dir = System.IO.Directory.GetCurrentDirectory ()
@@ -376,11 +386,13 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
         if not (Map.containsKey full_path !imported_modules) then
             if (!trace > 0) then fprintf stderr "\n"
             let new_dir = System.IO.Path.GetDirectoryName filename |> fun s -> if s = "" then "." else s
-            // move to directory where the imported file is located
-            // in order to correctly resolve the relative paths of modules
-            // that may be imported in the imported module
-            System.IO.Directory.SetCurrentDirectory new_dir
-            let text = Common.readfile full_path
+            let text =
+                // move to directory where the imported file is located in order to correctly resolve
+                // the relative paths of modules that may be imported in the imported module
+                try System.IO.Directory.SetCurrentDirectory new_dir
+                with _ -> raise (Error ("Asm", None, CannotImportModule (mod_id, Some new_dir, None)))
+                try Common.readfile full_path
+                with _ -> raise (Error ("Asm", None, CannotImportModule (mod_id, None, Some full_path)))
             let parse = Parser.make_parser (Asm TypeEnv.empty) (ParserCombinators.File (ref full_path)) ((sign, state), rules_db)
             let imported_module = fst (parse text)        // !!! checks missing (e.g. check that it is a 'module' and not an 'asm', etc.)
             // move to original directory (where the importing file is located)
@@ -390,6 +402,7 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
         else
             if (!trace > 0) then fprintf stderr "  [skipped - already loaded]\n"
             Map.find full_path !imported_modules
+
     let ImportClause s = 
         let (s, (rules_db, macro_db)) = reduce_state s
         let (sign, state) = get_parser_state s
@@ -407,6 +420,7 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
             <|> (kw "export" << (lit "*") |>> fun _ -> None )
                 ||>> fun (sign, state) _ -> ((sign, state), (rules_db, macro_db)) ) s
                     // exports : string list option;     // None means all are exported ("export*")
+
     let Signature s =
         let (s, (rules_db, macro_db)) = reduce_state s
         (   (kw "signature" >> lit ":") <<
@@ -437,14 +451,14 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
             if !trace > 0 then fprintf stderr "parse_asm_with_header: |signature|=%d\n" (Map.count sign)
 
             let parameter_list = (opt_psep1 "(" ( ((ID_VARIABLE >> (kw "in")) ++ getDomainByID) ) "," ")")
-            let extend_env env param_list = List.fold (fun env (v, t) -> TypeEnv.add_distinct v t env) env param_list
+            let extend_env reg env param_list = List.fold (fun env (v, t) -> add_var_distinct reg (v, t) env) env param_list
 
             let DomainDefinition = (kw "domain" << ID_DOMAIN) ++ (lit "=" << Term)
             
             let FunctionDefinition =
                 let p1 = (kw "function" << ID_FUNCTION) ++ parameter_list
-                let p2 env param_list = (lit "=" << Term_in_env (extend_env env param_list))
-                let p3 = (p1 >>= fun (f, param_list) -> p2 env0 param_list >>= fun t -> preturn (f, param_list, t))
+                let p2 reg env param_list = (lit "=" << Term_in_env (extend_env reg env param_list))
+                let p3 = (p1 >>== fun reg _ (f, param_list) -> p2 reg env0 param_list >>= fun t -> preturn (f, param_list, t))
                 p3 |||>> fun reg (_, _) (f, param_list, t) ->
                         if !trace > 0 then fprintf stderr "|signature| = %d - FunctionDefinition '%s'\n" (Map.count sign) f
                         if not (is_function_name f sign) then
@@ -468,8 +482,8 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                                                         
             let MacroDeclaration =
                 let p1 = (poption (kw "macro") << kw "rule" << ID_RULE) ++ parameter_list
-                let p2 env param_list = (lit "=" << Rule_in_env (extend_env env param_list))
-                let p3 = (p1 >>= fun (f, param_list) -> p2 env0 param_list >>= fun t -> preturn (f, param_list, t))
+                let p2 reg env param_list = (lit "=" << Rule_in_env (extend_env reg env param_list))
+                let p3 = (p1 >>== fun reg _ (f, param_list) -> p2 reg env0 param_list >>= fun t -> preturn (f, param_list, t))
                 p3 |||>> fun reg _ (rname, param_list, r) ->
                         if List.length param_list > 0
                         then (rname, (List.map fst param_list, r))
@@ -506,8 +520,8 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                                             |>> fun (id, _) -> failwith (sprintf "not implemented: initialization of domains ('%s')" id)
             let FunctionInitialization =
                 let p1 = (kw "function" << ID_FUNCTION) ++ parameter_list
-                let p2 env param_list = (lit "=" << Term_in_env (extend_env env param_list))
-                let p3 = (p1 >>= fun (f, param_list) -> p2 env0 param_list >>= fun t -> preturn (f, param_list, t))
+                let p2 reg env param_list = (lit "=" << Term_in_env (extend_env reg env param_list))
+                let p3 = (p1 >>== fun reg _ (f, param_list) -> p2 reg env0 param_list >>= fun t -> preturn (f, param_list, t))
                 p3 |||>> fun reg _ (f, param_list, t) ->
                     if not (is_function_name f sign) then
                         raise (Error ("Asm", Some reg, FunctionNameNotInSignature f))

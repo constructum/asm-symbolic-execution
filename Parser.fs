@@ -59,6 +59,12 @@ let error_msg (fct : string, reg : SrcReg option, err : ErrorDetails) =
 
 //--------------------------------------------------------------------
 
+let add_var_distinct reg (v, ty) env =
+    try TypeEnv.add_distinct v ty env
+    with Signature.Error details-> raise (Error ("add_var_distinct", Some reg, SignatureError details))
+
+//--------------------------------------------------------------------
+
 let pcharf c = pcharsat c ""
 
 let one_line_comment (s : ParserInput<'state>) : ParserResult<string, 'state> =
@@ -154,10 +160,6 @@ let get_signature_from_input (s : ParserInput<PARSER_STATE>) = get_parser_state 
 let get_state_from_input (s : ParserInput<PARSER_STATE>)     = get_parser_state s |> get_state
 
 let change_sign f (sign, state) = (f sign, state)
-
-let add_to_type_env reg (v, ty) (sign, env, state) =
-    try (sign, TypeEnv.add_distinct v ty env, state)
-    with Signature.Error details -> raise (Error ("add_to_env", Some reg, SignatureError details))
 
 //--------------------------------------------------------------------
 
@@ -361,8 +363,8 @@ let rec simple_term (env0 : TypeEnv.TYPE_ENV) (s : ParserInput<PARSER_STATE>) : 
         <|> ( lit "(" << quantificationTerm >> lit ")"
                 |||>> fun reg (sign, _) -> mkQuantTerm reg sign (* !!! temporary !!! *) )
         <|> (   let p1 = (kw "let" << lit "(" << variable_identifier) ++ (kw "=" << term >> lit ")")
-                let p2 env (v, t1) = kw "in" << term_in_env (TypeEnv.add_distinct v (get_type t1) env) >> kw "endlet"
-                (p1 >>= fun (v, t1) -> p2 env0 (v, t1) >>= fun t2 -> preturn (LetTerm' (get_type t2, (v, t1, t2))) ) )
+                let p2 reg env (v, t1) = kw "in" << term_in_env (add_var_distinct reg (v, get_type t1) env) >> kw "endlet"
+                (p1 >>== fun reg _ (v, t1) -> p2 reg env0 (v, t1) >>= fun t2 -> preturn (LetTerm' (get_type t2, (v, t1, t2))) ) )
         <|> ( lit "(" << term >> lit ")" )
     ) s
 

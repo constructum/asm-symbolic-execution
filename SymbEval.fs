@@ -353,14 +353,17 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
         |   Value' (_, BOOL false) -> s_eval_rule R2 (S, env, C)
         |   G ->    //let (R1', R2') = (s_eval_rule R1 (S, env, Set.add G C), s_eval_rule R2 (S, env, Set.add (s_not G) C))
                     let sign = signature_of S
-                    smt_solver_push TopLevel.smt_ctx
-                    smt_assert sign TopLevel.smt_ctx G
+                    if !use_smt_solver
+                    then smt_solver_push TopLevel.smt_ctx
+                         smt_assert sign TopLevel.smt_ctx G
                     let R1' = s_eval_rule R1 (S, env, Set.add G C)
-                    smt_solver_pop TopLevel.smt_ctx
-                    smt_solver_push TopLevel.smt_ctx
-                    smt_assert sign TopLevel.smt_ctx (s_not G)
+                    if !use_smt_solver
+                    then smt_solver_pop TopLevel.smt_ctx
+                         smt_solver_push TopLevel.smt_ctx
+                         smt_assert sign TopLevel.smt_ctx (s_not G)
                     let R2' = s_eval_rule R2 (S, env, Set.add (s_not G) C)
-                    smt_solver_pop TopLevel.smt_ctx
+                    if !use_smt_solver
+                    then smt_solver_pop TopLevel.smt_ctx
                     if R1' = R2' then R1' else CondRule (G, R1', R2')
 
     let rec eval_par Rs (S, env, C) =
