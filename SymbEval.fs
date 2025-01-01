@@ -213,7 +213,7 @@ and eval_app_term ty (S : S_STATE, env : ENV, C : CONTEXT) (fct_name, ts) : TYPE
     let rec F ts_past = function
         |   (t as Value' (_, x1) :: ts_fut)            -> F (t :: ts_past) ts_fut
         |   (t as Initial' (_, (f, xs)) :: ts_fut)     -> F (t :: ts_past) ts_fut
-        |   (CondTerm' (ty, (G1, t11, t12)) :: ts_fut) -> s_eval_term_ (CondTerm' (ty, (G1, F ts_past (t11 :: ts_fut), F ts_past (t12 :: ts_fut)))) (S, env, C)
+        |   (CondTerm' (_, (G1, t11, t12)) :: ts_fut) -> s_eval_term_ (CondTerm' (ty, (G1, F ts_past (t11 :: ts_fut), F ts_past (t12 :: ts_fut)))) (S, env, C)
         |   (t1 as QuantTerm' _ :: ts_fut)             -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
         |   (t as LetTerm' (_, (v, t1, t2)) :: ts_fut) -> F (t :: ts_past) ts_fut
         |   (t as VarTerm' (_, v) :: ts_fut)           -> F (t :: ts_past) ts_fut
