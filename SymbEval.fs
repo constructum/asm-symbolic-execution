@@ -256,8 +256,8 @@ and eval_cond_term ty (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) =
             else let expanded_cond_term =
                     CondTerm' (ty, (
                         G',
-                        CondTerm' (ty, (G1, t1 (S, env, C), t2 (S, env, C))),
-                        CondTerm' (ty, (G2, t1 (S, env, C), t2 (S, env, C)))
+                        s_eval_term (CondTerm' (ty, (G1, t1 (S, env, C), t2 (S, env, C)))) (S, env, Set.add G' C),
+                        s_eval_term (CondTerm' (ty, (G2, t1 (S, env, C), t2 (S, env, C)))) (S, env, Set.add (s_not G') C)
                     ))
                  s_eval_term_ expanded_cond_term (S, env, C)
     |   G ->    if (!trace > 1)
@@ -358,30 +358,34 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
             F [] ts
 
     let eval_cond (G, R1, R2) (S, env, C) = 
-        match s_eval_term G (S, env, C) with
-        |   Value' (_, BOOL true)  -> s_eval_rule R1 (S, env, C)
-        |   Value' (_, BOOL false) -> s_eval_rule R2 (S, env, C)
+        let s_eval_term t C = s_eval_term t (S, env, C)
+        let s_eval_rule R C = s_eval_rule R (S, env, C)
+        match s_eval_term G C with
+        |   Value' (_, BOOL true)  -> s_eval_rule R1 C
+        |   Value' (_, BOOL false) -> s_eval_rule R2 C
         |   CondTerm' (Boolean, (G', G1, G2)) ->
                 if get_type G1 <> Boolean || get_type G2 <> Boolean
                 then failwith (sprintf "s_eval_rule.eval_cond: '%s' and '%s' must be boolean terms" (term_to_string G1) (term_to_string G2))
-                else let expanded_cond_term =
-                        CondRule (
-                            G',
-                            CondRule (G1, s_eval_rule R1 (S, env, C), s_eval_rule R2 (S, env, C)),
-                            CondRule (G2, s_eval_rule R1 (S, env, C), s_eval_rule R2 (S, env, C))
-                        )
-                     s_eval_rule expanded_cond_term (S, env, C)
+                else CondRule (
+                        s_eval_term G' C,
+                        (   let C' = Set.add G' C
+                            let G1 = s_eval_term G1 C'
+                            s_eval_rule (CondRule (G1, s_eval_rule R1 (Set.add G1 C'), s_eval_rule R2 (Set.add (s_not G1) C'))) C' ),
+                        (   let C' = Set.add (s_not G') C
+                            let G2 = s_eval_term G2 C'
+                            s_eval_rule (CondRule (G2, s_eval_rule R1 (Set.add G2 C'), s_eval_rule R2 (Set.add (s_not G2) C'))) C' )
+                     )
         |   G ->    //let (R1', R2') = (s_eval_rule R1 (S, env, Set.add G C), s_eval_rule R2 (S, env, Set.add (s_not G) C))
                     let sign = signature_of S
                     if !use_smt_solver
                     then smt_solver_push TopLevel.smt_ctx
                          smt_assert sign TopLevel.smt_ctx G
-                    let R1' = s_eval_rule R1 (S, env, Set.add G C)
+                    let R1' = s_eval_rule R1 (Set.add G C)
                     if !use_smt_solver
                     then smt_solver_pop TopLevel.smt_ctx
                          smt_solver_push TopLevel.smt_ctx
                          smt_assert sign TopLevel.smt_ctx (s_not G)
-                    let R2' = s_eval_rule R2 (S, env, Set.add (s_not G) C)
+                    let R2' = s_eval_rule R2 (Set.add (s_not G) C)
                     if !use_smt_solver
                     then smt_solver_pop TopLevel.smt_ctx
                     if R1' = R2' then R1' else CondRule (G, R1', R2')
