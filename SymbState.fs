@@ -81,25 +81,24 @@ let fct_name_interpretation (S : S_STATE) (f : string) (args : VALUE list) =
     let Value = mkValue sign
     let kind =
         try fct_kind f (signature_of S)
-        with _ -> failwith (sprintf "function '%s' not defined in signature" f)
+        with _ -> failwith (sprintf "SymbState.fct_name_interpretation: function '%s' not defined in signature" f)
     if !trace > 0 then fprintfn stderr "SymbState.fct_name_interpretation: %s kind=%s" f (fct_kind_to_string kind)
     match kind with
     |   Constructor ->
-            if !trace > 0 then fprintfn stderr "fct_name_interpretation: constructor '%s'" f
+            if !trace > 0 then fprintfn stderr "SymbState.fct_name_interpretation: constructor '%s'" f
             Value (CELL (f, args))
     |   Static -> 
-        (   try
-                match Map.find f (S._static) args with 
-                |   UNDEF -> failwith (sprintf "static function '%s' not defined on (%s)" f (String.concat ", " (args >>| value_to_string)))
-                |   x -> Value x
-            with _ -> failwith (sprintf "static function name '%s' has no interpretation" f)    )
+            let f' = try Map.find f (S._static) with _ -> failwith (sprintf "SymbState.fct_name_interpretation: static function name '%s' has no interpretation" f)
+            match f' args with 
+            |   UNDEF -> failwith (sprintf "SymbState.fct_name_interpretation: static function '%s' not defined on (%s)" f (String.concat ", " (args >>| value_to_string)))
+            |   x -> Value x 
     |   Controlled ->
         (   try Map.find args (Map.find f (S._dynamic))
             with _ ->
                 try Value (Map.find f (S._dynamic_initial) args)
                 with _ -> mkInitial sign (f, args)  )
     |   _ ->
-        failwith (sprintf "unsupported function kind '%s' for function name '%s'" (fct_kind_to_string kind) f)
+        failwith (sprintf "SymbState.fct_name_interpretation: unsupported function kind '%s' for function name '%s'" (fct_kind_to_string kind) f)
 
 
 let interpretation (S : S_STATE) (name : NAME) =

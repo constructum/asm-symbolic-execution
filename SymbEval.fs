@@ -250,6 +250,16 @@ and eval_cond_term ty (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) =
     match G (S, env, C) with
     |   Value' (Boolean, BOOL true)  -> t1 (S, env, C)
     |   Value' (Boolean, BOOL false) -> t2 (S, env, C)
+    |   CondTerm' (Boolean, (G', G1, G2)) ->
+            if get_type G1 <> Boolean || get_type G2 <> Boolean
+            then failwith (sprintf "eval_cond_term: '%s' and '%s' must be boolean terms" (term_to_string G1) (term_to_string G2))
+            else let expanded_cond_term =
+                    CondTerm' (ty, (
+                        G',
+                        CondTerm' (ty, (G1, t1 (S, env, C), t2 (S, env, C))),
+                        CondTerm' (ty, (G2, t1 (S, env, C), t2 (S, env, C)))
+                    ))
+                 s_eval_term_ expanded_cond_term (S, env, C)
     |   G ->    if (!trace > 1)
                 then fprintfn stderr "\n%sctx_condition: %s" (spaces !level) (term_to_string (ctx_condition C))
                 if not simplify_cond then
@@ -351,6 +361,16 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
         match s_eval_term G (S, env, C) with
         |   Value' (_, BOOL true)  -> s_eval_rule R1 (S, env, C)
         |   Value' (_, BOOL false) -> s_eval_rule R2 (S, env, C)
+        |   CondTerm' (Boolean, (G', G1, G2)) ->
+                if get_type G1 <> Boolean || get_type G2 <> Boolean
+                then failwith (sprintf "s_eval_rule.eval_cond: '%s' and '%s' must be boolean terms" (term_to_string G1) (term_to_string G2))
+                else let expanded_cond_term =
+                        CondRule (
+                            G',
+                            CondRule (G1, s_eval_rule R1 (S, env, C), s_eval_rule R2 (S, env, C)),
+                            CondRule (G2, s_eval_rule R1 (S, env, C), s_eval_rule R2 (S, env, C))
+                        )
+                     s_eval_rule expanded_cond_term (S, env, C)
         |   G ->    //let (R1', R2') = (s_eval_rule R1 (S, env, Set.add G C), s_eval_rule R2 (S, env, Set.add (s_not G) C))
                     let sign = signature_of S
                     if !use_smt_solver
