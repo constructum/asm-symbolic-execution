@@ -136,7 +136,6 @@ and smt_map_ITE sign C (G_, t1_, t2_) : SMT_EXPR =
     let err_msg (G, T_G, t1, T_t1, t2, T_t2) =
         failwith (sprintf "smt_map_ITE: type error: for term %s the expected type is (Boolean, T, T), where T is Boolean, Integer or a user-defined type; type (%s, %s, %s) found instead"
             (term_to_string sign (CondTerm' (get_type t1, (G, t1, t2)))) (type_to_string T_G) (type_to_string T_t1) (type_to_string T_t2) )
-    fprintf stderr "smt_map_ITE: %s\n" (term_to_string sign (CondTerm' (get_type t1_, (G_, t1_, t2_))))
     match (smt_map_term sign C G_, get_type G_, smt_map_term sign C t1_, get_type t1_, smt_map_term sign C t2_, get_type t2_) with
     |   (SMT_BoolExpr G, Boolean, SMT_BoolExpr t1, Boolean, SMT_BoolExpr t2, Boolean) ->
             SMT_BoolExpr (ctx.MkITE (G, t1 :> Expr, t2 :> Expr) :?> BoolExpr)
@@ -179,10 +178,8 @@ and smt_map_term sign C (t : TYPED_TERM) : SMT_EXPR =
 //--------------------------------------------------------------------
 
 let smt_assert sign C (phi : TYPED_TERM) =
-    fprintf stderr "smt_assert: %s : %s\n" (term_to_string sign phi) (get_type phi |> type_to_string)
     if get_type phi = Boolean
-    then fprintf stderr "[phi = Boolean] smt_assert: %s\n" (term_to_string sign phi)
-         match smt_map_term sign C phi with
+    then match smt_map_term sign C phi with
          | SMT_BoolExpr be -> (!C.slv).Assert be
          | _ -> failwith (sprintf "smt_assert: error converting Boolean term (term = %s)" (term_to_string sign phi))
     else failwith (sprintf "'smt_assert' expects a Boolean term, %s found instead " (term_to_string sign phi))
