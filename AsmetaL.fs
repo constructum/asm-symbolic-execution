@@ -263,7 +263,7 @@ let forall_rule_with_multiple_bindings reg sign v_tset_list t_filter R =
     let rec mk_forall_rule = function
     |   [] -> failwith "forall_rule_with_multiple_bindings: empty list of bindings"
     |   [(v, t)] -> ForallRule (v, t, t_filter, R)
-    |   (v, t) :: v_t_list -> ForallRule (v, t, Parser.mkAppTerm (Some reg) sign (BoolConst true, []), mk_forall_rule v_t_list)
+    |   (v, t) :: v_t_list -> ForallRule (v, t, Parser.mkAppTerm false (Some reg) sign (BoolConst true, []), mk_forall_rule v_t_list)
     in mk_forall_rule v_tset_list
 
 let switch_to_cond_rule reg sign (t, cases : (TYPED_TERM * RULE) list, otherwise : RULE option) =
@@ -274,7 +274,7 @@ let switch_to_cond_rule reg sign (t, cases : (TYPED_TERM * RULE) list, otherwise
 let rec BasicRule env0 (s : ParserInput<PARSER_STATE>) =
     let Term_in_env = Term
     let Rule_in_env = Rule
-    let Term = Term env0
+    let Term = Term (false, env0)    // false, because terms in rules do not have to be static
     let Rule = Rule env0
     let BlockRule       = pmany1 Rule >> kw "endpar" |>> ParRule
     let ConditionalRule = R3 (Term) (kw "then" << Rule) (poption (kw "else" << Rule) |>> Option.defaultValue skipRule) >> kw "endif" |>> CondRule
@@ -304,7 +304,7 @@ let rec BasicRule env0 (s : ParserInput<PARSER_STATE>) =
                     |   _ -> raise (Error ("BasicRule.ForallRule", Some reg, NotFiniteSet (v, get_type t_range)))
         let p2 reg env (v, v_type) =
             let env' = add_var_distinct reg (v, v_type) env
-            in (kw "with" << Term_in_env env') ++ (kw "do" << Rule_in_env env')
+            in (kw "with" << Term_in_env (false, env')) ++ (kw "do" << Rule_in_env env')
         (p1 >>== fun reg _ ((v, v_type), t_range) -> p2 reg env0 (v, v_type) >>= fun (t_filter, R) -> preturn (ForallRule (v, t_range, t_filter, R)) )
 
     (   (kw "skip" |>> fun _ -> skipRule)
@@ -317,7 +317,7 @@ let rec BasicRule env0 (s : ParserInput<PARSER_STATE>) =
     // <|> ExtendRule
     ) s
 
-and MacroCallRule env = ((ID_RULE >> lit "[") ++ (psep0 (Term env) (lit ",") >> lit "]")) |>> MacroRuleCall
+and MacroCallRule env = ((ID_RULE >> lit "[") ++ (psep0 (Term (false, env)) (lit ",") >> lit "]")) |>> MacroRuleCall
 
 and TurboRule env (s : ParserInput<PARSER_STATE>) =
     let Rule = Rule env
@@ -330,7 +330,7 @@ and TurboRule env (s : ParserInput<PARSER_STATE>) =
     ) s
 
 and DerivedRule env (s : ParserInput<PARSER_STATE>) =
-    let Term = Term env
+    let Term = Term (false, env)
     let Rule = Rule env
     let CaseRule = R3 (Term) (pmany1 ((kw "case" << Term >> lit ":") ++ Rule)) ((poption (kw "otherwise" << Rule)) >> (kw "endswitch"))
                         |||>> fun reg (sign, _) (t, cases, otherwise) -> switch_to_cond_rule (Some reg) sign (t, cases, otherwise)
@@ -346,7 +346,7 @@ and DerivedRule env (s : ParserInput<PARSER_STATE>) =
     ) s
 
 and Rule env (s : ParserInput<PARSER_STATE>) =
-    let Term = Term env
+    let Term = Term (false, env)
     let UpdateRule = (R3 (Term) (lit ":=") Term) |||>> fun reg (sign, _) (t1,_,t2) -> Parser.mkUpdateRule (Some reg) sign (t1, t2)   // !!!! not exactly as in AsmetaL grammar
     (   BasicRule env
     <|> TurboRule env
@@ -362,7 +362,8 @@ let imported_modules = ref (Map.empty : Map<string, ASM>)
 let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDED_PARSER_STATE>  =
     let Term_in_env = Term
     let Rule_in_env = Rule
-    let Term = Term env0
+    let StaticTerm       = Term (true, env0)
+    let UnrestrictedTerm = Term (false, env0)
     let Rule = Rule env0
     //let (sign, state) = get_parser_state s
     let reduce_state (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserInput<PARSER_STATE> * (RULES_DB * MACRO_DB) =
@@ -453,32 +454,34 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
             let parameter_list = (opt_psep1 "(" ( ((ID_VARIABLE >> (kw "in")) ++ getDomainByID) ) "," ")")
             let extend_env reg env param_list = List.fold (fun env (v, t) -> add_var_distinct reg (v, t) env) env param_list
 
-            let DomainDefinition = (kw "domain" << ID_DOMAIN) ++ (lit "=" << Term)
+            let DomainDefinition = (kw "domain" << ID_DOMAIN) ++ (lit "=" << StaticTerm)
             
             let FunctionDefinition =
                 let p1 = (kw "function" << ID_FUNCTION) ++ parameter_list
-                let p2 reg env param_list = (lit "=" << Term_in_env (extend_env reg env param_list))
-                let p3 = (p1 >>== fun reg _ (f, param_list) -> p2 reg env0 param_list >>= fun t -> preturn (f, param_list, t))
+                let p2 reg (static_term, env) param_list = (lit "=" << Term_in_env (static_term, extend_env reg env param_list))
+                let p3 =
+                    (   p1 >>== fun reg _ (f, param_list) ->
+                        let is_static =
+                            if not (is_function_name f sign)      then raise (Error ("Asm", Some reg, FunctionNameNotInSignature f))
+                            else if fct_kind f sign = Constructor then raise (Error ("Asm", Some reg, ConstructorCannotBeRedefined f))
+                            else fct_kind f sign = Static
+                        p2 reg (is_static, env0) param_list >>= fun t ->
+                        preturn (f, param_list, t)  )
+                // !!! to do: proper handling of function overloading
                 p3 |||>> fun reg (_, _) (f, param_list, t) ->
                         if !trace > 0 then fprintf stderr "|signature| = %d - FunctionDefinition '%s'\n" (Map.count sign) f
-                        if not (is_function_name f sign) then
-                            raise (Error ("Asm", Some reg, FunctionNameNotInSignature f))
-                        else if fct_kind f sign = Constructor then
-                            raise (Error ("Asm", Some reg, ConstructorCannotBeRedefined f))
-                        else 
-                            //!!! to do: proper handling of function overloading
-                            let result =
-                                if fct_kind f sign = Static then 
-                                    let parameters = List.map (fun (v, t) -> v) param_list
-                                    let fct = function (xs : VALUE list) -> Eval.eval_term t ((state_with_signature state sign), Map.ofList (List.zip parameters xs))
-                                    ( (fun (state : STATE) -> state_override_static state (Map.add f fct Map.empty)),
-                                    (fun (mdb : MACRO_DB) -> macro_db_override mdb (Map.add f (parameters, t) Map.empty)) )
-                                else if fct_kind f sign = Derived then 
-                                    let parameters = List.map (fun (v, t) -> v) param_list
-                                    ( (fun state -> state),
-                                    (fun (mdb : MACRO_DB) -> macro_db_override mdb (Map.add f (parameters, t) Map.empty)) )
-                                else raise (Error ("Asm", Some reg, FunctionNotDeclaredAsStaticOrDerived f))
-                            result
+                        let result =
+                            if fct_kind f sign = Static then 
+                                let parameters = List.map (fun (v, t) -> v) param_list
+                                let fct = function (xs : VALUE list) -> Eval.eval_term t ((state_with_signature state sign), Map.ofList (List.zip parameters xs))
+                                ( (fun (state : STATE) -> state_override_static state (Map.add f fct Map.empty)),
+                                (fun (mdb : MACRO_DB) -> macro_db_override mdb (Map.add f (parameters, t) Map.empty)) )
+                            else if fct_kind f sign = Derived then 
+                                let parameters = List.map (fun (v, t) -> v) param_list
+                                ( (fun state -> state),
+                                (fun (mdb : MACRO_DB) -> macro_db_override mdb (Map.add f (parameters, t) Map.empty)) )
+                            else raise (Error ("Asm", Some reg, FunctionNotDeclaredAsStaticOrDerived f))
+                        result
                                                         
             let MacroDeclaration =
                 let p1 = (poption (kw "macro") << kw "rule" << ID_RULE) ++ parameter_list
@@ -491,9 +494,9 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
             let TurboDeclaration = R4 (kw "turbo" << kw "rule" << ID_RULE) parameter_list (poption (kw "in" << getDomainByID)) (lit "=" << Rule)
                                         |>> fun (rname, _, _, _) -> failwith (sprintf "not implemented: turbo rule declaration ('%s')" rname)
             let RuleDeclaration = (MacroDeclaration <|> TurboDeclaration)
-            let InvarConstraint = (kw "INVAR" << Term) |>> fun _ -> ()
-            let JusticeConstraint = (kw "JUSTICE" << Term) |>> fun _ -> ()
-            let CompassionConstraint = (kw "COMPASSION" << lit "(" << Term >> lit "," << Term >> lit ",") |>> fun _ -> ()
+            let InvarConstraint = (kw "INVAR" << UnrestrictedTerm) |>> fun _ -> ()
+            let JusticeConstraint = (kw "JUSTICE" << UnrestrictedTerm) |>> fun _ -> ()
+            let CompassionConstraint = (kw "COMPASSION" << lit "(" << UnrestrictedTerm >> lit "," << UnrestrictedTerm >> lit ",") |>> fun _ -> ()
             let FairnessConstraint = JusticeConstraint <|> CompassionConstraint
             let Invariant = 
                 let over_part = (kw "over" <<
@@ -502,10 +505,10 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                                     <|> (ID_RULE |>> fun _ -> ())
                                     <|> (ID_FUNCTION << poption (lit "(" << poption getDomainByID << lit ")") |>> fun _ -> ())
                                 ) ",")
-                (   ( R3  (kw "invariant")                       over_part (lit ":" << Term) |>> fun _ -> () )
-                <|> ( R3  (kw "invariant" << poption identifier) over_part (lit ":" << Term) |>> fun _ -> () )    )
-            let CtlSpec = kw "CTLSPEC" << poption (ID_CTL >> lit ":") ++ Term   |>> fun _ -> ()
-            let LtlSpec = kw "LTLSPEC" << poption (ID_LTL >> lit ":") ++ Term   |>> fun _ -> ()
+                (   ( R3  (kw "invariant")                       over_part (lit ":" << UnrestrictedTerm) |>> fun _ -> () )
+                <|> ( R3  (kw "invariant" << poption identifier) over_part (lit ":" << UnrestrictedTerm) |>> fun _ -> () )    )
+            let CtlSpec = kw "CTLSPEC" << poption (ID_CTL >> lit ":") ++ UnrestrictedTerm   |>> fun _ -> ()
+            let LtlSpec = kw "LTLSPEC" << poption (ID_LTL >> lit ":") ++ UnrestrictedTerm   |>> fun _ -> ()
             let TemporalProperty = CtlSpec <|> LtlSpec
             let Property = (Invariant <|> TemporalProperty)
             let Body =
@@ -516,11 +519,11 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                             (pmany InvarConstraint)
                             (pmany FairnessConstraint)
                             (pmany Property)       )
-            let DomainInitialization = (kw "domain" << ID_DOMAIN) ++ (lit "=" << Term)
+            let DomainInitialization = (kw "domain" << ID_DOMAIN) ++ (lit "=" << StaticTerm)
                                             |>> fun (id, _) -> failwith (sprintf "not implemented: initialization of domains ('%s')" id)
             let FunctionInitialization =
                 let p1 = (kw "function" << ID_FUNCTION) ++ parameter_list
-                let p2 reg env param_list = (lit "=" << Term_in_env (extend_env reg env param_list))
+                let p2 reg env param_list = (lit "=" << Term_in_env (true, extend_env reg env param_list))    // term used for initialisation must be static
                 let p3 = (p1 >>== fun reg _ (f, param_list) -> p2 reg env0 param_list >>= fun t -> preturn (f, param_list, t))
                 p3 |||>> fun reg _ (f, param_list, t) ->
                     if not (is_function_name f sign) then

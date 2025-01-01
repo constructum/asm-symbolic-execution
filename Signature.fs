@@ -308,7 +308,6 @@ let get_fct_info msg fct_name (sign : SIGNATURE) f =
     if !trace > 0 then fprintf stderr "(|signature| = %d) " (Map.count sign)
     if !trace > 0 then fprintf stderr "get_fct_info(%s, %s)\n" msg fct_name
     if !trace > 0 then fprintf stderr $"{Map.containsKey fct_name sign}\n"
-    //assert (Map.containsKey fct_name sign)
     (try (Map.find fct_name sign) with _ -> raise (Error (NotAFunctionName fct_name)))
     |> function FctInfo fi -> f fi | _ -> raise (Error (NotAFunctionName fct_name))
 

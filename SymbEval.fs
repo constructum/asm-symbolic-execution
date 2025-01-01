@@ -189,7 +189,7 @@ and try_case_distinction_for_term_with_finite_range ty (S : S_STATE, env : ENV, 
         if List.isEmpty elem_term_pairs
         then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
         let (elem_term_pairs_without_last, last_elem_term_pair) = List.splitAt (List.length elem_term_pairs - 1) elem_term_pairs
-        Parser.switch_to_cond_term None (sign, env) (t, List.map (fun (elem, term) -> (mkValue sign elem, term)) elem_term_pairs_without_last, snd (List.head (last_elem_term_pair)))
+        Parser.switch_to_cond_term false None sign (t, List.map (fun (elem, term) -> (mkValue sign elem, term)) elem_term_pairs_without_last, snd (List.head (last_elem_term_pair)))
     let rec F past_args = function
     |   [] -> AppTerm' (ty, (FctName f, List.rev past_args))
     |   t1 :: ts' ->

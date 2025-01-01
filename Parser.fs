@@ -16,6 +16,7 @@ let module_name = "Parser"
 type ErrorDetails =
 |   SyntaxError of string * Set<ParserCombinators.FailedAt>
 |   SignatureError of Signature.ErrorDetails
+|   StaticFunctionExpected of string * FCT_KIND
 |   InfixOperatorExpected of string
 |   InfixOperatorsSamePrecedenceDifferentAssociativity of string * string
 |   CondTermGuardNotBoolean
@@ -36,6 +37,8 @@ let error_msg (fct : string, reg : SrcReg option, err : ErrorDetails) =
             sprintf "syntax error in %s:\n%s" where (ParserCombinators.failure_msg failures)
     |   SignatureError details ->
             sprintf "type error:\n%s\n" (Signature.error_msg details)
+    |   StaticFunctionExpected (f, kind) ->
+            sprintf "static function expected (%s function '%s' found instead)" (kind |> fct_kind_to_string) f
     |   InfixOperatorExpected op ->
             sprintf "operator parsing: infix operator expected, '%s' " op
     |   InfixOperatorsSamePrecedenceDifferentAssociativity (op1, op2) ->
@@ -223,9 +226,9 @@ type 'a STACK_ELEM =
 | Optr of Signature.INFIX_STATUS * string   (* operator *)
 
 /// Parses terms with infix operators, according to specified associativity and precedence
-let rec operator_parser env (elem : TypeEnv.TYPE_ENV -> Parser<'elem, PARSER_STATE>, app_cons : SrcReg option -> NAME * 'elem list -> 'elem) (sign : SIGNATURE) (s : ParserInput<PARSER_STATE>) : ParserResult<'elem, PARSER_STATE> = 
+let rec operator_parser (static_term, env) (elem : bool * TypeEnv.TYPE_ENV -> Parser<'elem, PARSER_STATE>, app_cons : SrcReg option -> NAME * 'elem list -> 'elem) (sign : SIGNATURE) (s : ParserInput<PARSER_STATE>) : ParserResult<'elem, PARSER_STATE> = 
     //let show_stack stack = (stack |> List.map (function Opnd (reg, t) -> sprintf "[%s]" (t |> term_to_string sign) | Optr (_, oper) -> sprintf "%s" oper) |> String.concat " ")
-    let elem = elem env
+    let elem = elem (static_term, env)
     let reduce stack =
         let result =
             match stack with
@@ -269,14 +272,17 @@ let rec operator_parser env (elem : TypeEnv.TYPE_ENV -> Parser<'elem, PARSER_STA
 
 // --- syntactic sugar for terms -------------------------------------
 
-let mkAppTerm (reg : SrcReg option) sign args =
+let mkAppTerm (static_term : bool) (reg : SrcReg option) sign args =
     match args with
     |   (UndefConst, _)    -> AppTerm' (Undef, args)
     |   (BoolConst _, _)   -> AppTerm' (Boolean, args)
     |   (IntConst _, _)    -> AppTerm' (Integer, args)
     |   (StringConst _, _) -> AppTerm' (String, args)
     |   (FctName f, ts)    ->
-            try AppTerm' (match_fct_type f (ts >>| get_type) (fct_types f sign), args)       // !!!! no overloading yet
+            try let kind = fct_kind f sign
+                if static_term && kind <> Static
+                then raise (Error ("mkAppTerm", reg, StaticFunctionExpected (f, kind)))
+                else AppTerm' (match_fct_type f (ts >>| get_type) (fct_types f sign), args)       // !!!! no overloading yet
             with Signature.Error details -> raise (Error ("mkAppTerm", reg, SignatureError details))
 let mkVarTerm reg env v =
     try VarTerm' (TypeEnv.get v env, v)
@@ -306,9 +312,9 @@ let let_term_with_multiple_bindings (v_ti_list : (string * TYPED_TERM list)) (t 
     in mk_let_term v_ti_list
 *)
 
-let switch_to_cond_term reg (sign, env) (t, cases : (TYPED_TERM * TYPED_TERM) list, otherwise : TYPED_TERM) =
+let switch_to_cond_term static_term reg sign (t, cases : (TYPED_TERM * TYPED_TERM) list, otherwise : TYPED_TERM) =
     let mkCondTerm = mkCondTerm reg
-    let mkAppTerm = mkAppTerm reg sign
+    let mkAppTerm = mkAppTerm static_term reg sign
     let rec mk_cond_term = function
     |   [] -> failwith "switch_to_cond_term: empty list of cases"
     |   [(t1, t2)] -> mkCondTerm (mkAppTerm (FctName "=", [t; t1]), t2, otherwise)
@@ -316,7 +322,7 @@ let switch_to_cond_term reg (sign, env) (t, cases : (TYPED_TERM * TYPED_TERM) li
     mk_cond_term cases
 
 let switch_to_cond_rule reg sign (t, cases : (TYPED_TERM * RULE) list, otherwise : RULE) =
-    let mkAppTerm = mkAppTerm reg sign
+    let mkAppTerm = mkAppTerm false reg sign
     let rec mk_cond_term = function
     |   [] -> failwith "switch_to_cond_rule: empty list of cases"
     |   [(t1, t2)] -> CondRule (mkAppTerm (FctName "=", [t; t1]), t2, otherwise)
@@ -325,13 +331,14 @@ let switch_to_cond_rule reg sign (t, cases : (TYPED_TERM * RULE) list, otherwise
 
 //--------------------------------------------------------------------
 
-let rec simple_term (env0 : TypeEnv.TYPE_ENV) (s : ParserInput<PARSER_STATE>) : ParserResult<TYPED_TERM, PARSER_STATE> = 
+let rec simple_term (static_term, env0 : TypeEnv.TYPE_ENV) (s : ParserInput<PARSER_STATE>) : ParserResult<TYPED_TERM, PARSER_STATE> = 
     // FiniteQuantificationTerm 	::= 	( ForallTerm | ExistUniqueTerm | ExistTerm )
     // ExistTerm 	                ::= 	"(" <EXIST> VariableTerm <IN> Term ( "," VariableTerm <IN> Term )* ( <WITH> Term )? ")"
     // ExistUniqueTerm 	            ::= 	"(" <EXIST> <UNIQUE> VariableTerm <IN> Term ( "," VariableTerm <IN> Term )* ( <WITH> Term )? ")"
     // ForallTerm 	                ::= 	"(" <FORALL> VariableTerm <IN> Term ( "," VariableTerm <IN> Term )* ( <WITH> Term )? ")" 
     let term_in_env = term
-    let term = term env0
+    let term = term (static_term, env0)
+    let mkAppTerm = mkAppTerm static_term
     let quantificationTerm =
         let quantContent = R2 (psep1_lit ((variable_identifier >> (kw "in")) ++ ((term |>> fun _ -> "") <|> alphanumeric_identifier (*!!!temporary: should be domain name*) )) ",")
                                 (poption (kw "with" >> term))
@@ -359,18 +366,18 @@ let rec simple_term (env0 : TypeEnv.TYPE_ENV) (s : ParserInput<PARSER_STATE>) : 
                 |||>> fun reg (sign, _) (t1, t2, t3) -> mkAppTerm (Some reg) sign (FctName "set_interval", [ t1; t2; t3 ]) )
         <|> ( R3 (kw "switch" << term) (pmany1 ((kw "case" << term >> lit ":") ++ term)) (kw "otherwise" << term >> kw "endswitch")
                         (*                    // !!! note: 'otherwise' not optional to avoid 'undef' as default case *)
-                |||>> fun reg (sign, _) (t, cases, otherwise) -> switch_to_cond_term (Some reg) (sign, env0) (t, cases, otherwise) )
+                |||>> fun reg (sign, _) (t, cases, otherwise) -> switch_to_cond_term static_term (Some reg) sign (t, cases, otherwise) )
         <|> ( lit "(" << quantificationTerm >> lit ")"
                 |||>> fun reg (sign, _) -> mkQuantTerm reg sign (* !!! temporary !!! *) )
         <|> (   let p1 = (kw "let" << lit "(" << variable_identifier) ++ (kw "=" << term >> lit ")")
-                let p2 reg env (v, t1) = kw "in" << term_in_env (add_var_distinct reg (v, get_type t1) env) >> kw "endlet"
+                let p2 reg env (v, t1) = kw "in" << term_in_env (static_term, add_var_distinct reg (v, get_type t1) env) >> kw "endlet"
                 (p1 >>== fun reg _ (v, t1) -> p2 reg env0 (v, t1) >>= fun t2 -> preturn (LetTerm' (get_type t2, (v, t1, t2))) ) )
         <|> ( lit "(" << term >> lit ")" )
     ) s
 
-and term (env : TypeEnv.TYPE_ENV) (s : ParserInput<PARSER_STATE>) : ParserResult<TYPED_TERM, PARSER_STATE> = 
+and term (static_term : bool, env : TypeEnv.TYPE_ENV) (s : ParserInput<PARSER_STATE>) : ParserResult<TYPED_TERM, PARSER_STATE> = 
     let sign = get_signature_from_input s
-    operator_parser env (simple_term, fun reg (f, ts) -> mkAppTerm reg sign (f, ts)) sign s
+    operator_parser (static_term, env) (simple_term, fun reg (f, ts) -> mkAppTerm static_term reg sign (f, ts)) sign s
 
 //--------------------------------------------------------------------
 
@@ -387,7 +394,7 @@ let mkUpdateRule reg sign (t_lhs, t_rhs) =
     |   _ -> raise (Error ("mkUpdateRule", reg, UpdateRuleLhsNotInAppTermForm))
 
 let rec rule (env : TypeEnv.TYPE_ENV) (s : ParserInput<PARSER_STATE>) : ParserResult<RULE, PARSER_STATE> =
-    let term = term env
+    let term = term (false, env)            // false, because terms in rules do not have to be static
     let rule = rule env
     let sign = get_signature_from_input s
     (       ( (R3 term (kw ":=") term) |||>> fun reg _ (t1,_,t2) -> mkUpdateRule (Some reg) sign (t1, t2) )
@@ -425,20 +432,20 @@ let fct_parameter_types (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE list
 
 let fct_initially env (s : ParserInput<PARSER_STATE>) : ParserResult<Map<VALUE list, VALUE>, PARSER_STATE> =
     // for the time being, only 0-ary functions can be initialised
-    (       ( ((kw "initially") << (term env))
+    (       ( ((kw "initially") << (term (true, env)))   // this term must be static
                 |||>> fun reg (sign, state) t ->
                             Map.add [] (Eval.eval_term t (state, Map.empty)) Map.empty )
     ) s
 
 let fct_eqdef env (s : ParserInput<PARSER_STATE>) : ParserResult<VALUE list -> VALUE, PARSER_STATE> =
     // for the time being, only 0-ary functions can be initialised
-    (       ( ((kw "=") << (term env))
+    (       ( ((kw "=") << (term (true, env)))  // this term must be static
                 |||>> fun reg (sign, _) t ->
                         let t_val = Eval.eval_term t (State.background_state  (* !!! use only background !!! *), Map.empty)
                         (function [] -> t_val | _ -> UNDEF) )
     ) s
 
-let definition env (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE * RULES_DB, PARSER_STATE> =
+let definition (env : TypeEnv.TYPE_ENV) (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE * STATE * RULES_DB, PARSER_STATE> =
     let (sign, state) = get_parser_state s
     let opt_state_initialisation (kind : Signature.FCT_KIND) f (tys_ran, ty_dom) (opt_static_def, opt_initially) = 
             match (opt_static_def, opt_initially) with
@@ -497,7 +504,7 @@ let parse_and_typecheck (parsing_fct : Parser<'a, PARSER_STATE>) (*typechecking_
     ast
 
 let parse_name initial_location sign s = parse_and_typecheck (name : Parser<NAME, PARSER_STATE>) initial_location (sign, empty_state) s
-let parse_term initial_location sign s = parse_and_typecheck (term TypeEnv.empty) initial_location (sign, empty_state) s
+let parse_term initial_location sign s = parse_and_typecheck (term (false, TypeEnv.empty)) initial_location (sign, empty_state) s
 let parse_rule initial_location sign s = parse_and_typecheck (rule TypeEnv.empty) initial_location (sign, empty_state) s
 
 let parse_definitions initial_location (sign, S) s =
