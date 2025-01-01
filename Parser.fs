@@ -280,7 +280,7 @@ let mkAppTerm (static_term : bool) (reg : SrcReg option) sign args =
     |   (StringConst _, _) -> AppTerm' (String, args)
     |   (FctName f, ts)    ->
             try let kind = fct_kind f sign
-                if static_term && kind <> Static
+                if static_term && not (kind = Static || kind = Constructor)
                 then raise (Error ("mkAppTerm", reg, StaticFunctionExpected (f, kind)))
                 else AppTerm' (match_fct_type f (ts >>| get_type) (fct_types f sign), args)       // !!!! no overloading yet
             with Signature.Error details -> raise (Error ("mkAppTerm", reg, SignatureError details))
