@@ -71,6 +71,7 @@ type ASM_Content = {
     imports : (string * ASM * string list option) list;
     exports : string list option;     // None means all are exported ("export*")
     signature : SIGNATURE;
+    invariants : Map<string, TYPED_TERM>;      // all invariants have a name (if no name was explicitly given, a name is generated)
     definitions : ASM_Definitions;
 }
 
@@ -82,6 +83,7 @@ let asm_content (asyncr_module_name as (asyncr : bool, modul : bool, name : stri
                 (imports : (string * ASM * string list option) list)
                 (exports : string list option)
                 (signature : SIGNATURE)
+                (invariants : Map<string, TYPED_TERM>)
                 (definitions : ASM_Definitions) : ASM_Content =
     {
         name = name;
@@ -90,6 +92,7 @@ let asm_content (asyncr_module_name as (asyncr : bool, modul : bool, name : stri
         imports = imports;
         exports = exports;
         signature = signature;
+        invariants = invariants;
         definitions = {
             state = definitions.state;
             rules     = definitions.rules;
@@ -97,14 +100,17 @@ let asm_content (asyncr_module_name as (asyncr : bool, modul : bool, name : stri
         };
     }
 
-let mkAsm (asyncr : bool, modul : bool, name : string) (imports : (string * ASM * string list option) list) (exports : string list option) (signature : SIGNATURE) (definitions : ASM_Definitions) : ASM =
-    ASM (asm_content (asyncr, modul, name) imports exports signature definitions)
+let mkAsm   (asyncr : bool, modul : bool, name : string) (imports : (string * ASM * string list option) list) (exports : string list option)
+            (signature : SIGNATURE) (invariants : Map<string, TYPED_TERM>) (definitions : ASM_Definitions) : ASM =
+    ASM (asm_content (asyncr, modul, name) imports exports signature invariants definitions)
 
 //--------------------------------------------------------------------
 
 type PARSER_STATE = Parser.PARSER_STATE
 
 type EXTENDED_PARSER_STATE = PARSER_STATE * (RULES_DB * MACRO_DB)
+
+let invariant_counter = ref 1
 
 //--------------------------------------------------------------------
 
@@ -455,12 +461,19 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                                     <|> (ID_RULE |>> fun _ -> ())
                                     <|> (ID_FUNCTION << poption (lit "(" << poption getDomainByID << lit ")") |>> fun _ -> ())
                                 ) ",")
-                (   ( R3  (kw "invariant")                       over_part (lit ":" << UnrestrictedTerm) |>> fun _ -> () )
-                <|> ( R3  (kw "invariant" << poption identifier) over_part (lit ":" << UnrestrictedTerm) |>> fun _ -> () )    )
+                (  ( R3  (kw "invariant") over_part (lit ":" << UnrestrictedTerm)
+                            |>> fun (_, _, invariant) ->
+                                    let invariant_id = "_inv_"+(string !invariant_counter)
+                                    invariant_counter := !invariant_counter + 1
+                                    [ (invariant_id, invariant) ] )
+                <|> ( R3  (kw "invariant" << identifier) over_part (lit ":" << UnrestrictedTerm)
+                            |>> fun (name, _, invariant) -> [ ("_inv_"+name, invariant) ] ) )
             let CtlSpec = kw "CTLSPEC" << poption (ID_CTL >> lit ":") ++ UnrestrictedTerm   |>> fun _ -> ()
             let LtlSpec = kw "LTLSPEC" << poption (ID_LTL >> lit ":") ++ UnrestrictedTerm   |>> fun _ -> ()
-            let TemporalProperty = CtlSpec <|> LtlSpec
-            let Property = (Invariant <|> TemporalProperty)
+            let TemporalProperty =
+                ( CtlSpec <|> LtlSpec )
+                    |>> fun _ -> fprintf stderr "warning: temporal property ignored (not implemented)"; []
+            let Property = (Invariant <|> TemporalProperty)         // temporal properties are ignored for the time being
             let Body =
                     (   (kw "definitions" >> lit ":") <<
                         R6  (pmany DomainDefinition)
@@ -468,7 +481,7 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                             (pmany RuleDeclaration)
                             (pmany InvarConstraint)
                             (pmany FairnessConstraint)
-                            (pmany Property)       )
+                            (pmany Property |>> fun ps -> Map.ofList (List.concat ps)  (* !!! tbd: add check that a property name is not used more than once *) )   )
             let DomainInitialization = (kw "domain" << ID_DOMAIN) ++ (lit "=" << StaticTerm)
                                             |>> fun (id, _) -> failwith (sprintf "not implemented: initialization of domains ('%s')" id)
             let FunctionInitialization =
@@ -511,7 +524,7 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
 
             match parse_asm_rest s' with
             |   ParserFailure x -> ParserFailure x
-            |   ParserSuccess (((_, function_definitions, rule_declarations, _, _, _), opt_main_rule_decl, default_init), s'') ->
+            |   ParserSuccess (((_, function_definitions, rule_declarations, _, _, properties), opt_main_rule_decl, default_init), s'') ->
                     let rule_declarations = rule_declarations @ (Option.fold (fun _ x -> [x]) [] opt_main_rule_decl)
                     let rdb' : RULES_DB = List.fold (fun rdb (rname, r) -> Map.add rname r rdb) empty_rules_db rule_declarations
                     let (state', mdb') : STATE * MACRO_DB =
@@ -529,6 +542,7 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                         imports   = imports;
                         exports   = exports;
                         signature = sign;
+                        invariants = properties;        // properties are only invariants for the moment (temporal properties are ignored)
                         definitions = {
                             state  = extend_with_carrier_sets (sign, state_override state state');   // !!! Agent, Reserve added twice ?
                             rules  = rules_db_override rules_db rdb';
@@ -537,14 +551,15 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                     }
                     ParserSuccess ( result, s'')
 
-let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB * MACRO_DB =
+let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB * MACRO_DB * Map<string, TYPED_TERM> =
     match asm with
     |   ASM (asm_content) ->
             let sign  = asm_content.signature
             let state = state_with_signature asm_content.definitions.state sign
             let rdb   = asm_content.definitions.rules
             let mdb   = asm_content.definitions.macros
-            (sign, state, rdb, mdb)
+            let invariants = asm_content.invariants
+            (sign, state, rdb, mdb, invariants)
 
 let parse_definitions initial_location ((sign, S), (rules_db, macro_db)) s =
     imported_modules := Map.empty
