@@ -15,6 +15,7 @@ let module_name = "Parser"
 
 type ErrorDetails =
 |   SyntaxError of string * Set<ParserCombinators.FailedAt>
+|   NotAFiniteSet of string * TYPE
 |   SignatureError of Signature.ErrorDetails
 |   StaticFunctionExpected of string * FCT_KIND
 |   InfixOperatorExpected of string
@@ -35,6 +36,8 @@ let error_msg (fct : string, reg : SrcReg option, err : ErrorDetails) =
     match err with
     |   SyntaxError (where, failures) ->
             sprintf "syntax error in %s:\n%s" where (ParserCombinators.failure_msg failures)
+    |   NotAFiniteSet (v, ty) ->
+            sprintf "range of variable '%s' must be a finite set (value of type '%s' found instead)" v (type_to_string ty)
     |   SignatureError details ->
             sprintf "type error:\n%s\n" (Signature.error_msg details)
     |   StaticFunctionExpected (f, kind) ->
@@ -339,12 +342,24 @@ let rec simple_term (static_term, env0 : TypeEnv.TYPE_ENV) (s : ParserInput<PARS
     let term_in_env = term
     let term = term (static_term, env0)
     let mkAppTerm = mkAppTerm static_term
+        // !!! temporary: only one binding allowed
+
     let quantificationTerm =
-        let quantContent = R2 (psep1_lit ((variable_identifier >> (kw "in")) ++ ((term |>> fun _ -> "") <|> alphanumeric_identifier (*!!!temporary: should be domain name*) )) ",")
-                                (poption (kw "with" >> term))
-        (   ( kw "forall" << quantContent )
-        <|> ( kw "exist" << kw "unique" << quantContent )
-        <|> ( kw "exist" << quantContent ) )
+        let quantContent q_kind =
+            let p1 = (variable_identifier) ++ (kw "in" << term)
+                |||>> fun reg (sign, _) (v, t_range) ->
+                        // !!!! tbd: check that t_range is really a finite set, e.g. not Powerset(Integer)
+                        match get_type t_range with
+                        |   Powerset v_type -> ((v, v_type), t_range)
+                        |   _ -> raise (Error ("simple_term.quantificationTerm.quantContent", Some reg, NotAFiniteSet (v, get_type t_range)))
+            let p2 reg env (v, v_type) =
+                let env' = add_var_distinct reg (v, v_type) env
+                in (kw "with" << term_in_env (false, env'))
+            (p1 >>== fun reg _ ((v, v_type), t_range) -> p2 reg env0 (v, v_type) >>= fun t_cond -> preturn (QuantTerm' (Boolean, (q_kind, v, t_range, t_cond))) )
+        (   ( kw "forall"                << no_backtrack "'forall' quantifier"       (quantContent Forall) )
+        <|> ( kw "exist"  << kw "unique" << no_backtrack "'exist unique' quantifier" (quantContent ExistUnique) )
+        <|> ( kw "exist"                 << no_backtrack "'exist' quantifier"        (quantContent Exist) ) )
+
     (       ( (kw "not" << term)
                 |||>> fun reg (sign, _) t -> mkAppTerm (Some reg) sign (FctName "not", [t]) )
         <|> ( R3 (kw "if" << term) (kw "then" << term) (poption (kw "else" << term)) >> kw "endif"

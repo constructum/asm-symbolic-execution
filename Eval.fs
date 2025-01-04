@@ -29,20 +29,33 @@ let add_binding (env : ENV) (var : string, value : VALUE) =
 
 let eval_name name S = interpretation S name
 
+let eval_quantifier (q_kind, v, t_set, t_cond) (S, env) =
+    match t_set (S, env) with
+    |   SET xs ->
+            let eval_cond x = (t_cond (S, add_binding env (v, x)) = BOOL true)
+            match q_kind with
+            |   Forall -> if Set.forall eval_cond xs then BOOL true else BOOL false
+            |   Exist  -> if Set.exists eval_cond xs then BOOL true else BOOL false
+            |   ExistUnique -> if Set.count (Set.filter (fun y -> eval_cond y) xs) = 1 then BOOL true else BOOL false
+    |   _ -> failwith "Eval.eval_term: not a set"
+
+let eval_domain ty S =
+    match enum_finite_type ty S with
+    |   Some finset -> SET finset
+    |   None -> failwith (sprintf "Eval.eval_term: domain of type '%s' is not enumerable" (ty |> Signature.type_to_string));
+
 //--------------------------------------------------------------------
 
 let rec eval_term (t : TYPED_TERM) =
     ann_term_induction eval_name {
-        Value    = fun (_, x) -> fun (S : STATE, env : ENV) -> x;
-        AppTerm  = fun (_, (f, ts)) -> fun (S, env) -> (f S) (ts >>| fun t -> t (S, env))
-        CondTerm = fun (_, (G, t1, t2)) -> fun (S, env) -> if G (S, env) = BOOL true then t1 (S, env) else t2 (S, env);
-        Initial  = fun (_, _) -> failwith "Eval.eval_term not defined on 'InitLoc' terms";
-        VarTerm  = fun (_, v) -> fun (S, env) -> get_env env v;
-        LetTerm = fun (_, (v, t1, t2)) -> fun (S, env) -> t2 (S, add_binding env (v, t1 (S, env)));
-        DomainTerm = fun (_, ty) -> fun (S, env) ->
-                        match enum_finite_type ty S with
-                        |   Some finset -> SET finset
-                        |   None -> failwith (sprintf "Eval.eval_term: domain of type '%s' is not enumerable" (ty |> Signature.type_to_string));
+        Value      = fun (_, x) (_ : STATE, _ : ENV) -> x;
+        AppTerm    = fun (_, (f, ts)) (S, env) -> (f S) (ts >>| fun t -> t (S, env))
+        CondTerm   = fun (_, (G, t1, t2)) (S, env) -> if G (S, env) = BOOL true then t1 (S, env) else t2 (S, env);
+        Initial    = fun (_, _) -> failwith "Eval.eval_term not defined on 'InitLoc' terms";
+        VarTerm    = fun (_, v) (_, env) -> get_env env v;
+        QuantTerm  = fun (_, (q_kind, v, t_set, t_cond)) (S, env) -> eval_quantifier (q_kind, v, t_set, t_cond) (S, env);
+        LetTerm    = fun (_, (v, t1, t2)) (S, env) -> t2 (S, add_binding env (v, t1 (S, env)));
+        DomainTerm = fun (_, ty) (S, _) -> eval_domain ty S;
     } t
 
 //--------------------------------------------------------------------

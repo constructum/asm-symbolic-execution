@@ -158,13 +158,40 @@ and expand_term t (S, env, C) =
                         s_eval_term body (S, env', C)
                     else AppTerm' (ty, (f, ts >>| fun t -> t (S, env, C)))
             |   _ -> AppTerm' (ty, (f, ts >>| fun t -> t (S, env, C)));
-        CondTerm = fun (ty, (G, t1, t2)) -> fun (S, env, C) -> CondTerm' (ty, (G (S, env, C), t1 (S, env, C), t2 (S, env, C)));
-        VarTerm = fun (ty, v) -> fun (S, env, C) -> VarTerm' (ty, v);
-        LetTerm = fun (ty, (v, t1, t2)) -> fun (S, env, C) ->
-                    let t1_val = t1 (S, env, C)
-                    t2 (S, add_binding env (v, t1_val, get_type t1_val), C);
-        DomainTerm = fun (ty, dom) -> fun (S, env, C) -> match enum_finite_type dom S with Some xs -> Value' (ty, SET xs) | _ -> failwith (sprintf "SymbEval.expand_term: domain of type '%s' is not enumerable" (dom |> type_to_string))
+        CondTerm  = fun (ty, (G, t1, t2)) (S, env, C) -> CondTerm' (ty, (G (S, env, C), t1 (S, env, C), t2 (S, env, C)));
+        VarTerm   = fun (ty, v)           (S, env, C) -> fst (get_env env v);    // !!!!!! ???? VarTerm' (ty, v);
+        QuantTerm = fun (ty, (q_kind, v, t_set, t_cond)) (S, env, C) -> expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C);
+        LetTerm   = fun (ty, (v, t1, t2)) (S, env, C) ->
+                        let t1_val = t1 (S, env, C)
+                        t2 (S, add_binding env (v, t1_val, get_type t1_val), C);
+        DomainTerm = fun (ty, dom) (S, env, C) -> match enum_finite_type dom S with Some xs -> Value' (ty, SET xs) | _ -> failwith (sprintf "SymbEval.expand_term: domain of type '%s' is not enumerable" (dom |> type_to_string))
     } t (S, env, C)
+
+and expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C) : TYPED_TERM =
+    match t_set (S, env, C) with
+    |   Value' (Powerset ty, SET xs) ->
+            let eval_instance x = t_cond (S, add_binding env (v, Value' (ty, x), ty), C)
+            let t_conds = List.map eval_instance (Set.toList xs)
+            match q_kind with
+            |   Forall -> List.fold (fun (t_accum : TYPED_TERM) -> fun (t1 : TYPED_TERM) -> s_and (t_accum, t1)) (Value' (Boolean, BOOL true))  t_conds
+            |   Exist  -> List.fold (fun (t_accum : TYPED_TERM) -> fun (t1 : TYPED_TERM) -> s_or  (t_accum, t1)) (Value' (Boolean, BOOL false)) t_conds
+            |   ExistUnique -> failwith "SymbEval.expand_quantifier: 'ExistUnique' not implemented"
+    |   Value' (_, SET xs) -> failwith (sprintf "SymbEval.forall_rule: this should not happen")
+    |   x -> failwith (sprintf "SymbEval.expand_quantifier: not a set (%A): %A v" t_set x)
+
+
+(*
+    let t_set = t_set (S, env, C)
+    match t_set with
+    |   Value' (_, SET xs) ->
+            let eval_cond x = (t_cond (S, add_binding env (v, Value' (get_type v, x), get_type v), C) = Value' (Boolean, BOOL true))
+            match q_kind with
+            |   Forall -> if List.forall eval_cond xs then Value' (Boolean, BOOL true) else Value' (Boolean, BOOL false)
+            |   Exist  -> if List.exists eval_cond xs then Value' (Boolean, BOOL true) else Value' (Boolean, BOOL false)
+            |   ExistUnique -> if List.count (List.filter (fun y -> eval_cond y) xs) = 1 then Value' (Boolean, BOOL true) else Value' (Boolean, BOOL false)
+    |   _ -> failwith "SymbEval.expand_quantifier: not a set" 
+fun (S, env, C) -> QuantTerm' (ty, (q_kind, v, fun (S, env, C) -> t_set (S, env, C), fun (S, env, C) -> t_cond (S, env, C)));
+*)
 
 and try_reducing_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (t : TYPED_TERM) : TYPED_TERM =
     let opt_elems = try enum_finite_type ty S with _ -> None
@@ -281,13 +308,14 @@ and eval_let_term (S, env, C) (v, t1, t2) =
 
 and s_eval_term_ (t : TYPED_TERM) ((S, env, C) : S_STATE * ENV * CONTEXT) =
     ann_term_induction (fun x -> x) {
-        Value    = fun (ty, x) _ -> Value' (ty, x);
-        Initial  = fun (ty, (f, xs)) _ -> Initial' (ty, (f, xs)); //Initial (f, xs);
-        AppTerm  = fun (ty, (f, ts)) (S, env, C) -> try_reducing_term_with_finite_range ty (S, env, C) (eval_app_term ty (S, env, C) (f, ts));
-        CondTerm = fun (ty, (G, t1, t2)) (S, env, C) -> eval_cond_term ty (S, env, C) (G, t1, t2);
-        VarTerm  = fun (ty, v) -> fun (S, env, _) -> fst (get_env env v);
-        LetTerm  = fun (ty, (v, t1, t2)) -> fun (S, env, _) -> eval_let_term (S, env, C) (v, t1, t2) //failwith "s_eval_term: LetTerm: not implemented yet";
-        DomainTerm = fun (ty, dom) -> fun (S, env, C) -> match enum_finite_type dom S with Some xs -> Value' (ty, SET xs) | None -> failwith (sprintf "SymbEval.expand_term: domain of type '%s' is not enumerable" (dom |> type_to_string))
+        Value      = fun (ty, x) _ -> Value' (ty, x);
+        Initial    = fun (ty, (f, xs)) _ -> Initial' (ty, (f, xs)); //Initial (f, xs);
+        AppTerm    = fun (ty, (f, ts)) (S, env, C) -> try_reducing_term_with_finite_range ty (S, env, C) (eval_app_term ty (S, env, C) (f, ts));
+        CondTerm   = fun (ty, (G, t1, t2)) (S, env, C) -> eval_cond_term ty (S, env, C) (G, t1, t2);
+        VarTerm    = fun (ty, v) -> fun (S, env, _) -> fst (get_env env v);
+        QuantTerm  = fun (ty, (q_kind, v, t_set, t_cond)) (S, env, C) -> expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C);
+        LetTerm    = fun (ty, (v, t1, t2)) -> fun (S, env, _) -> eval_let_term (S, env, C) (v, t1, t2) //failwith "s_eval_term: LetTerm: not implemented yet";
+        DomainTerm = fun (ty, dom) -> fun (S, env, C) -> match enum_finite_type dom S with Some xs -> Value' (ty, SET xs) | None -> failwith (sprintf "SymbEval.s_eval_term_: domain of type '%s' is not enumerable" (dom |> type_to_string))
     } t (S, env, C)
 
 and s_eval_term (t : TYPED_TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TYPED_TERM =
@@ -500,6 +528,7 @@ let reconvert_term sign t =
         AppTerm  = AppTerm';
         CondTerm = CondTerm';
         VarTerm  = VarTerm';
+        QuantTerm = QuantTerm';
         LetTerm  = LetTerm';
         DomainTerm = DomainTerm';
     } t

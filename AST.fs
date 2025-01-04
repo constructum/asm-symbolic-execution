@@ -7,15 +7,20 @@ open PrettyPrinting
 
 //--------------------------------------------------------------------
 
+type QUANT_KIND =
+|   Forall
+|   ExistUnique
+|   Exist
+
 type 'annotation ANN_TERM =
-| Value'      of 'annotation * (VALUE)                     // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
-| Initial'    of 'annotation * (FCT_NAME * VALUE list)   // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
-| AppTerm'    of 'annotation * (NAME * 'annotation ANN_TERM list)
-| CondTerm'   of 'annotation * ('annotation ANN_TERM * 'annotation ANN_TERM * 'annotation ANN_TERM)
-| VarTerm'    of 'annotation * (string)
-| QuantTerm'  of 'annotation
-| LetTerm'    of 'annotation * (string * 'annotation ANN_TERM * 'annotation ANN_TERM)
-| DomainTerm' of 'annotation * TYPE                  // AsmetaL construct: finite type (e.g. enum, abstract, subsetof) used as finite set
+|   Value'      of 'annotation * (VALUE)                     // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
+|   Initial'    of 'annotation * (FCT_NAME * VALUE list)   // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
+|   AppTerm'    of 'annotation * (NAME * 'annotation ANN_TERM list)
+|   CondTerm'   of 'annotation * ('annotation ANN_TERM * 'annotation ANN_TERM * 'annotation ANN_TERM)
+|   VarTerm'    of 'annotation * (string)
+|   QuantTerm'  of 'annotation * (QUANT_KIND * string * 'annotation ANN_TERM * 'annotation ANN_TERM)
+|   LetTerm'    of 'annotation * (string * 'annotation ANN_TERM * 'annotation ANN_TERM)
+|   DomainTerm' of 'annotation * TYPE                  // AsmetaL construct: finite type (e.g. enum, abstract, subsetof) used as finite set
 //  | TupleTerm   of 'annotation * ('annotation ANN_TERM list)
 
 let get_annotation = function
@@ -24,7 +29,7 @@ let get_annotation = function
 |   AppTerm' (ann, _) -> ann
 |   CondTerm' (ann, _) -> ann
 |   VarTerm' (ann, _) -> ann
-|   QuantTerm' ann -> ann
+|   QuantTerm' (ann, _) -> ann
 |   LetTerm' (ann, _) -> ann
 |   DomainTerm' (ann, _) -> ann
 //  |   TupleTerm (ann, _) -> ann
@@ -88,6 +93,7 @@ type ANN_TERM_INDUCTION<'annotation, 'name, 'term> = {
     AppTerm    : 'annotation * ('name * 'term list) -> 'term;
     CondTerm   : 'annotation * ('term * 'term * 'term) -> 'term;
     VarTerm    : 'annotation * (string) -> 'term;
+    QuantTerm  : 'annotation * (QUANT_KIND * string * 'term * 'term) -> 'term;
     LetTerm    : 'annotation * (string * 'term * 'term) -> 'term;
     DomainTerm : 'annotation * (TYPE) -> 'term;
 }
@@ -100,7 +106,7 @@ let rec ann_term_induction (name : NAME -> 'name) (F : ANN_TERM_INDUCTION<'annot
     |   AppTerm'  (ann, (f, ts))     -> F.AppTerm (ann, (name f, List.map (fun t -> term_ind F t) ts))
     |   CondTerm' (ann, (G, t1, t2)) -> F.CondTerm (ann, (term_ind F G, term_ind F t1, term_ind F t2))
     |   VarTerm' (ann, v)            -> F.VarTerm (ann, v)
-    |   QuantTerm' ann -> failwith "term_induction: QuantTerm not implemented"
+    |   QuantTerm' (ann, (q_kind, v, t_set, t_cond)) -> F.QuantTerm (ann, (q_kind, v, term_ind F t_set, term_ind F t_cond))
     |   LetTerm' (ann, (x, t1, t2))  -> F.LetTerm (ann, (x, term_ind F t1, term_ind F t2))
     |   DomainTerm' (ann, tyname)    -> F.DomainTerm (ann, tyname)
 
@@ -146,7 +152,8 @@ let rec term_size t =
         CondTerm = fun (_, (G, t1, t2)) -> 1 + G + t1 + t2;
         Initial = fun (_, _) -> 1;
         VarTerm = fun (_, _) -> 1;
-        LetTerm = fun (_, (x, t1, t2)) -> 1 + t1 + t2;
+        QuantTerm = fun (_, (q_kind, v, t_set, t_cond)) -> 1 + t_set + t_cond;
+        LetTerm = fun (_, (v, t1, t2)) -> 1 + t1 + t2;
         DomainTerm = fun (_, _) -> 1;
     } t
 
@@ -201,6 +208,9 @@ let rec pp_term (sign : SIGNATURE) (t : TYPED_TERM) =
         Value    = fun (_, x) -> str (value_to_string x);
         Initial  = fun (_, (f, xs)) -> pp_location_term "initial" (f, xs);
         VarTerm = fun (_, x) -> str x;
+        QuantTerm = fun (_, (q_kind, v, t_set, t_cond)) ->
+            let q_kind = match q_kind with Forall -> "(forall " | ExistUnique -> "(exist unique " | Exist -> "(exist "
+            blo0 [ str q_kind; str v; str " in "; t_set; str " with "; t_cond; str ")" ];
         LetTerm = fun (_, (v, t1, t2)) -> blo0 [ str "let "; str v; str " = "; t1; line_brk; str "in "; t2; line_brk; str "endlet" ];
         DomainTerm = fun (_, tyname) -> str (type_to_string tyname);
     } t

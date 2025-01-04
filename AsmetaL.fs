@@ -15,7 +15,7 @@ let module_name = "AsmetaL"
 
 type ErrorDetails =
 |   SyntaxError of string
-|   NotFiniteSet of string * TYPE
+|   NotAFiniteSet of string * TYPE
 |   FunctionNameNotInSignature of string
 |   ConstructorCannotBeRedefined of string
 |   FunctionNotDeclaredAsControlled of string
@@ -29,7 +29,7 @@ let error_msg (fct : string, reg : SrcReg option, err : ErrorDetails) =
     match err with
     |   SyntaxError where ->
             sprintf "syntax error in %s" where
-    |   NotFiniteSet (v, ty) ->
+    |   NotAFiniteSet (v, ty) ->
             sprintf "range of variable '%s' must be a finite set (value of type '%s' found instead)" v (type_to_string ty)
     |   FunctionNameNotInSignature f ->
             sprintf "error in function definition: function name '%s' is not declared in the signature" f
@@ -301,7 +301,7 @@ let rec BasicRule env0 (s : ParserInput<PARSER_STATE>) =
                     // !!!! tbd: check that t_range is really a finite set, e.g. not Powerset(Integer)
                     match get_type t_range with
                     |   Powerset v_type -> ((v, v_type), t_range)
-                    |   _ -> raise (Error ("BasicRule.ForallRule", Some reg, NotFiniteSet (v, get_type t_range)))
+                    |   _ -> raise (Error ("BasicRule.ForallRule", Some reg, NotAFiniteSet (v, get_type t_range)))
         let p2 reg env (v, v_type) =
             let env' = add_var_distinct reg (v, v_type) env
             in (kw "with" << Term_in_env (false, env')) ++ (kw "do" << Rule_in_env env')
