@@ -299,9 +299,6 @@ let mkCondTerm (reg : SrcReg option) (G, t1, t2) =
          then CondTerm' (t1_type, (G, t1, t2))
          else raise (Error ("mkCondTerm", reg, CondTermBranchesWithDifferentTypes (t1_type, t2_type)))
 
-let mkQuantTerm reg =
-    failwith "mkQuantTerm: not implemented"
-
 let mkDomainTerm ty =
     DomainTerm' (Powerset ty, ty)
 
@@ -333,6 +330,68 @@ let switch_to_cond_rule reg sign (t, cases : (TYPED_TERM * RULE) list, otherwise
     in mk_cond_term cases
 
 //--------------------------------------------------------------------
+// this was taken from the AsmetaL grammar:
+//   this part of the AsmetaL grammar must be here because it is
+//   used by 'term' (due to AsmetaL 'domain' terms)
+
+let ID_DOMAIN = alphanumeric_identifier   // not exactly according to AsmetaL grammar, but good enough
+let ID_ENUM = alphanumeric_identifier     // not exactly according to AsmetaL grammar, but good enough
+let EnumElement = ID_ENUM
+
+let add_basic_domain s sign =
+    if s <> "Boolean" && s <> "Integer" && s <> "String" && s <> "Undef" && s <> "Rule"
+        && s <> "Complex" && s <> "Real" && s <> "Natural" && s <> "Char"   // !!! last four are not yet implemented
+    then failwith (sprintf "not implemented: basic type domain '%s'" s)
+    else sign   // nothing to add to the signature: basic domains are predefined, i.e. already in the signature
+
+let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSER_STATE> =
+        let sign = get_signature_from_input s
+        (   (   StructuredTD
+            <|> (ID_DOMAIN |>> fun s -> construct_type sign (s, []))) ) s
+    and StructuredTD  (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSER_STATE> =
+        let sign = get_signature_from_input s
+        (   let ProductDomain  = kw "Prod"     ++ (opt_psep2 "(" getDomainByID "," ")") |>> construct_type sign
+            let SequenceDomain = kw "Seq"      ++ (lit "(" << (getDomainByID |>> fun t->[t]) >> lit ")") |>> construct_type sign
+            let PowersetDomain = kw "Powerset" ++ (lit "(" << (getDomainByID |>> fun t->[t]) >> lit ")") |>> construct_type sign
+            let BagDomain      = kw "Bag"      ++ (lit "(" << (getDomainByID |>> fun t->[t]) >> lit ")") |>> construct_type sign
+            let MapDomain      = kw "Map"      ++ (lit "(" << (R3 getDomainByID (lit ",") getDomainByID |>> fun (t1,_,t2) -> [t1;t2]) >> lit ")")  |>> construct_type sign
+            ProductDomain <|> SequenceDomain <|> PowersetDomain <|> BagDomain <|> MapDomain ) s
+    and ConcreteDomain (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
+        let sign = get_signature_from_input s
+        (   (kw "domain" << ID_DOMAIN) ++ (kw "subsetof" << getDomainByID)          
+                |>> fun (tyname, T) ->
+                        // !!! for the moment, simply map to main type
+                        add_type_name tyname (0, SubsetType, Some (fun _ -> T)) ) s
+    and TypeDomain (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
+        let sign = get_signature_from_input s
+        (   let AnyDomain = kw "anydomain" << ID_DOMAIN
+                                |>> fun tyname -> add_type_name tyname (0, AnyType, Some (fun _ -> TypeParam tyname))
+            let EnumTD = (kw "enum" << kw "domain" << ID_DOMAIN) ++ (lit "=" << lit "{" << psep1 EnumElement (lit "," <|> lit "|") >> lit "}")
+                                |>> fun (tyname, cons_names) ->
+                                    fun sign ->
+                                    (   let sign' = add_type_name tyname (0, EnumType, Some (fun _ -> TypeCons (tyname, []))) sign
+                                        List.fold (fun sign f -> add_function_name f (Constructor, NonInfix, ([], TypeCons (tyname, []))) sign) sign' cons_names)
+            let AbstractTD = (popt_bool (kw "dynamic") >> kw "abstract" >> kw "domain") ++ ID_DOMAIN     // !!! what about 'dynamic'?
+                                |>> fun (is_dynamic, tyname) ->
+                                    if is_dynamic
+                                    then failwith (sprintf "not implemented: dynamic abstract domain ('%s')" tyname)
+                                    else add_type_name tyname (0, EnumType, Some (fun _ -> TypeCons (tyname, [])))
+            let BasicTD = (kw "basic" << kw "domain" << ID_DOMAIN) |>> fun tyname -> add_basic_domain tyname
+            AnyDomain <|> EnumTD <|> AbstractTD <|> BasicTD ) s
+
+(*
+let Term env s : ParserResult<TYPED_TERM, PARSER_STATE> =
+    if !trace > 0 then fprintf stderr "AsmetaL.Term\n"
+    let DomainTerm s =
+        if !trace > 0 then fprintf stderr "AsmetaL.DomainTerm\n"
+        try ( getDomainByID s )
+        with _ -> ParserFailure (combine_failures (Set.singleton (get_pos s, ($"type name expected, '{s}' found")), get_failures s))
+    let regularTerm s =
+        if !trace > 0 then fprintf stderr "Parser.term\n"
+        Parser.term s
+    (   ( DomainTerm  |>> fun tyname -> Parser.mkDomainTerm tyname (*!!!! AST.DomainTerm' tyname*) )
+    <|> ( regularTerm env ) ) s
+*)
 
 let rec simple_term (static_term, env0 : TypeEnv.TYPE_ENV) (s : ParserInput<PARSER_STATE>) : ParserResult<TYPED_TERM, PARSER_STATE> = 
     // FiniteQuantificationTerm 	::= 	( ForallTerm | ExistUniqueTerm | ExistTerm )
@@ -360,6 +419,10 @@ let rec simple_term (static_term, env0 : TypeEnv.TYPE_ENV) (s : ParserInput<PARS
         <|> ( kw "exist"  << kw "unique" << no_backtrack "'exist unique' quantifier" (quantContent ExistUnique) )
         <|> ( kw "exist"                 << no_backtrack "'exist' quantifier"        (quantContent Exist) ) )
 
+    let DomainTerm s =   // DomainTerm from AsmetaL grammar
+        try getDomainByID s
+        with _ -> ParserFailure (combine_failures (Set.singleton (get_pos s, ($"type name expected, '{s}' found")), get_failures s))
+
     (       ( (kw "not" << term)
                 |||>> fun reg (sign, _) t -> mkAppTerm (Some reg) sign (FctName "not", [t]) )
         <|> ( R3 (kw "if" << term) (kw "then" << term) (poption (kw "else" << term)) >> kw "endif"
@@ -382,11 +445,11 @@ let rec simple_term (static_term, env0 : TypeEnv.TYPE_ENV) (s : ParserInput<PARS
         <|> ( R3 (kw "switch" << term) (pmany1 ((kw "case" << term >> lit ":") ++ term)) (kw "otherwise" << term >> kw "endswitch")
                         (*                    // !!! note: 'otherwise' not optional to avoid 'undef' as default case *)
                 |||>> fun reg (sign, _) (t, cases, otherwise) -> switch_to_cond_term static_term (Some reg) sign (t, cases, otherwise) )
-        <|> ( lit "(" << quantificationTerm >> lit ")"
-                |||>> fun reg (sign, _) -> mkQuantTerm reg sign (* !!! temporary !!! *) )
         <|> (   let p1 = (kw "let" << lit "(" << variable_identifier) ++ (kw "=" << term >> lit ")")
                 let p2 reg env (v, t1) = kw "in" << term_in_env (static_term, add_var_distinct reg (v, get_type t1) env) >> kw "endlet"
                 (p1 >>== fun reg _ (v, t1) -> p2 reg env0 (v, t1) >>= fun t2 -> preturn (LetTerm' (get_type t2, (v, t1, t2))) ) )
+        <|> ( lit "(" << quantificationTerm >> lit ")" )
+        <|> ( DomainTerm |>> fun tyname -> mkDomainTerm tyname )
         <|> ( lit "(" << term >> lit ")" )
     ) s
 

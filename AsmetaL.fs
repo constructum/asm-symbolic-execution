@@ -50,6 +50,12 @@ let error_msg (fct : string, reg : SrcReg option, err : ErrorDetails) =
 
 let add_var_distinct = Parser.add_var_distinct
 
+let ID_DOMAIN = Parser.ID_DOMAIN
+let ConcreteDomain = Parser.ConcreteDomain
+let TypeDomain = Parser.TypeDomain
+let getDomainByID = Parser.getDomainByID
+
+
 //--------------------------------------------------------------------
 
 type ASM_Definitions = {
@@ -135,8 +141,6 @@ let MOD_ID =
         <|> ( (poption (pletter >> pchar ':')) ++ (pmany1 (palphanum_ <|> pcharf (fun c -> c = '\\' || c = '/' || c = '.' || c = '-' )))
                 |>> function (None, path) -> implode path | (Some drive_letter, path) -> (implode (drive_letter :: ':' :: path)) ) )
 
-let ID_DOMAIN = identifier   //!!!! not exactly
-let ID_ENUM = identifier      //!!!! not exactly
 let ID_FUNCTION = identifier  //!!!! not exactly
 
 let ID_VARIABLE = ws_or_comment << (pchar '$' ++ (pletter ++ (pmany palphanum_))) |>> fun (c1, (c2, s)) -> implode (c1 :: c2 :: s)
@@ -144,63 +148,9 @@ let ID_RULE = identifier  //!!!! not exactly
 let ID_CTL = identifier       //!!!! not exactly
 let ID_LTL = identifier
 
-let EnumElement = ID_ENUM
-
-let add_basic_domain s sign =
-    if s <> "Boolean" && s <> "Integer" && s <> "String" && s <> "Undef" && s <> "Rule"
-        && s <> "Complex" && s <> "Real" && s <> "Natural" && s <> "Char"   // !!! last four are not yet implemented
-    then failwith (sprintf "not implemented: basic type domain '%s'" s)
-    else sign   // nothing to add to the signature: basic domains are predefined, i.e. already in the signature
-
-let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSER_STATE> =
-        let sign = get_signature_from_input s
-        (   (   StructuredTD
-            <|> (ID_DOMAIN |>> fun s -> construct_type sign (s, []))) ) s
-    and StructuredTD  (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSER_STATE> =
-        let sign = get_signature_from_input s
-        (   let ProductDomain  = kw "Prod"     ++ (opt_psep2 "(" getDomainByID "," ")") |>> construct_type sign
-            let SequenceDomain = kw "Seq"      ++ (lit "(" << (getDomainByID |>> fun t->[t]) >> lit ")") |>> construct_type sign
-            let PowersetDomain = kw "Powerset" ++ (lit "(" << (getDomainByID |>> fun t->[t]) >> lit ")") |>> construct_type sign
-            let BagDomain      = kw "Bag"      ++ (lit "(" << (getDomainByID |>> fun t->[t]) >> lit ")") |>> construct_type sign
-            let MapDomain      = kw "Map"      ++ (lit "(" << (R3 getDomainByID (lit ",") getDomainByID |>> fun (t1,_,t2) -> [t1;t2]) >> lit ")")  |>> construct_type sign
-            ProductDomain <|> SequenceDomain <|> PowersetDomain <|> BagDomain <|> MapDomain ) s
-    and ConcreteDomain (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
-        let sign = get_signature_from_input s
-        (   (kw "domain" << ID_DOMAIN) ++ (kw "subsetof" << getDomainByID)          
-                |>> fun (tyname, T) ->
-                        // !!! for the moment, simply map to main type
-                        add_type_name tyname (0, SubsetType, Some (fun _ -> T)) ) s
-    and TypeDomain (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
-        let sign = get_signature_from_input s
-        (   let AnyDomain = kw "anydomain" << ID_DOMAIN
-                                |>> fun tyname -> add_type_name tyname (0, AnyType, Some (fun _ -> TypeParam tyname))
-            let EnumTD = (kw "enum" << kw "domain" << ID_DOMAIN) ++ (lit "=" << lit "{" << psep1 EnumElement (lit "," <|> lit "|") >> lit "}")
-                                |>> fun (tyname, cons_names) ->
-                                    fun sign ->
-                                    (   let sign' = add_type_name tyname (0, EnumType, Some (fun _ -> TypeCons (tyname, []))) sign
-                                        List.fold (fun sign f -> add_function_name f (Constructor, NonInfix, ([], TypeCons (tyname, []))) sign) sign' cons_names)
-            let AbstractTD = (popt_bool (kw "dynamic") >> kw "abstract" >> kw "domain") ++ ID_DOMAIN     // !!! what about 'dynamic'?
-                                |>> fun (is_dynamic, tyname) ->
-                                    if is_dynamic
-                                    then failwith (sprintf "not implemented: dynamic abstract domain ('%s')" tyname)
-                                    else add_type_name tyname (0, EnumType, Some (fun _ -> TypeCons (tyname, [])))
-            let BasicTD = (kw "basic" << kw "domain" << ID_DOMAIN) |>> fun tyname -> add_basic_domain tyname
-            AnyDomain <|> EnumTD <|> AbstractTD <|> BasicTD ) s
 
 let Domain (s : ParserInput<PARSER_STATE>) =
     ((ConcreteDomain <|> TypeDomain) ||>> fun (sign, state) update_sign_fct -> (update_sign_fct sign, state)) s
-
-let Term env s : ParserResult<TYPED_TERM, PARSER_STATE> =
-    if !trace > 0 then fprintf stderr "AsmetaL.Term\n"
-    let DomainTerm s =
-        if !trace > 0 then fprintf stderr "AsmetaL.DomainTerm\n"
-        try ( getDomainByID s )
-        with _ -> ParserFailure (combine_failures (Set.singleton (get_pos s, ($"type name expected, '{s}' found")), get_failures s))
-    let regularTerm s =
-        if !trace > 0 then fprintf stderr "Parser.term\n"
-        Parser.term s
-    (   ( DomainTerm  |>> fun tyname -> Parser.mkDomainTerm tyname (*!!!! AST.DomainTerm' tyname*) )
-    <|> ( regularTerm env ) ) s
 
 let add_function_name f (kind, infix, (tys, ty)) sign =
     //!!! little hack to avoid overwriting of predefined background functions by Asmeta StandardLibrary.asm
@@ -272,9 +222,9 @@ let switch_to_cond_rule reg sign (t, cases : (TYPED_TERM * RULE) list, otherwise
 // ---------------------------------
 
 let rec BasicRule env0 (s : ParserInput<PARSER_STATE>) =
-    let Term_in_env = Term
+    let Term_in_env = Parser.term
     let Rule_in_env = Rule
-    let Term = Term (false, env0)    // false, because terms in rules do not have to be static
+    let Term = Parser.term (false, env0)    // false, because terms in rules do not have to be static
     let Rule = Rule env0
     let BlockRule       = pmany1 Rule >> kw "endpar" |>> ParRule
     let ConditionalRule = R3 (Term) (kw "then" << Rule) (poption (kw "else" << Rule) |>> Option.defaultValue skipRule) >> kw "endif" |>> CondRule
@@ -317,7 +267,7 @@ let rec BasicRule env0 (s : ParserInput<PARSER_STATE>) =
     // <|> ExtendRule
     ) s
 
-and MacroCallRule env = ((ID_RULE >> lit "[") ++ (psep0 (Term (false, env)) (lit ",") >> lit "]")) |>> MacroRuleCall
+and MacroCallRule env = ((ID_RULE >> lit "[") ++ (psep0 (Parser.term (false, env)) (lit ",") >> lit "]")) |>> MacroRuleCall
 
 and TurboRule env (s : ParserInput<PARSER_STATE>) =
     let Rule = Rule env
@@ -330,7 +280,7 @@ and TurboRule env (s : ParserInput<PARSER_STATE>) =
     ) s
 
 and DerivedRule env (s : ParserInput<PARSER_STATE>) =
-    let Term = Term (false, env)
+    let Term = Parser.term (false, env)
     let Rule = Rule env
     let CaseRule = R3 (Term) (pmany1 ((kw "case" << Term >> lit ":") ++ Rule)) ((poption (kw "otherwise" << Rule)) >> (kw "endswitch"))
                         |||>> fun reg (sign, _) (t, cases, otherwise) -> switch_to_cond_rule (Some reg) sign (t, cases, otherwise)
@@ -346,7 +296,7 @@ and DerivedRule env (s : ParserInput<PARSER_STATE>) =
     ) s
 
 and Rule env (s : ParserInput<PARSER_STATE>) =
-    let Term = Term (false, env)
+    let Term = Parser.term (false, env)
     let UpdateRule = (R3 (Term) (lit ":=") Term) |||>> fun reg (sign, _) (t1,_,t2) -> Parser.mkUpdateRule (Some reg) sign (t1, t2)   // !!!! not exactly as in AsmetaL grammar
     (   BasicRule env
     <|> TurboRule env
@@ -360,10 +310,10 @@ and Rule env (s : ParserInput<PARSER_STATE>) =
 let imported_modules = ref (Map.empty : Map<string, ASM>)
 
 let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EXTENDED_PARSER_STATE>  =
-    let Term_in_env = Term
+    let Term_in_env = Parser.term
     let Rule_in_env = Rule
-    let StaticTerm       = Term (true, env0)
-    let UnrestrictedTerm = Term (false, env0)
+    let StaticTerm       = Parser.term (true, env0)
+    let UnrestrictedTerm = Parser.term (false, env0)
     let Rule = Rule env0
     //let (sign, state) = get_parser_state s
     let reduce_state (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserInput<PARSER_STATE> * (RULES_DB * MACRO_DB) =
