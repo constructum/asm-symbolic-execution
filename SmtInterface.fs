@@ -15,6 +15,7 @@ type SMT_CONTEXT = {
     typ : Map<string, Sort> ref;
     fct : Map<string, FuncDecl> ref;
     con : Map<string, Expr> ref;            // expressions corresponding to constants of enumerated types
+    ctr : int ref;                          // SMT call counter
 }
 
 type SMT_EXPR =
@@ -28,13 +29,17 @@ let new_smt_context () : SMT_CONTEXT =
     let typ = ref Map.empty
     let fct = ref Map.empty
     let con = ref Map.empty
-    { ctx = ctx; slv = slv; typ = typ; fct = fct; con = con; }
+    let ctr = ref 0
+    { ctx = ctx; slv = slv; typ = typ; fct = fct; con = con; ctr = ctr }
 
 let smt_ctx_reset (C : SMT_CONTEXT) =
     (!C.ctx).Dispose ();
     C.ctx := new Context ()
     (!C.slv).Reset ();
+    C.typ := Map.empty
     C.fct := Map.empty
+    C.con := Map.empty
+    C.ctr := 0
 
 let smt_solver_reset (C : SMT_CONTEXT) =
     (!C.slv).Reset ()
@@ -180,20 +185,20 @@ and smt_map_term sign C (t : TYPED_TERM) : SMT_EXPR =
 let smt_assert sign C (phi : TYPED_TERM) =
     if get_type phi = Boolean
     then match smt_map_term sign C phi with
-         | SMT_BoolExpr be -> (!C.slv).Assert be
+         | SMT_BoolExpr be -> C.ctr := !C.ctr + 1; (!C.slv).Assert be
          | _ -> failwith (sprintf "smt_assert: error converting Boolean term (term = %s)" (term_to_string sign phi))
     else failwith (sprintf "'smt_assert' expects a Boolean term, %s found instead " (term_to_string sign phi))
 
 let smt_formula_is_true sign C (phi : TYPED_TERM) =
     if get_type phi = Boolean
     then match smt_map_term sign C phi with
-         | SMT_BoolExpr be -> ((!C.slv).Check ((!C.ctx).MkNot be) = Status.UNSATISFIABLE)
+         | SMT_BoolExpr be -> C.ctr := !C.ctr + 1; ((!C.slv).Check ((!C.ctx).MkNot be) = Status.UNSATISFIABLE)
          | _ -> failwith (sprintf "smt_formula_is_true: error converting Boolean term (term = %s)" (term_to_string sign phi))
     else failwith (sprintf "'smt_formula_is_true' expects a Boolean term, %s found instead " (term_to_string sign phi))
 
 let smt_formula_is_false sign C (phi : TYPED_TERM) =
     if get_type phi = Boolean
     then match smt_map_term sign C phi with
-         | SMT_BoolExpr be -> ((!C.slv).Check be = Status.UNSATISFIABLE)
+         | SMT_BoolExpr be -> C.ctr := !C.ctr + 1; ((!C.slv).Check be = Status.UNSATISFIABLE)
          | _ -> failwith (sprintf "smt_formula_is_false: error converting Boolean term (term = %s)" (term_to_string sign phi))
     else failwith (sprintf "'smt_formula_is_false' expects a Boolean term, %s found instead " (term_to_string sign phi))

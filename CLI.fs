@@ -95,7 +95,8 @@ let exec_symbolic (symb_exec_fct : AST.RULE -> 'a * AST.RULE) (main_rule_name : 
             write "\n\n--- generated rule:\n"
             PrettyPrinting.pr stdout 80 (AST.pp_rule (TopLevel.signature ()) R_out)
             write $"\n\n--- size of generated rule: {(AST.rule_size R_out)}\n"
-            write $"\n--- number of leaves in decision tree: {no_of_leaves}\n" // (no_of_leaves)
+            write $"\n--- number of leaves in decision tree: {no_of_leaves}\n"
+            write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n" 
             print_time (cpu, usr, sys)
     |   (_, Some ex, _, cpu, usr, sys) ->
             print_time (cpu, usr, sys)
