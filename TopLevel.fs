@@ -2,6 +2,7 @@ module TopLevel
 
 //--------------------------------------------------------------------
 
+open Common
 open Signature
 open State
 open AST
@@ -88,7 +89,7 @@ let loadstr (asmeta_flag : bool) contents =
 let loadfile (asmeta_flag : bool) filename =
     if (!trace > 0) then fprintf stderr "load_file: %s\n" filename
     Common.readfile (filename) |> load asmeta_flag (ParserCombinators.File (ref filename))
-    fprintf stderr "invariants: %A\n"  (invariants ())
+    // fprintf stderr "invariants:\n%s\n"  (Map.fold (fun acc (inv_id : string) (t : TYPED_TERM) -> (acc ^ inv_id ^ ": " ^ (term_to_string (signature()) t))) "" (invariants ()))
     if (!trace > 0) then fprintf stderr "---\n%s\n---\n" (signature_to_string (signature ()))
 
 //--------------------------------------------------------------------

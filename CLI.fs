@@ -12,25 +12,27 @@ let usage () =
             #endif
             ""
             "Options:"
-            "  -str <strg>   load definitions specified in string <strg>"
-            "                  into the top-level environment"
-            "  -file <file>  load definitions contained in file <file>"
-            "                  into top-level environment"
+            "  -str <strg>    load definitions specified in string <strg>"
+            "                   into the top-level environment"
+            "  -file <file>   load definitions contained in file <file>"
+            "                   into top-level environment"
             ""
-            "  -asmeta       use AsmetaL as input language"
+            "  -asmeta        use AsmetaL as input language"
+            "  -invcheck <n>  (AsmetaL only) check invariants during symbolic execution"
+            "                   for at most <n> steps or indefinitely, if <n> not specified"
             ""
-            "  -symbolic     symbolic execution of 'Main' rule (default)"
-            "  -steps <n>    symbolic execution of <n> steps of 'Main' rule"
-            "                  starting from initial state (default: n = 1)"
+            "  -symbolic      symbolic execution of 'Main' rule (default)"
+            "  -steps <n>     symbolic execution of <n> steps of 'Main' rule"
+            "                   starting from initial state (default: n = 1)"
             ""
-            "  -nonsymbolic  execute 'Main' rule non-symbolically"
+            "  -nonsymbolic   execute 'Main' rule non-symbolically"
             ""
-            "  -turbo2basic  turbo ASM to basic ASM transformation"
-            "                  (all non-static functions are uninterpreted)"
+            "  -turbo2basic   turbo ASM to basic ASM transformation"
+            "                   (all non-static functions are uninterpreted)"
             ""
-            "  -nosmt        do not use SMT solver"
+            "  -nosmt         do not use SMT solver"
             ""
-            "  -license      display license information"
+            "  -license       display license information"
             "" ] |> String.concat "\n" )
 
 let license () =
@@ -77,19 +79,11 @@ let license () =
             ""
             "" ]  |> String.concat "\n" )
 
+let print_time (cpu, usr, sys) =
+    writeln $"\n--- CPU time: {((float cpu) / 1000.0)}s (usr: {((float usr) / 1000.0)}s, sys: {((float sys) / 1000.0)}s)"
 
 let exec_symbolic (symb_exec_fct : AST.RULE -> 'a * AST.RULE) (main_rule_name : string) : unit =
-    let (args, R_in) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
-    let print_time (cpu, usr, sys) =
-        writeln $"\n--- CPU time: {((float cpu) / 1000.0)}s (usr: {((float usr) / 1000.0)}s, sys: {((float sys) / 1000.0)}s)"
-(*
-    match symb_exec_fct R_in with
-    |   (no_of_leaves, R_out)->
-            write "\n\n--- generated rule:\n"
-            PrettyPrinting.pr stdout 80 (AST.pp_rule (TopLevel.signature ()) R_out)
-            write $"\n\n--- size of generated rule: {(AST.rule_size R_out)}\n"
-            write $"\n--- number of leaves in decision tree: {no_of_leaves}\n" // (no_of_leaves)
-*)
+    let (_, R_in) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
     match Common.time symb_exec_fct R_in with
     |   (Some (no_of_leaves, R_out), _, _, cpu, usr, sys) ->
             write "\n\n--- generated rule:\n"
@@ -102,9 +96,18 @@ let exec_symbolic (symb_exec_fct : AST.RULE -> 'a * AST.RULE) (main_rule_name : 
             print_time (cpu, usr, sys)
             write "\n\n--- execution failed with exception:\n"
             raise ex
-    |   _ -> failwith "Failure: no result and no exception"
+    |   _ -> failwith "failure: no result and no exception\n"
 
-
+let simple_exec exec_fct main_rule_name =
+    let (_, R_in) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
+    match Common.time exec_fct R_in with
+    |   (Some _, _, _, cpu, usr, sys) ->
+            print_time (cpu, usr, sys)
+    |   (_, Some ex, _, cpu, usr, sys) ->
+            print_time (cpu, usr, sys)
+            write "\n\n--- execution failed with exception:\n"
+            raise ex
+    |   _ -> failwith "failure: no result and no exception\n"
 
 let exec_nonsymbolic main_rule_name =
     let (args, R) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
@@ -137,6 +140,8 @@ let CLI_with_ex(args) =
         let steps = ref 1
         let turbo2basic = ref false
         let asmeta_flag = ref false
+        let invcheck = ref false
+        let invcheck_steps = ref None
         let objects_to_load = ref []
         let main_rule_name = ref "Main"
         let rec parse_arguments i = 
@@ -144,6 +149,12 @@ let CLI_with_ex(args) =
                 match args[i] with
                 |   "-license"     -> license (); exit 0
                 |   "-asmeta"      -> asmeta_flag := true; main_rule_name := "r_Main"; parse_arguments (i+1)
+                |   "-invcheck"    -> invcheck := true
+                                      if i+1 < n
+                                      then  try         invcheck_steps := Some (int (args[i+1]))
+                                                        parse_arguments (i+2)
+                                            with _ ->   invcheck_steps := None
+                                                        parse_arguments (i+1)
                 |   "-symbolic"    -> symbolic := true;    parse_arguments (i+1)
                 |   "-steps"       -> steps := int (args[i+1]); parse_arguments (i+2)
                 |   "-nonsymbolic" -> symbolic := false;   parse_arguments (i+1)
@@ -157,10 +168,13 @@ let CLI_with_ex(args) =
             |   [] -> () 
             |   (Str s) :: rest  -> TopLevel.loadstr !asmeta_flag s; load_everything rest
             |   (File f) :: rest -> loadfile !asmeta_flag f; load_everything rest
-        parse_arguments 0
+        try parse_arguments 0 with _ -> usage (); exit 1
         let _ = TopLevel.init !asmeta_flag
         load_everything (List.rev !objects_to_load)
-        if !turbo2basic
+        // !!! tbd: for AsmetaL the main rule name it not always 'r_Main', but should be set according to the content of the ASM file
+        if !invcheck
+        then simple_exec (SymbEval.symbolic_execution_for_invariant_checking (!invcheck_steps)) (!main_rule_name)
+        else if !turbo2basic
         then exec_symbolic SymbEval.symbolic_execution_for_turbo_asm_to_basic_asm_transformation (!main_rule_name)
         else if !symbolic
         then exec_symbolic (fun R -> SymbEval.symbolic_execution R (!steps)) (!main_rule_name)

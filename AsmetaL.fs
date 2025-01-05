@@ -21,6 +21,7 @@ type ErrorDetails =
 |   FunctionNotDeclaredAsControlled of string
 |   FunctionNotDeclaredAsStaticOrDerived of string
 |   CannotImportModule of string * string option * string option
+|   InvariantNotBoolean
 
 exception Error of string * SrcReg option * ErrorDetails
 
@@ -30,7 +31,7 @@ let error_msg (fct : string, reg : SrcReg option, err : ErrorDetails) =
     |   SyntaxError where ->
             sprintf "syntax error in %s" where
     |   NotAFiniteSet (v, ty) ->
-            sprintf "range of variable '%s' must be a finite set (value of type '%s' found instead)" v (type_to_string ty)
+            sprintf "error: range of variable '%s' must be a finite set (value of type '%s' found instead)" v (type_to_string ty)
     |   FunctionNameNotInSignature f ->
             sprintf "error in function definition: function name '%s' is not declared in the signature" f
     |   ConstructorCannotBeRedefined f ->
@@ -45,6 +46,8 @@ let error_msg (fct : string, reg : SrcReg option, err : ErrorDetails) =
             |   (Some dir, _) -> sprintf "(directory '%s' not found)\n" dir
             |   (None, Some full_path) -> sprintf "(cannot open file '%s')\n" full_path
             |   _ -> ""
+    |   InvariantNotBoolean ->
+            "error in invariant definition: invariant must be a Boolean term"
 
 //--------------------------------------------------------------------
 
@@ -462,12 +465,13 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                                     <|> (ID_FUNCTION << poption (lit "(" << poption getDomainByID << lit ")") |>> fun _ -> ())
                                 ) ",")
                 (  ( R3  (kw "invariant") over_part (lit ":" << UnrestrictedTerm)
-                            |>> fun (_, _, invariant) ->
-                                    let invariant_id = "_inv_"+(string !invariant_counter)
+                            |||>> fun reg _ (_, _, t) ->
+                                    let inv_id = "_inv_"+(string !invariant_counter)
                                     invariant_counter := !invariant_counter + 1
-                                    [ (invariant_id, invariant) ] )
+                                    if get_type t = Boolean then [ (inv_id, t) ] else raise (Error ("Asm", Some reg, InvariantNotBoolean)) )
                 <|> ( R3  (kw "invariant" << identifier) over_part (lit ":" << UnrestrictedTerm)
-                            |>> fun (name, _, invariant) -> [ ("_inv_"+name, invariant) ] ) )
+                            |||>> fun reg _ (name, _, t) ->
+                                    if get_type t = Boolean then [ ("_inv_"+name, t) ] else raise (Error ("Asm", Some reg, InvariantNotBoolean)) ) )
             let CtlSpec = kw "CTLSPEC" << poption (ID_CTL >> lit ":") ++ UnrestrictedTerm   |>> fun _ -> ()
             let LtlSpec = kw "LTLSPEC" << poption (ID_LTL >> lit ":") ++ UnrestrictedTerm   |>> fun _ -> ()
             let TemporalProperty =

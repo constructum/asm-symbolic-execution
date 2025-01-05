@@ -563,7 +563,7 @@ let count_s_updates = rule_induction (fun _ -> ()) {
 //--------------------------------------------------------------------
 
 // first element of pair returned is the number of S_Updates rules, i.e. paths in the decision tree
-let symbolic_execution (R_in : RULE) (steps : int): int * RULE =
+let symbolic_execution (R_in : RULE) (steps : int) : int * RULE =
     if (!trace > 2) then fprintf stderr "symbolic_execution\n"
     if (steps <= 0) then failwith "SymbEval.symbolic_execution: number of steps must be >= 1"
     let S0 = TopLevel.initial_state ()
@@ -572,6 +572,51 @@ let symbolic_execution (R_in : RULE) (steps : int): int * RULE =
     let R_in' = SeqRule (R_in_n_times @ [ skipRule ])      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
     let R_out = s_eval_rule R_in' (state_to_s_state S0, Map.empty, Set.empty)
     (count_s_updates R_out, reconvert_rule (S0._signature) R_out)
+
+let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : RULE) : unit =
+    if (!trace > 2) then fprintf stderr "symbolic_execution_for_invariant_checking\n"
+    match opt_steps with
+    |   Some n -> if n < 0 then failwith "SymbEval.symbolic_execution_for_invariant_checking: number of steps must be >= 0"
+    |   None -> ()
+    let sign = TopLevel.signature()
+    let S0 = (state_to_s_state (TopLevel.initial_state ()))
+    let invs = Map.toList (TopLevel.invariants ())
+    let print_state_of_invariants invs S0 conditions updates =
+        let state_of_one_invariant (inv_id, t) =
+            let initial_state_conditions_to_reach_this_state ts =
+                sprintf "this state is reached when the following conditions hold in the initial state:\n%s"
+                    (String.concat "\n" (List.rev ts >>| fun t -> term_to_string sign t))
+            let t' = s_eval_term t (apply_s_update_set S0 updates, Map.empty, Set.empty)
+            match t' with
+            |   Value' (Boolean, BOOL true)  -> sprintf "['%s' holds]" inv_id
+            |   Value' (Boolean, BOOL false) ->
+                    sprintf "\n[!!!\nthe following invariant does not hold:\n'%s':\n%s\n%s\n!!!]\n"
+                        inv_id
+                        (term_to_string sign t)
+                        (initial_state_conditions_to_reach_this_state conditions)
+            |   _ -> sprintf "\n[???\nthe following invariant cannot be evaluated:\n'%s':\n%s\nit simplifies to:\n%s\n%s\n???]\n"
+                        inv_id
+                        (term_to_string sign t)
+                        (term_to_string sign t')
+                        (initial_state_conditions_to_reach_this_state conditions)
+        printf "%s" (String.concat " " (List.map state_of_one_invariant invs))
+    let state_header i = printf "\n---\nstate S_%d:\n" i
+    let rec traverse i conditions R =
+        match R with      // check invariants on all paths of state S' = S0 + R by traversing tree of R
+        |   CondRule (G, R1, R2) ->
+                traverse i (G::conditions) R1
+                traverse i ((s_not G)::conditions) R2
+        |   S_Updates updates ->
+                print_state_of_invariants invs S0 conditions updates
+        |   R ->
+                failwith (sprintf "there should be no such rule here: %s\n" (rule_to_string sign R))
+    let rec F R_acc R_in i =
+        state_header i
+        traverse i [] R_acc
+        if (match opt_steps with Some n -> i < n | None -> true)
+        then let R_acc = s_eval_rule (SeqRule ([ R_acc; R_in; skipRule ])) (S0, Map.empty, Set.empty)
+             F R_acc R_in (i+1)
+    F (S_Updates Set.empty) R_in 0
 
 //--------------------------------------------------------------------
 // this version sets all non-static functions to be uninterpreted,
