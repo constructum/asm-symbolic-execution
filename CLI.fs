@@ -102,12 +102,16 @@ let simple_exec exec_fct main_rule_name =
     let (_, R_in) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
     match Common.time exec_fct R_in with
     |   (Some _, _, _, cpu, usr, sys) ->
+            write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n" 
             print_time (cpu, usr, sys)
     |   (_, Some ex, _, cpu, usr, sys) ->
+            write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n" 
             print_time (cpu, usr, sys)
             write "\n\n--- execution failed with exception:\n"
             raise ex
-    |   _ -> failwith "failure: no result and no exception\n"
+    |   _ ->
+            write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n" 
+            failwith "failure: no result and no exception\n"
 
 let exec_nonsymbolic main_rule_name =
     let (args, R) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"

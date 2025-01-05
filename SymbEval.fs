@@ -581,42 +581,55 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
     let sign = TopLevel.signature()
     let S0 = (state_to_s_state (TopLevel.initial_state ()))
     let invs = Map.toList (TopLevel.invariants ())
-    let print_state_of_invariants invs S0 conditions updates =
+    let counters = ref Map.empty
+    let reset_counters () = counters := Map.empty
+    let update_counters f inv_id = counters := Map.change inv_id (function Some (m, v, u) -> Some (f (m, v, u)) | None -> Some (f (0, 0, 0))) (!counters)
+    let initial_state_conditions_to_reach_this_state ts =
+        sprintf "this state is reached when the following conditions hold in the initial state:\n%s"
+            (String.concat "\n" (List.rev ts >>| fun t -> term_to_string sign t))
+    let met inv_id =
+        update_counters (function (m, v, u) -> (m + 1, v, u)) inv_id
+        ""
+    let violated inv_id conditions t =
+        update_counters (function (m, v, u) -> (m, v + 1, u)) inv_id
+        sprintf "\n[[ !!!\nthe following invariant does not hold:\n'%s':\n%s\n%s\n!!! ]]\n"
+            inv_id (term_to_string sign t)
+            (initial_state_conditions_to_reach_this_state conditions)
+    let not_evaluable inv_id conditions t t' = 
+        update_counters (function (m, v, u) -> (m, v, u + 1)) inv_id
+        sprintf "\n[[ ???\nthe following invariant cannot be evaluated: '%s':\n%s\n\nit simplifies to:\n%s\n\n%s\n??? ]]\n\n"
+            inv_id (term_to_string sign t) (term_to_string sign t')
+            (initial_state_conditions_to_reach_this_state conditions)
+    let check_invariants invs S0 conditions updates =
         let state_of_one_invariant (inv_id, t) =
-            let initial_state_conditions_to_reach_this_state ts =
-                sprintf "this state is reached when the following conditions hold in the initial state:\n%s"
-                    (String.concat "\n" (List.rev ts >>| fun t -> term_to_string sign t))
             let t' = s_eval_term t (apply_s_update_set S0 updates, Map.empty, Set.empty)
             match t' with
-            |   Value' (Boolean, BOOL true)  -> sprintf "['%s' holds]" inv_id
-            |   Value' (Boolean, BOOL false) ->
-                    sprintf "\n[!!!\nthe following invariant does not hold:\n'%s':\n%s\n%s\n!!!]\n"
-                        inv_id
-                        (term_to_string sign t)
-                        (initial_state_conditions_to_reach_this_state conditions)
-            |   _ -> sprintf "\n[???\nthe following invariant cannot be evaluated:\n'%s':\n%s\nit simplifies to:\n%s\n%s\n???]\n"
-                        inv_id
-                        (term_to_string sign t)
-                        (term_to_string sign t')
-                        (initial_state_conditions_to_reach_this_state conditions)
-        printf "%s" (String.concat " " (List.map state_of_one_invariant invs))
-    let state_header i = printf "\n---\nstate S_%d:\n" i
+            |   Value' (Boolean, BOOL true)  -> met inv_id
+            |   Value' (Boolean, BOOL false) -> violated inv_id conditions t
+            |   _ -> not_evaluable inv_id conditions t t'
+        printf "%s" (String.concat "" (List.filter (fun s -> s <> "") (List.map state_of_one_invariant invs)))
+    let print_counters i () =
+        printf "--- S_%d summary:\n" i
+        Map.map (fun inv_id (m, v, u) -> printf "'%s': met on %d paths / violated on %d paths violated / unknown on %d paths\n" inv_id m v u) !counters |> ignore
+    let state_header i = printf "\n=== state S_%d =====================================\n" i
     let rec traverse i conditions R =
         match R with      // check invariants on all paths of state S' = S0 + R by traversing tree of R
         |   CondRule (G, R1, R2) ->
                 traverse i (G::conditions) R1
                 traverse i ((s_not G)::conditions) R2
         |   S_Updates updates ->
-                print_state_of_invariants invs S0 conditions updates
+                check_invariants invs S0 conditions updates
         |   R ->
                 failwith (sprintf "there should be no such rule here: %s\n" (rule_to_string sign R))
     let rec F R_acc R_in i =
+        reset_counters ()
         state_header i
         traverse i [] R_acc
+        print_counters i ()
         if (match opt_steps with Some n -> i < n | None -> true)
         then let R_acc = s_eval_rule (SeqRule ([ R_acc; R_in; skipRule ])) (S0, Map.empty, Set.empty)
              F R_acc R_in (i+1)
-    F (S_Updates Set.empty) R_in 0
+    F (S_Updates Set.empty) (SeqRule ([ R_in; skipRule ])) 0
 
 //--------------------------------------------------------------------
 // this version sets all non-static functions to be uninterpreted,
