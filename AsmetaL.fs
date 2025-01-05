@@ -499,7 +499,7 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                         if fct_kind f sign = Controlled then 
                             let parameters = List.map (fun (v, t) -> v) param_list
                             let fct = function (xs : VALUE list) -> Eval.eval_term t ((state_with_signature state sign), Map.ofList (List.zip parameters xs))
-                            ((fun (state : STATE) -> state_override_dynamic_initial state (Map.add f fct Map.empty)), (fun (mdb : MACRO_DB) -> mdb))
+                            ((fun (state : STATE) -> state_override_dynamic_initial state (Map.add f fct Map.empty, add_macro f (parameters, t) Map.empty)), fun x -> x)
                         else 
                             raise (Error ("Asm", Some reg, FunctionNotDeclaredAsControlled f))
                         
@@ -538,7 +538,7 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                             (function_definitions @ default_init)
                     if !trace > 0 then fprintf stderr "static function definitions found for: %s\n" (Map.keys state'._static |> String.concat ", ")
                     if !trace > 0 then fprintf stderr "dynamic function definitions found for: %s\n" (Map.keys state'._dynamic |> String.concat ", ")
-                    if !trace > 0 then fprintf stderr "dynamic function initializations found for: %s\n" (Map.keys state'._dynamic_initial |> String.concat ", ")
+                    if !trace > 0 then fprintf stderr "dynamic function initializations found for: %s\n" (Map.keys (fst state'._dynamic_initial) |> String.concat ", ")
                     let result = ASM {
                         name      = asm_name;
                         is_module = modul;

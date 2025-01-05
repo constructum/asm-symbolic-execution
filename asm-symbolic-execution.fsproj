@@ -13,8 +13,8 @@
     <Compile Include="Signature.fsi" />
     <Compile Include="Signature.fs" />
     <Compile Include="Background.fs" />
-    <Compile Include="State.fs" />
     <Compile Include="AST.fs" />
+    <Compile Include="State.fs" />
     <Compile Include="SymbState.fs" />
     <Compile Include="Updates.fs" />
     <Compile Include="SymbUpdates.fs" />

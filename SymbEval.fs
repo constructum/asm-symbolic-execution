@@ -28,7 +28,25 @@ let use_smt_solver = ref true     // this only has an effect if 'simplify_cond' 
 
 type ENV = Map<string, TYPED_TERM * TYPE>
 
-type CONTEXT = Set<TYPED_TERM>    // boolean formulas (facts) that are true in current branch of conditional rule
+// context:
+// first element: path conditions
+// second element: "delta" interpretation in current branch of conditional rule (symbolic updates)
+type CONTEXT = Set<TYPED_TERM> * S_UPDATE_MAP
+
+let empty_context : CONTEXT = (Set.empty, Map.empty)
+let add_cond (G : TYPED_TERM) (C : CONTEXT as (C1, C2)) = (Set.add G C1, C2)
+let add_intp (f : string, xs : VALUE list, t : TYPED_TERM) (C : CONTEXT as (C1, C2)) = (C1, add_s_update C2 ((f, xs), t))
+
+let interpretation_in_context (S : S_STATE) (C : CONTEXT) (f : NAME) (xs : VALUE list) =
+    match f with
+    |   FctName f_name ->
+        match Map.tryFind f_name (snd C) with
+        |   Some f_table ->
+            match Map.tryFind xs f_table with
+            |   Some t -> t
+            |   None -> interpretation S f xs
+        |   None -> interpretation S f xs
+    |   _ -> interpretation S f xs
 
 //--------------------------------------------------------------------
 
@@ -159,7 +177,7 @@ and expand_term t (S, env, C) =
                     else AppTerm' (ty, (f, ts >>| fun t -> t (S, env, C)))
             |   _ -> AppTerm' (ty, (f, ts >>| fun t -> t (S, env, C)));
         CondTerm  = fun (ty, (G, t1, t2)) (S, env, C) -> CondTerm' (ty, (G (S, env, C), t1 (S, env, C), t2 (S, env, C)));
-        VarTerm   = fun (ty, v)           (S, env, C) -> fst (get_env env v);    // !!!!!! ???? VarTerm' (ty, v);
+        VarTerm   = fun (ty, v)           (S, env, C) -> fst (get_env env v);
         QuantTerm = fun (ty, (q_kind, v, t_set, t_cond)) (S, env, C) -> expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C);
         LetTerm   = fun (ty, (v, t1, t2)) (S, env, C) ->
                         let t1_val = t1 (S, env, C)
@@ -179,20 +197,6 @@ and expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C) : TYPED_TERM 
     |   Value' (_, SET xs) -> failwith (sprintf "SymbEval.forall_rule: this should not happen")
     |   x -> failwith (sprintf "SymbEval.expand_quantifier: not a set (%A): %A v" t_set x)
 
-
-(*
-    let t_set = t_set (S, env, C)
-    match t_set with
-    |   Value' (_, SET xs) ->
-            let eval_cond x = (t_cond (S, add_binding env (v, Value' (get_type v, x), get_type v), C) = Value' (Boolean, BOOL true))
-            match q_kind with
-            |   Forall -> if List.forall eval_cond xs then Value' (Boolean, BOOL true) else Value' (Boolean, BOOL false)
-            |   Exist  -> if List.exists eval_cond xs then Value' (Boolean, BOOL true) else Value' (Boolean, BOOL false)
-            |   ExistUnique -> if List.count (List.filter (fun y -> eval_cond y) xs) = 1 then Value' (Boolean, BOOL true) else Value' (Boolean, BOOL false)
-    |   _ -> failwith "SymbEval.expand_quantifier: not a set" 
-fun (S, env, C) -> QuantTerm' (ty, (q_kind, v, fun (S, env, C) -> t_set (S, env, C), fun (S, env, C) -> t_cond (S, env, C)));
-*)
-
 and try_reducing_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (t : TYPED_TERM) : TYPED_TERM =
     let opt_elems = try enum_finite_type ty S with _ -> None
     match t with
@@ -211,12 +215,26 @@ and try_reducing_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT)
     |   _ -> t
 
 and try_case_distinction_for_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts0 : TYPED_TERM list) : TYPED_TERM =
-    let sign = signature_of S
+    let generate_cond_term (t, cases : (TYPED_TERM * TYPED_TERM) list) =
+        let mkCondTerm (G, t1, t2) = CondTerm' (get_type t1, (G, t1, t2))
+        let mkEq t1 t2 = AppTerm' (Boolean, (FctName "=", [t1; t2]))
+        let rec mk_cond_term cases =
+            match cases with
+            |   [] -> failwith "mk_cond_term: empty list of cases"
+            |   (t1, t2) :: cases' ->
+                    s_eval_term (mkCondTerm (
+                        mkEq t t1,
+                        t2,
+                        match cases' with
+                        |   [] -> failwith "mk_cond_term: empty list of cases"
+                        |   [(t1', t2')] -> t2'
+                        |   _ -> mk_cond_term cases'
+                    )) (S, env, C)
+        mk_cond_term cases
     let make_case_distinction (t : TYPED_TERM) (elem_term_pairs : (VALUE * TYPED_TERM) list) =
         if List.isEmpty elem_term_pairs
         then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
-        let (elem_term_pairs_without_last, last_elem_term_pair) = List.splitAt (List.length elem_term_pairs - 1) elem_term_pairs
-        Parser.switch_to_cond_term false None sign (t, List.map (fun (elem, term) -> (mkValue sign elem, term)) elem_term_pairs_without_last, snd (List.head (last_elem_term_pair)))
+        generate_cond_term (t, List.map (fun (elem, term) -> (Value' (get_type t, elem), term)) elem_term_pairs)
     let rec F past_args = function
     |   [] -> AppTerm' (ty, (FctName f, List.rev past_args))
     |   t1 :: ts' ->
@@ -229,7 +247,7 @@ and try_case_distinction_for_term_with_finite_range ty (S : S_STATE, env : ENV, 
                             failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
                                         f (term_to_string (signature_of S) (AppTerm' (ty, (FctName f, ts0)))))
                     |   Some elems ->
-                            let case_dist = make_case_distinction t1 (List.map (fun elem -> (elem, F (mkValue sign elem :: past_args) ts')) (Set.toList elems))
+                            let case_dist = make_case_distinction t1 (List.map (fun elem -> (elem, F (Value' (get_type t1, elem) :: past_args) ts')) (Set.toList elems))
                             s_eval_term_ case_dist (S, env, C)    // simplify generated conditional term
     let result = F [] ts0
     result
@@ -250,7 +268,7 @@ and eval_app_term ty (S : S_STATE, env : ENV, C : CONTEXT) (fct_name, ts) : TYPE
                 match (fct_name, ts) with
                 |   (FctName f, ts)    ->
                     match get_values ts with
-                    |   Some xs -> interpretation S fct_name xs
+                    |   Some xs -> interpretation_in_context S C fct_name xs
                     |   None ->
                         match (fct_kind f (signature_of S)) with
                         |   Static ->
@@ -259,8 +277,8 @@ and eval_app_term ty (S : S_STATE, env : ENV, C : CONTEXT) (fct_name, ts) : TYPE
                                         let t = apply_rewrite_rules (f, ts)
                                         if      t = Value' (Boolean, TRUE)       then t
                                         else if t = Value' (Boolean, FALSE)      then t
-                                        else if Set.contains t C            then Value' (Boolean, TRUE) 
-                                        else if Set.contains (s_not t) C    then Value' (Boolean, FALSE)
+                                        else if Set.contains t (fst C)           then Value' (Boolean, TRUE) 
+                                        else if Set.contains (s_not t) (fst C)   then Value' (Boolean, FALSE)
                                         else smt_eval_formula t (S, env, C)
                                 |   (_, _) -> AppTerm' (ty, (FctName f, ts))    // nothing left to simplify
                         |   Controlled ->
@@ -272,7 +290,7 @@ and eval_app_term ty (S : S_STATE, env : ENV, C : CONTEXT) (fct_name, ts) : TYPE
                 |   (StringConst s, _) -> Value' (String, STRING s)
     F [] ts
 
-and eval_cond_term ty (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) = 
+and eval_cond_term ty (S : S_STATE, env : ENV, C : CONTEXT) (G, t1 : S_STATE * ENV * CONTEXT -> TYPED_TERM, t2) = 
     let term_to_string = term_to_string (signature_of S)
     match G (S, env, C) with
     |   Value' (Boolean, BOOL true)  -> t1 (S, env, C)
@@ -280,27 +298,40 @@ and eval_cond_term ty (S : S_STATE, env : ENV, C : CONTEXT) (G, t1, t2) =
     |   CondTerm' (Boolean, (G', G1, G2)) ->
             if get_type G1 <> Boolean || get_type G2 <> Boolean
             then failwith (sprintf "eval_cond_term: '%s' and '%s' must be boolean terms" (term_to_string G1) (term_to_string G2))
-            else let expanded_cond_term =
-                    CondTerm' (ty, (
-                        G',
-                        s_eval_term (CondTerm' (ty, (G1, t1 (S, env, C), t2 (S, env, C)))) (S, env, Set.add G' C),
-                        s_eval_term (CondTerm' (ty, (G2, t1 (S, env, C), t2 (S, env, C)))) (S, env, Set.add (s_not G') C)
-                    ))
-                 s_eval_term_ expanded_cond_term (S, env, C)
+            else let t1_G'     = t1 (S, env, add_cond G' (add_cond G1 C))
+                 let t1_not_G' = t1 (S, env, add_cond (s_not G') (add_cond G1 C))
+                 let t2_G'     = t2 (S, env, add_cond G' (add_cond G2 C))
+                 let t2_not_G' = t2 (S, env, add_cond (s_not G') (add_cond G2 C))
+                 s_eval_term (CondTerm' (ty, (G', CondTerm' (ty, (G1, t1_G', t2_G')), CondTerm' (ty, (G2, t1_not_G', t2_not_G'))))) (S, env, C)
     |   G ->    if (!trace > 1)
-                then fprintfn stderr "\n%sctx_condition: %s" (spaces !level) (term_to_string (ctx_condition C))
+                then fprintfn stderr "\n%sctx_condition: %s" (spaces !level) (term_to_string (ctx_condition (fst C)))
                 if not simplify_cond then
                     // version 1: no simplification whatsoever (inefficient, but useful for debugging)
-                    CondTerm' (ty, (G, t1 (S, env, Set.add G C), t2 (S, env, Set.add (s_not G) C)))
+                    CondTerm' (ty, (G, t1 (S, env, add_cond G C), t2 (S, env, add_cond (s_not G) C)))
                 else 
                     // version 2: with simplification
-                    if Set.contains G C
+                    if Set.contains G (fst C)
                     then t1 (S, env, C)
-                    else if Set.contains (s_not G) C
+                    else if Set.contains (s_not G) (fst C)
                     then t2 (S, env, C)
-                    else
-                        let (t1', t2') = (t1 (S, env, Set.add G C), t2 (S, env, Set.add (s_not G) C))
-                        if t1' = t2' then t1' else CondTerm' (ty, (G, t1', t2'))
+                    else let (t1', t2') = (t1 (S, env, add_cond G C), t2 (S, env, add_cond (s_not G) C))
+                         if t1' = t2' then t1'
+                         else let sign = signature_of S
+                              if not !use_smt_solver
+                              then    let R1' = s_eval_term t1' (S, env, add_cond G C)
+                                      let R2' = s_eval_term t2' (S, env, add_cond (s_not G) C)
+                                      if R1' = R2' then R1' else CondTerm' (ty, (G, R1', R2'))
+                              else    smt_solver_push TopLevel.smt_ctx
+                                      smt_assert sign TopLevel.smt_ctx G
+                                      let R1' = s_eval_term t1' (S, env, add_cond G C)
+                                      smt_solver_pop TopLevel.smt_ctx
+  
+                                      smt_solver_push TopLevel.smt_ctx
+                                      smt_assert sign TopLevel.smt_ctx (s_not G)
+                                      let R2' = s_eval_term t2' (S, env, add_cond (s_not G) C)
+                                      smt_solver_pop TopLevel.smt_ctx
+                                      
+                                      if R1' = R2' then R1' else CondTerm' (ty, (G, R1', R2'))
 
 and eval_let_term (S, env, C) (v, t1, t2) =
     let t1 = t1 (S, env, C)
@@ -332,12 +363,25 @@ and s_eval_term (t : TYPED_TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TYPED_T
 //--------------------------------------------------------------------
 
 let rec try_case_distinction_for_update_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts0 : TYPED_TERM list) (t_rhs : TYPED_TERM): RULE =
-    let sign = signature_of S
-    let make_case_distinction (t : TYPED_TERM) (elem_term_pairs : (VALUE * RULE) list) =
-        if List.isEmpty elem_term_pairs
-        then failwith (sprintf "SymbEval.try_case_distinction_for_update_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
-        let (elem_term_pairs_without_last, last_elem_term_pair) = List.splitAt (List.length elem_term_pairs - 1) elem_term_pairs
-        Parser.switch_to_cond_rule None sign (t, List.map (fun (elem, term) -> (mkValue sign elem, term)) elem_term_pairs_without_last, snd (List.head (last_elem_term_pair)))
+    let mkEq t1 t2 = AppTerm' (Boolean, (FctName "=", [t1; t2]))
+    let generate_cond_rule (t, cases : (TYPED_TERM * RULE) list) =
+        let rec mk_cond_rule cases =
+            match cases with
+            |   [] -> failwith "mk_cond_term: empty list of cases"
+            |   (t1, R) :: cases' ->
+                    s_eval_rule (CondRule (
+                        mkEq t t1,
+                        R,
+                        match cases' with
+                        |   [] -> failwith "mk_cond_term: empty list of cases"
+                        |   [(t1', R')] -> R'
+                        |   _ -> mk_cond_rule cases'
+                    )) (S, env, C)
+        mk_cond_rule cases
+    let make_case_distinction (t : TYPED_TERM) (elem_rule_pairs : (VALUE * RULE) list) =
+        if List.isEmpty elem_rule_pairs
+        then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
+        generate_cond_rule (t, List.map (fun (elem, term) -> (Value' (get_type t, elem), term)) elem_rule_pairs)
     let rec F past_args = function
         |   [] -> UpdateRule ((f, List.rev past_args), t_rhs)
         |   t1 :: ts' ->
@@ -350,8 +394,8 @@ let rec try_case_distinction_for_update_with_finite_domain (S : S_STATE, env : E
                             failwith (sprintf "location (%s, (%s)) on the lhs of update cannot be fully evaluated"
                                         f (String.concat ", " (ts0 >>| term_to_string (signature_of S))))
                     |   Some elems ->
-                            let case_dist = make_case_distinction t1 (List.map (fun elem -> (elem, F (mkValue sign elem :: past_args) ts')) (Set.toList elems))
-                            s_eval_rule case_dist (S, env, C)    // simplify generated conditional rule
+                            (*let case_dist =*) make_case_distinction t1 (List.map (fun elem -> (elem, F (Value' (get_type t1, elem) :: past_args) ts')) (Set.toList elems))
+                            (*s_eval_rule case_dist (S, env, C)*)    // simplify generated conditional rule
     F [] ts0
 
 and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
@@ -394,29 +438,25 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
         |   CondTerm' (Boolean, (G', G1, G2)) ->
                 if get_type G1 <> Boolean || get_type G2 <> Boolean
                 then failwith (sprintf "s_eval_rule.eval_cond: '%s' and '%s' must be boolean terms" (term_to_string G1) (term_to_string G2))
-                else CondRule (
-                        s_eval_term G' C,
-                        (   let C' = Set.add G' C
-                            let G1 = s_eval_term G1 C'
-                            s_eval_rule (CondRule (G1, s_eval_rule R1 (Set.add G1 C'), s_eval_rule R2 (Set.add (s_not G1) C'))) C' ),
-                        (   let C' = Set.add (s_not G') C
-                            let G2 = s_eval_term G2 C'
-                            s_eval_rule (CondRule (G2, s_eval_rule R1 (Set.add G2 C'), s_eval_rule R2 (Set.add (s_not G2) C'))) C' )
-                     )
-        |   G ->    //let (R1', R2') = (s_eval_rule R1 (S, env, Set.add G C), s_eval_rule R2 (S, env, Set.add (s_not G) C))
+                else s_eval_rule (CondRule (G', CondRule (G1, R1, R2), CondRule (G2, R1, R2))) C
+        |   G ->    //let (R1', R2') = (s_eval_rule R1 (S, env, add_cond G C), s_eval_rule R2 (S, env, add_cond (s_not G) C))
                     let sign = signature_of S
-                    if !use_smt_solver
-                    then smt_solver_push TopLevel.smt_ctx
-                         smt_assert sign TopLevel.smt_ctx G
-                    let R1' = s_eval_rule R1 (Set.add G C)
-                    if !use_smt_solver
-                    then smt_solver_pop TopLevel.smt_ctx
-                         smt_solver_push TopLevel.smt_ctx
-                         smt_assert sign TopLevel.smt_ctx (s_not G)
-                    let R2' = s_eval_rule R2 (Set.add (s_not G) C)
-                    if !use_smt_solver
-                    then smt_solver_pop TopLevel.smt_ctx
-                    if R1' = R2' then R1' else CondRule (G, R1', R2')
+                    if not !use_smt_solver
+                    then    let R1' = s_eval_rule R1 (add_cond G C)
+                            let R2' = s_eval_rule R2 (add_cond (s_not G) C)
+                            if R1' = R2' then R1' else CondRule (G, R1', R2')
+                    else    smt_solver_push TopLevel.smt_ctx
+                            smt_assert sign TopLevel.smt_ctx G
+                            let R1' = s_eval_rule R1 (add_cond G C)
+                            smt_solver_pop TopLevel.smt_ctx
+
+                            smt_solver_push TopLevel.smt_ctx
+                            smt_assert sign TopLevel.smt_ctx (s_not G)
+                            let R2' = s_eval_rule R2 (add_cond (s_not G) C)
+                            smt_solver_pop TopLevel.smt_ctx
+                            
+                            if R1' = R2' then R1' else CondRule (G, R1', R2')
+
 
     let rec eval_par Rs (S, env, C) =
         match Rs with
@@ -570,7 +610,7 @@ let symbolic_execution (R_in : RULE) (steps : int) : int * RULE =
     if (!trace > 2) then fprintf stderr "---\n%s\n---\n" (signature_to_string (signature_of (state_to_s_state S0)))
     let R_in_n_times = [ for _ in 1..steps -> R_in ]
     let R_in' = SeqRule (R_in_n_times @ [ skipRule ])      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
-    let R_out = s_eval_rule R_in' (state_to_s_state S0, Map.empty, Set.empty)
+    let R_out = s_eval_rule R_in' (state_to_s_state S0, Map.empty, empty_context)
     (count_s_updates R_out, reconvert_rule (S0._signature) R_out)
 
 let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : RULE) : unit =
@@ -602,7 +642,7 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
             (initial_state_conditions_to_reach_this_state conditions)
     let check_invariants invs S0 conditions updates =
         let state_of_one_invariant (inv_id, t) =
-            let t' = s_eval_term t (apply_s_update_set S0 updates, Map.empty, Set.empty)
+            let t' = s_eval_term t (apply_s_update_set S0 updates, Map.empty, empty_context)
             match t' with
             |   Value' (Boolean, BOOL true)  -> met inv_id
             |   Value' (Boolean, BOOL false) -> violated inv_id conditions t
@@ -610,7 +650,7 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
         printf "%s" (String.concat "" (List.filter (fun s -> s <> "") (List.map state_of_one_invariant invs)))
     let print_counters i () =
         printf "--- S_%d summary:\n" i
-        Map.map (fun inv_id (m, v, u) -> printf "'%s': met on %d paths / violated on %d paths violated / unknown on %d paths\n" inv_id m v u) !counters |> ignore
+        Map.map (fun inv_id (m, v, u) -> printf "'%s': met on %d paths / violated on %d paths / unknown on %d paths\n" inv_id m v u) !counters |> ignore
     let state_header i = printf "\n=== state S_%d =====================================\n" i
     let rec traverse i conditions R =
         match R with      // check invariants on all paths of state S' = S0 + R by traversing tree of R
@@ -627,7 +667,7 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
         traverse i [] R_acc
         print_counters i ()
         if (match opt_steps with Some n -> i < n | None -> true)
-        then let R_acc = s_eval_rule (SeqRule ([ R_acc; R_in; skipRule ])) (S0, Map.empty, Set.empty)
+        then let R_acc = s_eval_rule (SeqRule ([ R_acc; R_in; skipRule ])) (S0, Map.empty, empty_context)
              F R_acc R_in (i+1)
     F (S_Updates Set.empty) (SeqRule ([ R_in; skipRule ])) 0
 
@@ -641,5 +681,5 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
 let symbolic_execution_for_turbo_asm_to_basic_asm_transformation (R_in : RULE) : int * RULE =
     let S0 = TopLevel.initial_state ()
     let R_in' = SeqRule [ R_in; skipRule ]      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
-    let R_out = s_eval_rule R_in' (state_to_s_state_only_static S0, Map.empty, Set.empty)
+    let R_out = s_eval_rule R_in' (state_to_s_state_only_static S0, Map.empty, empty_context)
     (count_s_updates R_out, reconvert_rule (S0._signature) R_out)

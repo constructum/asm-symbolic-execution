@@ -60,32 +60,6 @@ let smt_map_type (C : SMT_CONTEXT) (sign : SIGNATURE) (T : TYPE) : Sort =
     |   TypeCons (tyname, []) -> Map.find tyname (!C.typ)   // !!! currently all user-defined domains are of finite cardinality (enum-like), may need to be changed in the future
     |   _       -> failwith (sprintf "smt_map_type: unsupported type %s" (type_to_string T))
 
-let smt_add_types_and_functions (C : SMT_CONTEXT) sign (new_sign : SIGNATURE, new_state : STATE) : unit =
-    let ctx = !C.ctx
-    let type_names = Signature.type_names new_sign |> Set.filter (fun tyname -> let k = type_kind tyname new_sign in k <> BasicType && k <> AnyType)   // only user-defined types, i.e. not BasicType's, are of interest here
-    let fct_names = Signature.fct_names new_sign
-    //!!! filter to avoid problems due to AsmetaL standard library functions that cannot be mapped
-    //!!!  ad-hoc exclusion of AsmetaL controlled function 'result' and 'self', this should be done only for AsmetaL - tbd:
-    //!!!    --> tbd: AsmetaL flag
-    let fct_names = Set.filter (fun f -> fct_kind f new_sign = Controlled && f <> "result" && f <> "self") fct_names
-    let add_type C tyname =
-        let (kind, ar) = (type_kind tyname new_sign, type_arity tyname new_sign)
-        if kind = EnumType && ar = 0
-        then    let constructor_names = Signature.fct_names new_sign |> Set.filter (fun f -> fct_kind f new_sign = Signature.Constructor && fct_type f new_sign = ([], TypeCons (tyname, []))) |> Set.toArray
-                if Array.length constructor_names > 0
-                then    if !trace > 0 then fprintf stderr "SmtInterface.add_type: %s = { %s }\n" tyname (String.concat ", " constructor_names)
-                        let enum_sort = ctx.MkEnumSort (tyname, constructor_names)
-                        C.typ := Map.add tyname enum_sort (!C.typ)
-                        C.con := Common.map_override (!C.con) (Array.fold2 (fun m cons_name smt_expr -> Map.add cons_name smt_expr m) Map.empty constructor_names (enum_sort.Consts))
-                else    fprintf stderr "SmtInterface.add_type: warning: skipping abstract type '%s', because it has no elements (%s = { })\n" tyname tyname
-        else fprintf stderr "SmtInterface.add_type: warning: only enumerated types without type parameters are currently supported (type '%s' is of kind '%s' and has arity %d)\n" tyname (kind |> Signature.type_kind_to_string) ar
-    let add_function C fct_name =
-        let (Ts_dom, T_ran) = fct_type fct_name new_sign
-        let func_decl = ctx.MkFuncDecl (fct_name, Array.ofList (Ts_dom >>| smt_map_type C sign), smt_map_type C sign T_ran)
-        C.fct := Map.add fct_name func_decl (!C.fct)
-    Set.map (add_type C) type_names |> ignore
-    Set.map (add_function C) fct_names |> ignore
-
 //--------------------------------------------------------------------
 
 let convert_to_expr = function
@@ -202,3 +176,42 @@ let smt_formula_is_false sign C (phi : TYPED_TERM) =
          | SMT_BoolExpr be -> C.ctr := !C.ctr + 1; ((!C.slv).Check be = Status.UNSATISFIABLE)
          | _ -> failwith (sprintf "smt_formula_is_false: error converting Boolean term (term = %s)" (term_to_string sign phi))
     else failwith (sprintf "'smt_formula_is_false' expects a Boolean term, %s found instead " (term_to_string sign phi))
+
+//--------------------------------------------------------------------
+
+let smt_add_types_and_functions (C : SMT_CONTEXT) sign (new_sign : SIGNATURE, new_state : STATE) : unit =
+    let ctx = !C.ctx
+    let type_names = Signature.type_names new_sign |> Set.filter (fun tyname -> let k = type_kind tyname new_sign in k <> BasicType && k <> AnyType)   // only user-defined types, i.e. not BasicType's, are of interest here
+    let fct_names = Signature.fct_names new_sign
+    //!!! filter to avoid problems due to AsmetaL standard library functions that cannot be mapped
+    //!!!  ad-hoc exclusion of AsmetaL controlled function 'result' and 'self', this should be done only for AsmetaL - tbd:
+    //!!!    --> tbd: AsmetaL flag
+    let fct_names = Set.filter (fun f -> fct_kind f new_sign = Controlled && f <> "result" && f <> "self") fct_names
+    let init_macros = snd new_state._dynamic_initial        // initialisation of controlled functions defined in AsmetaL init sections by (args, term) pairs
+    let add_type C tyname =
+        let (kind, ar) = (type_kind tyname new_sign, type_arity tyname new_sign)
+        if kind = EnumType && ar = 0
+        then    let constructor_names = Signature.fct_names new_sign |> Set.filter (fun f -> fct_kind f new_sign = Signature.Constructor && fct_type f new_sign = ([], TypeCons (tyname, []))) |> Set.toArray
+                if Array.length constructor_names > 0
+                then    if !trace > 0 then fprintf stderr "SmtInterface.add_type: %s = { %s }\n" tyname (String.concat ", " constructor_names)
+                        let enum_sort = ctx.MkEnumSort (tyname, constructor_names)
+                        C.typ := Map.add tyname enum_sort (!C.typ)
+                        C.con := Common.map_override (!C.con) (Array.fold2 (fun m cons_name smt_expr -> Map.add cons_name smt_expr m) Map.empty constructor_names (enum_sort.Consts))
+                else    fprintf stderr "SmtInterface.add_type: warning: skipping abstract type '%s', because it has no elements (%s = { })\n" tyname tyname
+        else fprintf stderr "SmtInterface.add_type: warning: only enumerated types without type parameters are currently supported (type '%s' is of kind '%s' and has arity %d)\n" tyname (kind |> Signature.type_kind_to_string) ar
+    let add_function C fct_name =
+        let (Ts_dom, T_ran) = fct_type fct_name new_sign
+        let func_decl = ctx.MkFuncDecl (fct_name, Array.ofList (Ts_dom >>| smt_map_type C sign), smt_map_type C sign T_ran)
+        C.fct := Map.add fct_name func_decl (!C.fct)
+        // // mapping of init
+        // match Map.tryFind fct_name init_macros with
+        // |   Some ([], t_rhs) ->
+        //         let equals t1 t2 = AppTerm' (Boolean, (FctName "=", [t1; t2]))
+        //         let t_lhs = Initial' (T_ran, (fct_name, []))
+        //         smt_assert sign C (equals t_lhs t_rhs)
+        // |   Some (_, _) -> fprintf stderr "SMT initialisation of non-nullary function '%s' not yet implemented\n" fct_name
+        // |   None -> ()
+    Set.map (add_type C) type_names |> ignore
+    Set.map (add_function C) fct_names |> ignore
+
+//--------------------------------------------------------------------

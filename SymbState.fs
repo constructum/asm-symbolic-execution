@@ -13,7 +13,7 @@ let trace = ref 0
 
 type S_DYNAMIC_STATE = Map<string, Map<VALUE list, TYPED_TERM>>
 
-type S_STATE = { _signature : SIGNATURE; _carrier_sets : State.CARRIER_SETS; _static : STATIC_STATE; _dynamic : S_DYNAMIC_STATE; _dynamic_initial : STATIC_STATE; }
+type S_STATE = { _signature : SIGNATURE; _carrier_sets : State.CARRIER_SETS; _static : STATIC_STATE; _dynamic : S_DYNAMIC_STATE; _dynamic_initial : STATIC_STATE * MACRO_DB; }
 
 let signature_of (S : S_STATE) : SIGNATURE =
     S._signature
@@ -39,7 +39,7 @@ let state_to_s_state_only_static (S : State.STATE) : S_STATE = {
     _carrier_sets = S._carrier_sets;
     _static    = S._static;
     _dynamic   = Map.empty;
-    _dynamic_initial = Map.empty;
+    _dynamic_initial = (Map.empty, empty_macro_db);
 }
 
 let show_s_state (S : S_STATE) =
@@ -61,7 +61,7 @@ let enum_finite_type (ty : TYPE) (S : S_STATE) =
         _carrier_sets = S._carrier_sets;
         _static = Map.empty;
         _dynamic = Map.empty;
-        _dynamic_initial = Map.empty;
+        _dynamic_initial = (Map.empty, empty_macro_db);
     }
 
 //--------------------------------------------------------------------
@@ -95,7 +95,7 @@ let fct_name_interpretation (S : S_STATE) (f : string) (args : VALUE list) =
     |   Controlled ->
         (   try Map.find args (Map.find f (S._dynamic))
             with _ ->
-                try Value (Map.find f (S._dynamic_initial) args)
+                try Value (Map.find f (fst S._dynamic_initial) args)
                 with _ -> mkInitial sign (f, args)  )
     |   _ ->
         failwith (sprintf "SymbState.fct_name_interpretation: unsupported function kind '%s' for function name '%s'" (fct_kind_to_string kind) f)

@@ -3,6 +3,7 @@ module State
 open Common
 open Signature
 open Background
+open AST
 
 //--------------------------------------------------------------------
 
@@ -13,7 +14,7 @@ let trace = ref 0
 type CARRIER_SETS = Map<string, VALUE Set option>       // list of all elements (only for types with finite cardinality)
 type DYNAMIC_STATE = Map<string, Map<VALUE list, VALUE>>
 
-type STATE = { _signature : SIGNATURE; _carrier_sets : CARRIER_SETS; _static : STATIC_STATE; _dynamic : DYNAMIC_STATE; _dynamic_initial : STATIC_STATE; }
+type STATE = { _signature : SIGNATURE; _carrier_sets : CARRIER_SETS; _static : STATIC_STATE; _dynamic : DYNAMIC_STATE; _dynamic_initial : STATIC_STATE * MACRO_DB; }
 
 let signature_of (S : STATE) : SIGNATURE =
     S._signature
@@ -31,7 +32,7 @@ let background_state = {
     _carrier_sets = Background.carrier_sets;
     _static    = Background.state;
     _dynamic   = Map.empty;
-    _dynamic_initial = Map.empty;
+    _dynamic_initial = (Map.empty, empty_macro_db);
 }
 
 let empty_state = {
@@ -39,7 +40,7 @@ let empty_state = {
     _carrier_sets = Map.empty;
     _static     = Map.empty;
     _dynamic    = Map.empty;
-    _dynamic_initial = Map.empty;
+    _dynamic_initial = (Map.empty, empty_macro_db);
 }
 
 let state_override S0 S' = {
@@ -47,7 +48,7 @@ let state_override S0 S' = {
     _carrier_sets = Common.map_override S0._carrier_sets S'._carrier_sets;
     _static     = Common.map_override S0._static  S'._static;
     _dynamic    = Common.map_override S0._dynamic S'._dynamic;     
-    _dynamic_initial = Common.map_override S0._dynamic_initial S'._dynamic_initial;
+    _dynamic_initial = (Common.map_override (fst S0._dynamic_initial) (fst S'._dynamic_initial), macro_db_override (snd S0._dynamic_initial) (snd S'._dynamic_initial));
 }
 
 let state_override_dynamic S0 f_table = {
@@ -63,7 +64,7 @@ let state_override_dynamic_initial S0 f_def = {
     _carrier_sets = S0._carrier_sets;
     _static     = S0._static;
     _dynamic    = S0._dynamic
-    _dynamic_initial = Common.map_override S0._dynamic_initial f_def;
+    _dynamic_initial = (Common.map_override (fst S0._dynamic_initial) (fst f_def), macro_db_override (snd S0._dynamic_initial) (snd f_def));
 }
 
 let state_override_static S0 f_def = {
@@ -141,7 +142,7 @@ let fct_name_interpretation (S : STATE) (f : string) (args : VALUE list) =
     |   Controlled ->
             try Map.find args (Map.find f (S._dynamic))
             with _ ->
-                try Map.find f (S._dynamic_initial) args
+                try Map.find f (fst S._dynamic_initial) args
                 with _ -> failwith (sprintf "State.fct_name_interpretation: dynamic function '%s' not defined on (%s)" f (String.concat ", " (args >>| value_to_string)))
     |   _ -> failwith (sprintf "State.fct_name_interpretation: function '%s' is not static nor controlled" f)
 
