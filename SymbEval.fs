@@ -623,19 +623,24 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
     let invs = Map.toList (TopLevel.invariants ())
     let counters = ref Map.empty
     let reset_counters () = counters := Map.empty
-    let update_counters f inv_id = counters := Map.change inv_id (function Some (m, v) -> Some (f (m, v)) | None -> Some (f (0, 0))) (!counters)
+    let update_counters f inv_id = counters := Map.change inv_id (function Some (m, v, u) -> Some (f (m, v, u)) | None -> Some (f (0, 0, 0))) (!counters)
     let print_counters i () =
         printf "--- S_%d summary:\n" i
-        Map.map (fun inv_id (m, v) -> printf "'%s': met on %d paths / violated on %d paths\n" inv_id m v) !counters |> ignore
+        Map.map (fun inv_id (m, v, u) -> printf "'%s': met on %d paths / violated on %d paths / cannot be verified on %d paths\n" inv_id m v u) !counters |> ignore
     let rec traverse i conditions R =
         let initial_state_conditions_to_reach_this_state ts =
             sprintf "- this path is taken when the following conditions hold in the initial state:\n%s"
                 (String.concat "\n" (List.rev ts >>| fun t -> term_to_string sign (reconvert_term sign t)))
         let met inv_id =
-            update_counters (function (m, v) -> (m + 1, v)) inv_id
+            update_counters (function (m, v, u) -> (m + 1, v, u)) inv_id
             ""
+        let not_evaluable inv_id conditions t t' = 
+            update_counters (function (m, v, u) -> (m, v, u + 1)) inv_id
+            sprintf "---------------\n!!! invariant '%s' cannot be verified in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n---------------\n\n"
+                inv_id i (term_to_string sign t) (term_to_string sign t')
+                (initial_state_conditions_to_reach_this_state conditions)
         let violated inv_id conditions t t' =
-            update_counters (function (m, v) -> (m, v + 1)) inv_id
+            update_counters (function (m, v, u) -> (m, v + 1, u)) inv_id
             sprintf "---------------\n!!! invariant '%s' violated in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n---------------\n\n"
                 inv_id i (term_to_string sign t) (term_to_string sign t')
                 (initial_state_conditions_to_reach_this_state conditions)
@@ -644,7 +649,8 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
                 let t' = s_eval_term t (apply_s_update_set S0 updates, Map.empty, empty_context)
                 if smt_formula_is_true sign TopLevel.smt_ctx t'
                 then met inv_id
-                else violated inv_id conditions t t'
+                else if smt_formula_is_false sign TopLevel.smt_ctx t' then violated inv_id conditions t t'
+                else not_evaluable inv_id conditions t t'
             printf "%s" (String.concat "" (List.filter (fun s -> s <> "") (List.map check_one invs)))
         match R with      // check invariants on all paths of state S' = S0 + R by traversing tree of R
         |   CondRule (G, R1, R2) -> traverse i (G::conditions) R1; traverse i ((s_not G)::conditions) R2
