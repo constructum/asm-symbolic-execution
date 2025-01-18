@@ -96,7 +96,8 @@ let fct_name_interpretation (S : S_STATE) (f : string) (args : VALUE list) =
         (   try Map.find args (Map.find f (S._dynamic))
             with _ ->
                 try Value (Map.find f (fst S._dynamic_initial) args)
-                with _ -> mkInitial sign (f, args)  )
+                with _ -> ( try mkInitial sign (f, args)
+                            with _ -> failwith (sprintf "SymbState.fct_name_interpretation: mkInitial failed for function '%s', arguments (%s)" f (String.concat ", " (args >>| value_to_string))) ))
     |   _ ->
         failwith (sprintf "SymbState.fct_name_interpretation: unsupported function kind '%s' for function name '%s'" (fct_kind_to_string kind) f)
 
