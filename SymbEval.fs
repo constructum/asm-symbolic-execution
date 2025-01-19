@@ -653,8 +653,17 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
                 else not_evaluable inv_id conditions t t'
             printf "%s" (String.concat "" (List.filter (fun s -> s <> "") (List.map check_one invs)))
         match R with      // check invariants on all paths of state S' = S0 + R by traversing tree of R
-        |   CondRule (G, R1, R2) -> traverse i (G::conditions) R1; traverse i ((s_not G)::conditions) R2
-        |   S_Updates updates    -> check_invariants invs S0 conditions updates
+        |   CondRule (G, R1, R2) ->
+                smt_solver_push TopLevel.smt_ctx
+                smt_assert sign TopLevel.smt_ctx G
+                traverse i (G::conditions) R1;
+                smt_solver_pop TopLevel.smt_ctx
+                smt_solver_push TopLevel.smt_ctx
+                smt_assert sign TopLevel.smt_ctx (s_not G)
+                traverse i ((s_not G)::conditions) R2
+                smt_solver_pop TopLevel.smt_ctx
+        |   S_Updates updates    ->
+                check_invariants invs S0 conditions updates
         |   R -> failwith (sprintf "symbolic_execution_for_invariant_checking: there should be no such rule here: %s\n" (rule_to_string sign R))
     let state_header i = printf "\n=== state S_%d =====================================\n" i
     let rec F R_acc R_in i =
