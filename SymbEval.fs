@@ -626,7 +626,7 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
     let update_counters f inv_id = counters := Map.change inv_id (function Some (m, v, u) -> Some (f (m, v, u)) | None -> Some (f (0, 0, 0))) (!counters)
     let print_counters i () =
         printf "--- S_%d summary:\n" i
-        Map.map (fun inv_id (m, v, u) -> printf "'%s': met on %d paths / violated on %d paths / cannot be verified on %d paths\n" inv_id m v u) !counters |> ignore
+        Map.map (fun inv_id (m, v, u) -> printf "'%s': met on %d paths / definitely violated on %d paths / cannot be verified on %d paths\n" inv_id m v u) !counters |> ignore
     let rec traverse i conditions R =
         let initial_state_conditions_to_reach_this_state ts =
             sprintf "- this path is taken when the following conditions hold in the initial state:\n%s"
