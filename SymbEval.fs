@@ -282,7 +282,7 @@ and eval_app_term ty (S : S_STATE, env : ENV, C : CONTEXT) (fct_name, ts) : TYPE
                                         else smt_eval_formula t (S, env, C)
                                 |   (_, _) -> AppTerm' (ty, (FctName f, ts))    // nothing left to simplify
                         |   Controlled ->
-                                try_case_distinction_for_term_with_finite_range ty (S, env, C) f ts
+                                s_eval_term (try_case_distinction_for_term_with_finite_range ty (S, env, C) f ts) (S, env, C)
                         |   other_kind -> failwith (sprintf "SymbEval.eval_app_term: kind '%s' of function '%s' not implemented" (fct_kind_to_string other_kind) f)
                 |   (UndefConst, _)    -> Value' (Undef, UNDEF)
                 |   (BoolConst b, _)   -> Value' (Boolean, BOOL b)
