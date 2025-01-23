@@ -13,7 +13,7 @@ open SmtInterface
 
 //--------------------------------------------------------------------
 
-let trace = ref 0
+let trace = ref 1
 let level = ref 0
 let rec spaces level = if level = 0 then "" else "    " + spaces (level-1)
 let rec indent level ppt = if level = 0 then ppt else blo4 [ indent (level-1) ppt ]
@@ -102,10 +102,15 @@ let s_xor = function
 |   (phi1, Value' (_, BOOL true)) -> s_not phi1
 |   (phi1, phi2) -> if phi1 = phi2 then Value' (Boolean, BOOL false) else AppTerm' (Boolean, (FctName "xor", [phi1; phi2]))
 
-let s_implies = function
-|   (Value' (_, BOOL b1), phi2) -> s_or (Value' (Boolean, BOOL (not b1)), phi2)
-|   (phi1, Value' (_, BOOL b2)) -> s_or (s_not phi1, Value' (Boolean, BOOL b2))
-|   (phi1, phi2) -> if phi1 = phi2 then Value' (Boolean, BOOL true) else AppTerm' (Boolean, (FctName "implies", [phi1; phi2]))
+let s_implies (t1, t2) =
+    if !trace > 0 then fprintf stderr "s_implies(%A, %A) -> " t1 t2
+    let result =
+        match (t1,t2) with
+        |   (Value' (_, BOOL b1), phi2) -> s_or (Value' (Boolean, BOOL (not b1)), phi2)
+        |   (phi1, Value' (_, BOOL b2)) -> s_or (s_not phi1, Value' (Boolean, BOOL b2))
+        |   (phi1, phi2) -> if phi1 = phi2 then Value' (Boolean, BOOL true) else AppTerm' (Boolean, (FctName "implies", [phi1; phi2]))
+    if !trace > 0 then fprintf stderr "%A\n" result
+    result
 
 let s_iff = function
 |   (Value' (_, BOOL false), phi2) -> s_not phi2
@@ -186,16 +191,22 @@ and expand_term t (S, env, C) =
     } t (S, env, C)
 
 and expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C) : TYPED_TERM =
-    match t_set (S, env, C) with
-    |   Value' (Powerset ty, SET xs) ->
-            let eval_instance x = t_cond (S, add_binding env (v, Value' (ty, x), ty), C)
-            let t_conds = List.map eval_instance (Set.toList xs)
-            match q_kind with
-            |   Forall -> List.fold (fun (t_accum : TYPED_TERM) -> fun (t1 : TYPED_TERM) -> s_and (t_accum, t1)) (Value' (Boolean, BOOL true))  t_conds
-            |   Exist  -> List.fold (fun (t_accum : TYPED_TERM) -> fun (t1 : TYPED_TERM) -> s_or  (t_accum, t1)) (Value' (Boolean, BOOL false)) t_conds
-            |   ExistUnique -> failwith "SymbEval.expand_quantifier: 'ExistUnique' not implemented"
-    |   Value' (_, SET xs) -> failwith (sprintf "SymbEval.forall_rule: this should not happen")
-    |   x -> failwith (sprintf "SymbEval.expand_quantifier: not a set (%A): %A v" t_set x)
+    let t_set = t_set (S, env, C)
+    if !trace > 0 then fprintf stderr "expand_quantifier: %s %s in %s ...\n" (quant_kind_to_str q_kind) v (term_to_string (signature_of S) t_set)
+    let result = 
+        match t_set with
+        |   Value' (Powerset ty, SET xs) ->
+                let eval_instance x = t_cond (S, add_binding env (v, Value' (ty, x), ty), C)
+                let t_conds = List.map eval_instance (Set.toList xs)    // !!! it would be more efficient not to evaluate all instances in advance
+                if !trace > 0 then fprintf stderr "%s" (String.concat "\n" (List.map (term_to_string (signature_of S)) t_conds))
+                match q_kind with
+                |   Forall -> List.fold (fun (t_accum : TYPED_TERM) -> fun (t1 : TYPED_TERM) -> s_and (t_accum, t1)) (Value' (Boolean, BOOL true))  t_conds   // !!! more efficient to exit on the first false
+                |   Exist  -> List.fold (fun (t_accum : TYPED_TERM) -> fun (t1 : TYPED_TERM) -> s_or  (t_accum, t1)) (Value' (Boolean, BOOL false)) t_conds   // !!! more efficient to exit on the first true
+                |   ExistUnique -> failwith "SymbEval.expand_quantifier: 'ExistUnique' not implemented"
+        |   Value' (_, SET xs) -> failwith (sprintf "SymbEval.forall_rule: this should not happen")
+        |   x -> failwith (sprintf "SymbEval.expand_quantifier: not a set (%A): %A v" t_set x)
+    if !trace > 0 then fprintf stderr "  -> %s\n" (term_to_string (signature_of S) result)
+    result
 
 and try_reducing_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (t : TYPED_TERM) : TYPED_TERM =
     let opt_elems = try enum_finite_type ty S with _ -> None
@@ -631,26 +642,35 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
         let initial_state_conditions_to_reach_this_state ts =
             sprintf "- this path is taken when the following conditions hold in the initial state:\n%s"
                 (String.concat "\n" (List.rev ts >>| fun t -> term_to_string sign (reconvert_term sign t)))
+        let show_cumulative_updates sign updates =
+            "- cumulative update set for this path:\n" ^
+            String.concat "\n"
+                (Set.toList updates >>| fun ((f, xs), t) ->
+                    sprintf "%s%s := %s"
+                        f (if List.isEmpty xs then "" else "("^(String.concat ", " (xs >>| value_to_string))^")")
+                        (term_to_string sign (reconvert_term sign t)))
         let met inv_id =
             update_counters (function (m, v, u) -> (m + 1, v, u)) inv_id
             ""
-        let not_evaluable inv_id conditions t t' = 
+        let not_evaluable inv_id conditions (updates : S_UPDATE_SET) t t' = 
             update_counters (function (m, v, u) -> (m, v, u + 1)) inv_id
-            sprintf "---------------\n!!! invariant '%s' cannot be verified in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n---------------\n\n"
+            sprintf "---------------\n!!! invariant '%s' cannot be verified in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n\n%s\n\n---------------\n"
                 inv_id i (term_to_string sign t) (term_to_string sign t')
                 (initial_state_conditions_to_reach_this_state conditions)
-        let violated inv_id conditions t t' =
+                (show_cumulative_updates sign updates)
+        let violated inv_id conditions updates t t' =
             update_counters (function (m, v, u) -> (m, v + 1, u)) inv_id
-            sprintf "---------------\n!!! invariant '%s' violated in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n---------------\n\n"
+            sprintf "---------------\n!!! invariant '%s' violated in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n\n%s\n\n---------------\n"
                 inv_id i (term_to_string sign t) (term_to_string sign t')
                 (initial_state_conditions_to_reach_this_state conditions)
+                (show_cumulative_updates sign updates)
         let check_invariants invs S0 conditions updates =
             let check_one (inv_id, t) =
                 let t' = s_eval_term t (apply_s_update_set S0 updates, Map.empty, empty_context)
                 if smt_formula_is_true sign TopLevel.smt_ctx t'
                 then met inv_id
-                else if smt_formula_is_false sign TopLevel.smt_ctx t' then violated inv_id conditions t t'
-                else not_evaluable inv_id conditions t t'
+                else if smt_formula_is_false sign TopLevel.smt_ctx t' then violated inv_id conditions updates t t'
+                else not_evaluable inv_id conditions updates t t'
             printf "%s" (String.concat "" (List.filter (fun s -> s <> "") (List.map check_one invs)))
         match R with      // check invariants on all paths of state S' = S0 + R by traversing tree of R
         |   CondRule (G, R1, R2) ->

@@ -306,7 +306,7 @@ and DerivedRule env (s : ParserInput<PARSER_STATE>) =
 
 and Rule env (s : ParserInput<PARSER_STATE>) =
     let Term = Parser.term (false, env)
-    let UpdateRule = (R3 (Term) (lit ":=") Term) |||>> fun reg (sign, _) (t1,_,t2) -> Parser.mkUpdateRule (Some reg) sign (t1, t2)   // !!!! not exactly as in AsmetaL grammar
+    let UpdateRule = (R3 (Term) (lit ":=") Term) |||>> fun reg (sign, _) (t1,_,t2) -> Parser.mkUpdateRule (Some reg) sign env (t1, t2)   // !!!! not exactly as in AsmetaL grammar
     (   BasicRule env
     <|> TurboRule env
     // <|> TurboReturnRule
@@ -413,7 +413,10 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
             let parameter_list = (opt_psep1 "(" ( ((ID_VARIABLE >> (kw "in")) ++ getDomainByID) ) "," ")")
             let extend_env reg env param_list = List.fold (fun env (v, t) -> add_var_distinct reg (v, t) env) env param_list
 
-            let DomainDefinition = (kw "domain" << ID_DOMAIN) ++ (lit "=" << StaticTerm)
+            let DomainDefinition : Parser<STATE -> STATE, PARSER_STATE> =
+                ( ((kw "domain" << ID_DOMAIN) ++ (lit "=" << StaticTerm))
+                    |||>> fun reg (sign, state) (d, t) ->
+                        (fun state -> state_override_static state (Map.add d (fun _ -> Eval.eval_term t (state_with_signature state sign, Map.empty)) Map.empty)) )
             
             let FunctionDefinition =
                 let p1 = (kw "function" << ID_FUNCTION) ++ parameter_list
@@ -480,7 +483,7 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
             let Property = (Invariant <|> TemporalProperty)         // temporal properties are ignored for the time being
             let Body =
                     (   (kw "definitions" >> lit ":") <<
-                        R6  (pmany DomainDefinition)
+                        R6  (pmany (DomainDefinition : Parser<STATE -> STATE, PARSER_STATE>))
                             (pmany FunctionDefinition)
                             (pmany RuleDeclaration)
                             (pmany InvarConstraint)
@@ -528,17 +531,28 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
 
             match parse_asm_rest s' with
             |   ParserFailure x -> ParserFailure x
-            |   ParserSuccess (((_, function_definitions, rule_declarations, _, _, properties), opt_main_rule_decl, default_init), s'') ->
+            |   ParserSuccess (
+                    (   (   domain_definitions,
+                            function_definitions,
+                            rule_declarations,
+                            _,
+                            _,
+                            properties  ),
+                        opt_main_rule_decl,
+                        default_init
+                    ), s'')
+                    ->
+                    let state' : STATE = List.fold (fun state f -> f state) state domain_definitions
                     let rule_declarations = rule_declarations @ (Option.fold (fun _ x -> [x]) [] opt_main_rule_decl)
                     let rdb' : RULES_DB = List.fold (fun rdb (rname, r) -> Map.add rname r rdb) empty_rules_db rule_declarations
-                    let (state', mdb') : STATE * MACRO_DB =
+                    let (state'', mdb') : STATE * MACRO_DB =
                         List.fold
                             (fun (state, mdb) (fct_def, macro_fct_def) -> (fct_def state, macro_fct_def mdb))
-                            (empty_state, empty_macro_db)
+                            (state', empty_macro_db)
                             (function_definitions @ default_init)
-                    if !trace > 0 then fprintf stderr "static function definitions found for: %s\n" (Map.keys state'._static |> String.concat ", ")
-                    if !trace > 0 then fprintf stderr "dynamic function definitions found for: %s\n" (Map.keys state'._dynamic |> String.concat ", ")
-                    if !trace > 0 then fprintf stderr "dynamic function initializations found for: %s\n" (Map.keys (fst state'._dynamic_initial) |> String.concat ", ")
+                    if !trace > 0 then fprintf stderr "static function definitions found for: %s\n" (Map.keys state''._static |> String.concat ", ")
+                    if !trace > 0 then fprintf stderr "dynamic function definitions found for: %s\n" (Map.keys state''._dynamic |> String.concat ", ")
+                    if !trace > 0 then fprintf stderr "dynamic function initializations found for: %s\n" (Map.keys (fst state''._dynamic_initial) |> String.concat ", ")
                     let result = ASM {
                         name      = asm_name;
                         is_module = modul;
@@ -548,7 +562,7 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                         signature = sign;
                         invariants = properties;        // properties are only invariants for the moment (temporal properties are ignored)
                         definitions = {
-                            state  = extend_with_carrier_sets (sign, state_override state state');   // !!! Agent, Reserve added twice ?
+                            state  = extend_with_carrier_sets (sign, state_override state state'');   // !!! Agent, Reserve added twice ?
                             rules  = rules_db_override rules_db rdb';
                             macros = macro_db_override macro_db mdb';
                         };

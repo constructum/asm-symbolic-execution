@@ -361,7 +361,7 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
         (   (kw "domain" << ID_DOMAIN) ++ (kw "subsetof" << getDomainByID)          
                 |>> fun (tyname, T) ->
                         // !!! for the moment, simply map to main type
-                        add_type_name tyname (0, SubsetType, Some (fun _ -> T)) ) s
+                        add_type_name tyname (0, SubsetType, Some (fun _ -> Subset (tyname, T))) ) s
     and TypeDomain (s : ParserInput<PARSER_STATE>) : ParserResult<SIGNATURE -> SIGNATURE, PARSER_STATE> =
         let sign = get_signature_from_input s
         (   let AnyDomain = kw "anydomain" << ID_DOMAIN
@@ -459,14 +459,15 @@ and term (static_term : bool, env : TypeEnv.TYPE_ENV) (s : ParserInput<PARSER_ST
 
 //--------------------------------------------------------------------
 
-let mkUpdateRule reg sign (t_lhs, t_rhs) =
+let mkUpdateRule reg sign env (t_lhs, t_rhs) =
     let err_msg tag = sprintf "update rule: %s term '%s' not allowed on left-hand side of update rule" tag (AST.term_to_string sign t_lhs)
     match t_lhs with
     |   AppTerm' (_, (FctName f, ts)) ->
             let k = fct_kind f sign
             if not (k = Controlled || k = Out)
             then raise (Error ("mkUpdateRule", reg, UpdateRuleNotControlledOrOut f))
-            else if not (get_type t_lhs = get_type t_rhs)
+            // else  if not (get_type t_lhs = get_type t_rhs)
+            else if (try (match match_type (get_type t_lhs) (get_type t_rhs) env with (e:TypeEnv.TYPE_ENV) -> false) with _ -> true)
             then raise (Error ("mkUpdateRule", reg, UpdateRuleTypesOfLhsAndRhsDoNotMatch (get_type t_lhs, get_type t_rhs)))
             else UpdateRule ((f, ts), t_rhs)
     |   _ -> raise (Error ("mkUpdateRule", reg, UpdateRuleLhsNotInAppTermForm))
@@ -475,7 +476,7 @@ let rec rule (env : TypeEnv.TYPE_ENV) (s : ParserInput<PARSER_STATE>) : ParserRe
     let term = term (false, env)            // false, because terms in rules do not have to be static
     let rule = rule env
     let sign = get_signature_from_input s
-    (       ( (R3 term (kw ":=") term) |||>> fun reg _ (t1,_,t2) -> mkUpdateRule (Some reg) sign (t1, t2) )
+    (       ( (R3 term (kw ":=") term) |||>> fun reg _ (t1,_,t2) -> mkUpdateRule (Some reg) sign env (t1, t2) )
         <|> ( kw "skip" |>> fun _ -> skipRule )
         <|> ( kw "par" << pmany1 rule >> kw "endpar" |>> fun Rs -> ParRule Rs)
         <|> ( ((lit "{" << rule) ++ pmany (lit "," << rule)) >> (lit "}") |>> fun (R1, Rs) -> ParRule (R1::Rs) )

@@ -78,8 +78,11 @@ let state_override_static S0 f_def = {
 //--------------------------------------------------------------------
 
 let extend_with_carrier_sets (sign : SIGNATURE, S : STATE) : STATE =
-    let type_names = Signature.type_names sign |> Set.filter (fun tyname -> type_kind tyname sign = EnumType && type_arity tyname sign = 0)
-    let add_carrier_set S tyname =
+    let type_names =
+        Signature.type_names sign
+        |> Set.filter
+            (fun tyname -> let k = type_kind tyname sign in (k = EnumType || k = SubsetType) && type_arity tyname sign = 0)
+    let add_carrier_set_for_enum_type S tyname =
         let constructor_names =
             fct_names sign
             |>  Set.filter (fun f ->
@@ -92,6 +95,19 @@ let extend_with_carrier_sets (sign : SIGNATURE, S : STATE) : STATE =
                 S
         else    (if !trace > 0 then fprintf stderr "State.extend_with_carrier_set: %s = { %s }\n" tyname (String.concat ", " constructor_names))
                 { S with _carrier_sets = Map.add tyname (Some (Set.map (fun c -> CELL (c, [])) constructor_names)) S._carrier_sets }
+    let add_carrier_set_for_subset_type S tyname =
+        if !trace > 0 then fprintf stderr "State.extend_with_carrier_set: subset domain '%s'\n" tyname
+        match Map.tryFind tyname (S._static) with
+        |   Some f ->
+                match f [] with
+                |   SET elems -> { S with _carrier_sets = Map.add tyname (Some (Set elems)) S._carrier_sets }
+                |   _ -> failwith (sprintf "State.extend_with_carrier_set: subset domain '%s' domain must be defined by specifying a finite set" tyname)
+        |   None -> failwith (sprintf "State.extend_with_carrier_set: subset domain '%s' declared, but not defined" tyname)
+    let add_carrier_set S tyname =
+        let k = type_kind tyname sign
+        if      k = EnumType   then add_carrier_set_for_enum_type S tyname
+        else if k = SubsetType then add_carrier_set_for_subset_type S tyname
+        else failwith (sprintf "State.extend_with_carrier_set: not supported: type '%s' with kind '%s'" tyname (type_kind_to_string k))
     Set.fold add_carrier_set S type_names
 
 
@@ -109,6 +125,9 @@ let enum_finite_type (ty : TYPE) (S : STATE) =
             with _ -> failwith "SymbState.enum_finite_type: carrier set of 'Rule' not found or not defined"  // not found: not in map; not defined: None
     |   TypeParam _ -> None
     |   TypeCons (tyname, []) ->
+            try Some (Option.get (Map.find tyname (S._carrier_sets)))
+            with _ -> failwith (sprintf "SymbState.enum_finite_type: carrier set of '%s' not found" tyname)
+    |   Subset (tyname, _) ->
             try Some (Option.get (Map.find tyname (S._carrier_sets)))
             with _ -> failwith (sprintf "SymbState.enum_finite_type: carrier set of '%s' not found" tyname)
     |   TypeCons (tyname, _)  -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for user-defined type '%s' with type arity > 0" tyname)
