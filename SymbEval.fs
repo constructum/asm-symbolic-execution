@@ -197,6 +197,7 @@ and expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C) : TYPED_TERM 
     |   Value' (_, SET xs) -> failwith (sprintf "SymbEval.forall_rule: this should not happen")
     |   x -> failwith (sprintf "SymbEval.expand_quantifier: not a set (%A): %A v" t_set x)
 
+(*
 and try_reducing_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (t : TYPED_TERM) : TYPED_TERM =
     let opt_elems = try enum_finite_type ty S with _ -> None
     match t with
@@ -213,6 +214,7 @@ and try_reducing_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT)
                 |   None -> t
                 |   Some x -> Value' (ty, x)
     |   _ -> t
+*)
 
 and try_case_distinction_for_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts0 : TYPED_TERM list) : TYPED_TERM =
     let generate_cond_term (t, cases : (TYPED_TERM * TYPED_TERM) list) =
@@ -341,7 +343,7 @@ and s_eval_term_ (t : TYPED_TERM) ((S, env, C) : S_STATE * ENV * CONTEXT) =
     ann_term_induction (fun x -> x) {
         Value      = fun (ty, x) _ -> Value' (ty, x);
         Initial    = fun (ty, (f, xs)) _ -> Initial' (ty, (f, xs)); //Initial (f, xs);
-        AppTerm    = fun (ty, (f, ts)) (S, env, C) -> try_reducing_term_with_finite_range ty (S, env, C) (eval_app_term ty (S, env, C) (f, ts));
+        AppTerm    = fun (ty, (f, ts)) (S, env, C) -> eval_app_term ty (S, env, C) (f, ts)  // try_reducing_term_with_finite_range ty (S, env, C) (eval_app_term ty (S, env, C) (f, ts));
         CondTerm   = fun (ty, (G, t1, t2)) (S, env, C) -> eval_cond_term ty (S, env, C) (G, t1, t2);
         VarTerm    = fun (ty, v) -> fun (S, env, _) -> fst (get_env env v);
         QuantTerm  = fun (ty, (q_kind, v, t_set, t_cond)) (S, env, C) -> expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C);
@@ -357,7 +359,7 @@ and s_eval_term (t : TYPED_TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TYPED_T
             |   Value' (_, BOOL _)  -> t
             |   _ -> smt_eval_formula t (S, env, C)
     else    match t with
-            |   Initial' (ty, (f, xs)) -> try_reducing_term_with_finite_range ty (S, env, C) t
+            |   Initial' (ty, (f, xs)) -> t  // try_reducing_term_with_finite_range ty (S, env, C) t
             |   _ -> t
 
 //--------------------------------------------------------------------
