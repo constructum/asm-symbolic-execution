@@ -13,7 +13,7 @@ open SmtInterface
 
 //--------------------------------------------------------------------
 
-let trace = ref 1
+let trace = ref 0
 let level = ref 0
 let rec spaces level = if level = 0 then "" else "    " + spaces (level-1)
 let rec indent level ppt = if level = 0 then ppt else blo4 [ indent (level-1) ppt ]
@@ -43,7 +43,7 @@ let interpretation_in_context (S : S_STATE) (C : CONTEXT) (f : NAME) (xs : VALUE
         match Map.tryFind f_name (snd C) with
         |   Some f_table ->
             match Map.tryFind xs f_table with
-            |   Some t -> t
+            |   Some t -> fprintf stderr "@"; t
             |   None -> interpretation S f xs
         |   None -> interpretation S f xs
     |   _ -> interpretation S f xs
@@ -103,13 +103,16 @@ let s_xor = function
 |   (phi1, phi2) -> if phi1 = phi2 then Value' (Boolean, BOOL false) else AppTerm' (Boolean, (FctName "xor", [phi1; phi2]))
 
 let s_implies (t1, t2) =
-    if !trace > 0 then fprintf stderr "s_implies(%A, %A) -> " t1 t2
+    // if !trace > 0 then fprintf stderr "s_implies(%A, %A) -> " t1 t2
     let result =
         match (t1,t2) with
         |   (Value' (_, BOOL b1), phi2) -> s_or (Value' (Boolean, BOOL (not b1)), phi2)
         |   (phi1, Value' (_, BOOL b2)) -> s_or (s_not phi1, Value' (Boolean, BOOL b2))
         |   (phi1, phi2) -> if phi1 = phi2 then Value' (Boolean, BOOL true) else AppTerm' (Boolean, (FctName "implies", [phi1; phi2]))
-    if !trace > 0 then fprintf stderr "%A\n" result
+    if result = Value'(Boolean, BOOL false)
+    then
+        if !trace > 0 then fprintf stderr "s_implies(%A, %A) -> " t1 t2
+        if !trace > 0 then fprintf stderr "%A\n" result
     result
 
 let s_iff = function
@@ -208,6 +211,7 @@ and expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C) : TYPED_TERM 
     if !trace > 0 then fprintf stderr "  -> %s\n" (term_to_string (signature_of S) result)
     result
 
+(*
 and try_reducing_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (t : TYPED_TERM) : TYPED_TERM =
     let opt_elems = try enum_finite_type ty S with _ -> None
     match t with
@@ -224,17 +228,19 @@ and try_reducing_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT)
                 |   None -> t
                 |   Some x -> Value' (ty, x)
     |   _ -> t
+*)
 
 and try_case_distinction_for_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts0 : TYPED_TERM list) : TYPED_TERM =
-    let generate_cond_term (t, cases : (TYPED_TERM * TYPED_TERM) list) =
+    let generate_cond_term (t, cases : (VALUE * TYPED_TERM) list) =
+        let ty = get_type t
         let mkCondTerm (G, t1, t2) = CondTerm' (get_type t1, (G, t1, t2))
         let mkEq t1 t2 = AppTerm' (Boolean, (FctName "=", [t1; t2]))
-        let rec mk_cond_term cases =
+        let rec mk_cond_term (cases : (VALUE * TYPED_TERM) list) =
             match cases with
             |   [] -> failwith "mk_cond_term: empty list of cases"
             |   (t1, t2) :: cases' ->
                     s_eval_term (mkCondTerm (
-                        mkEq t t1,
+                        mkEq t (Value' (ty, t1)),
                         t2,
                         match cases' with
                         |   [] -> failwith "mk_cond_term: empty list of cases"
@@ -245,7 +251,7 @@ and try_case_distinction_for_term_with_finite_range ty (S : S_STATE, env : ENV, 
     let make_case_distinction (t : TYPED_TERM) (elem_term_pairs : (VALUE * TYPED_TERM) list) =
         if List.isEmpty elem_term_pairs
         then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
-        generate_cond_term (t, List.map (fun (elem, term) -> (Value' (get_type t, elem), term)) elem_term_pairs)
+        generate_cond_term (t, elem_term_pairs)
     let rec F past_args = function
     |   [] -> AppTerm' (ty, (FctName f, List.rev past_args))
     |   t1 :: ts' ->
@@ -352,7 +358,8 @@ and s_eval_term_ (t : TYPED_TERM) ((S, env, C) : S_STATE * ENV * CONTEXT) =
     ann_term_induction (fun x -> x) {
         Value      = fun (ty, x) _ -> Value' (ty, x);
         Initial    = fun (ty, (f, xs)) _ -> Initial' (ty, (f, xs)); //Initial (f, xs);
-        AppTerm    = fun (ty, (f, ts)) (S, env, C) -> try_reducing_term_with_finite_range ty (S, env, C) (eval_app_term ty (S, env, C) (f, ts));
+        AppTerm    = fun (ty, (f, ts)) (S, env, C) -> // try_reducing_term_with_finite_range ty (S, env, C) (eval_app_term ty (S, env, C) (f, ts));
+                                    eval_app_term ty (S, env, C) (f, ts) 
         CondTerm   = fun (ty, (G, t1, t2)) (S, env, C) -> eval_cond_term ty (S, env, C) (G, t1, t2);
         VarTerm    = fun (ty, v) -> fun (S, env, _) -> fst (get_env env v);
         QuantTerm  = fun (ty, (q_kind, v, t_set, t_cond)) (S, env, C) -> expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C);
@@ -368,20 +375,22 @@ and s_eval_term (t : TYPED_TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TYPED_T
             |   Value' (_, BOOL _)  -> t
             |   _ -> smt_eval_formula t (S, env, C)
     else    match t with
-            |   Initial' (ty, (f, xs)) -> try_reducing_term_with_finite_range ty (S, env, C) t
+            |   Initial' (ty, (f, xs)) -> t
+                        //try_reducing_term_with_finite_range ty (S, env, C) t
             |   _ -> t
 
 //--------------------------------------------------------------------
 
 let rec try_case_distinction_for_update_with_finite_domain (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts0 : TYPED_TERM list) (t_rhs : TYPED_TERM): RULE =
     let mkEq t1 t2 = AppTerm' (Boolean, (FctName "=", [t1; t2]))
-    let generate_cond_rule (t, cases : (TYPED_TERM * RULE) list) =
+    let generate_cond_rule (t, cases : (VALUE * RULE) list) =
+        let ty = get_type t
         let rec mk_cond_rule cases =
             match cases with
             |   [] -> failwith "mk_cond_term: empty list of cases"
             |   (t1, R) :: cases' ->
                     s_eval_rule (CondRule (
-                        mkEq t t1,
+                        mkEq t (Value' (ty, t1)),
                         R,
                         match cases' with
                         |   [] -> failwith "mk_cond_term: empty list of cases"
@@ -392,7 +401,7 @@ let rec try_case_distinction_for_update_with_finite_domain (S : S_STATE, env : E
     let make_case_distinction (t : TYPED_TERM) (elem_rule_pairs : (VALUE * RULE) list) =
         if List.isEmpty elem_rule_pairs
         then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
-        generate_cond_rule (t, List.map (fun (elem, term) -> (Value' (get_type t, elem), term)) elem_rule_pairs)
+        generate_cond_rule (t, elem_rule_pairs)
     let rec F past_args = function
         |   [] -> UpdateRule ((f, List.rev past_args), t_rhs)
         |   t1 :: ts' ->
