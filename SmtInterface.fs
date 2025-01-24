@@ -50,14 +50,15 @@ let smt_solver_push (C : SMT_CONTEXT) =
 let smt_solver_pop (C : SMT_CONTEXT) =
     (!C.slv).Pop ()
 
-let smt_map_type (C : SMT_CONTEXT) (sign : SIGNATURE) (T : TYPE) : Sort =
+let rec smt_map_type (C : SMT_CONTEXT) (sign : SIGNATURE) (T : TYPE) : Sort =
     //assert(match T with Boolean -> true | Integer -> true | String -> true | TypeCons(tyname,[]) -> type_kind tyname sign = EnumType | _ -> false)
     let ctx = !C.ctx
     match T with
     |   Boolean -> ctx.BoolSort
     |   Integer -> ctx.IntSort
     |   String  -> ctx.StringSort
-    |   TypeCons (tyname, []) -> Map.find tyname (!C.typ)   // !!! currently all user-defined domains are of finite cardinality (enum-like), may need to be changed in the future
+    |   TypeCons (tyname, []) -> Map.find tyname (!C.typ)
+    |   Subset (_, main_type) -> smt_map_type C sign main_type   // !!! currently all user-defined domains are of finite cardinality (enum-like), may need to be changed in the future
     |   _       -> failwith (sprintf "smt_map_type: unsupported type %s" (type_to_string T))
 
 //--------------------------------------------------------------------
@@ -101,7 +102,11 @@ and smt_map_term_user_defined_function sign C (f, ts) : SMT_EXPR =
         match (f, fct_type f sign, ts >>| fun t -> smt_map_term sign C t) with
         |   (f, (dom, Boolean), es) ->
                 try SMT_BoolExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> BoolExpr) with _ -> fail (f, dom, Boolean)
+        |   (f, (dom, Subset (_, Boolean)), es) ->       // !!! is it allowed in AsmetaL to have nested subset types? in that case this would fail
+                try SMT_BoolExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> BoolExpr) with _ -> fail (f, dom, Boolean)
         |   (f, (dom, Integer), es) ->
+                try SMT_IntExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> IntExpr) with _ -> fail (f, dom, Integer)
+        |   (f, (dom, Subset (_, Integer)), es) ->       // !!! is it allowed in AsmetaL to have nested subset types? in that case this would fail
                 try SMT_IntExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| convert_to_expr)) :?> IntExpr) with _ -> fail (f, dom, Integer)
         |   (f, (dom, (ran as TypeCons (tyname, []))), es) ->
                 let (kind, ar) = (type_kind tyname sign, type_arity tyname sign)
@@ -198,7 +203,9 @@ let smt_add_types_and_functions (C : SMT_CONTEXT) sign (new_sign : SIGNATURE, ne
                         C.typ := Map.add tyname enum_sort (!C.typ)
                         C.con := Common.map_override (!C.con) (Array.fold2 (fun m cons_name smt_expr -> Map.add cons_name smt_expr m) Map.empty constructor_names (enum_sort.Consts))
                 else    fprintf stderr "SmtInterface.add_type: warning: skipping abstract type '%s', because it has no elements (%s = { })\n" tyname tyname
-        else fprintf stderr "SmtInterface.add_type: warning: only enumerated types without type parameters are currently supported (type '%s' is of kind '%s' and has arity %d)\n" tyname (kind |> Signature.type_kind_to_string) ar
+        else if kind = SubsetType
+        then ()   // simply ignore, subset types are mapped to their main type by smt_map_type
+        else fprintf stderr "SmtInterface.add_type: unsupported type '%s' is ignored\n" tyname
     let add_function C fct_name =
         let (Ts_dom, T_ran) = fct_type fct_name new_sign
         let func_decl = ctx.MkFuncDecl (fct_name, Array.ofList (Ts_dom >>| smt_map_type C sign), smt_map_type C sign T_ran)

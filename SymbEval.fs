@@ -197,7 +197,6 @@ and expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C) : TYPED_TERM 
     |   Value' (_, SET xs) -> failwith (sprintf "SymbEval.forall_rule: this should not happen")
     |   x -> failwith (sprintf "SymbEval.expand_quantifier: not a set (%A): %A v" t_set x)
 
-(*
 and try_reducing_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (t : TYPED_TERM) : TYPED_TERM =
     let opt_elems = try enum_finite_type ty S with _ -> None
     match t with
@@ -214,18 +213,18 @@ and try_reducing_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT)
                 |   None -> t
                 |   Some x -> Value' (ty, x)
     |   _ -> t
-*)
 
 and try_case_distinction_for_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts0 : TYPED_TERM list) : TYPED_TERM =
-    let generate_cond_term (t, cases : (TYPED_TERM * TYPED_TERM) list) =
+    let generate_cond_term (t, cases : (VALUE * TYPED_TERM) list) =
+        let ty = get_type t
         let mkCondTerm (G, t1, t2) = CondTerm' (get_type t1, (G, t1, t2))
         let mkEq t1 t2 = AppTerm' (Boolean, (FctName "=", [t1; t2]))
-        let rec mk_cond_term cases =
+        let rec mk_cond_term (cases : (VALUE * TYPED_TERM) list) =
             match cases with
             |   [] -> failwith "mk_cond_term: empty list of cases"
             |   (t1, t2) :: cases' ->
                     s_eval_term (mkCondTerm (
-                        mkEq t t1,
+                        mkEq t (Value' (ty, t1)),
                         t2,
                         match cases' with
                         |   [] -> failwith "mk_cond_term: empty list of cases"
@@ -236,7 +235,7 @@ and try_case_distinction_for_term_with_finite_range ty (S : S_STATE, env : ENV, 
     let make_case_distinction (t : TYPED_TERM) (elem_term_pairs : (VALUE * TYPED_TERM) list) =
         if List.isEmpty elem_term_pairs
         then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
-        generate_cond_term (t, List.map (fun (elem, term) -> (Value' (get_type t, elem), term)) elem_term_pairs)
+        generate_cond_term (t, elem_term_pairs)
     let rec F past_args = function
     |   [] -> AppTerm' (ty, (FctName f, List.rev past_args))
     |   t1 :: ts' ->
@@ -372,7 +371,7 @@ let rec try_case_distinction_for_update_with_finite_domain (S : S_STATE, env : E
             |   [] -> failwith "mk_cond_term: empty list of cases"
             |   (t1, R) :: cases' ->
                     s_eval_rule (CondRule (
-                        mkEq t t1,
+                        mkEq t (Value' (ty, t1)),
                         R,
                         match cases' with
                         |   [] -> failwith "mk_cond_term: empty list of cases"
@@ -383,7 +382,7 @@ let rec try_case_distinction_for_update_with_finite_domain (S : S_STATE, env : E
     let make_case_distinction (t : TYPED_TERM) (elem_rule_pairs : (VALUE * RULE) list) =
         if List.isEmpty elem_rule_pairs
         then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string (signature_of S) t))
-        generate_cond_rule (t, List.map (fun (elem, term) -> (Value' (get_type t, elem), term)) elem_rule_pairs)
+        generate_cond_rule (t, elem_rule_pairs)
     let rec F past_args = function
         |   [] -> UpdateRule ((f, List.rev past_args), t_rhs)
         |   t1 :: ts' ->
@@ -633,26 +632,35 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
         let initial_state_conditions_to_reach_this_state ts =
             sprintf "- this path is taken when the following conditions hold in the initial state:\n%s"
                 (String.concat "\n" (List.rev ts >>| fun t -> term_to_string sign (reconvert_term sign t)))
+        let show_cumulative_updates sign updates =
+            "- cumulative update set for this path:\n" ^
+            String.concat "\n"
+                (Set.toList updates >>| fun ((f, xs), t) ->
+                    sprintf "%s%s := %s"
+                        f (if List.isEmpty xs then "" else "("^(String.concat ", " (xs >>| value_to_string))^")")
+                        (term_to_string sign (reconvert_term sign t)))
         let met inv_id =
             update_counters (function (m, v, u) -> (m + 1, v, u)) inv_id
             ""
-        let not_evaluable inv_id conditions t t' = 
+        let not_evaluable inv_id conditions (updates : S_UPDATE_SET) t t' = 
             update_counters (function (m, v, u) -> (m, v, u + 1)) inv_id
-            sprintf "---------------\n!!! invariant '%s' cannot be verified in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n---------------\n\n"
+            sprintf "---------------\n!!! invariant '%s' cannot be verified in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n\n%s\n\n---------------\n"
                 inv_id i (term_to_string sign t) (term_to_string sign t')
                 (initial_state_conditions_to_reach_this_state conditions)
-        let violated inv_id conditions t t' =
+                (show_cumulative_updates sign updates)
+        let violated inv_id conditions updates t t' =
             update_counters (function (m, v, u) -> (m, v + 1, u)) inv_id
-            sprintf "---------------\n!!! invariant '%s' violated in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n---------------\n\n"
+            sprintf "---------------\n!!! invariant '%s' violated in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n\n%s\n\n---------------\n"
                 inv_id i (term_to_string sign t) (term_to_string sign t')
                 (initial_state_conditions_to_reach_this_state conditions)
+                (show_cumulative_updates sign updates)
         let check_invariants invs S0 conditions updates =
             let check_one (inv_id, t) =
                 let t' = s_eval_term t (apply_s_update_set S0 updates, Map.empty, empty_context)
                 if smt_formula_is_true sign TopLevel.smt_ctx t'
                 then met inv_id
-                else if smt_formula_is_false sign TopLevel.smt_ctx t' then violated inv_id conditions t t'
-                else not_evaluable inv_id conditions t t'
+                else if smt_formula_is_false sign TopLevel.smt_ctx t' then violated inv_id conditions updates t t'
+                else not_evaluable inv_id conditions updates t t'
             printf "%s" (String.concat "" (List.filter (fun s -> s <> "") (List.map check_one invs)))
         match R with      // check invariants on all paths of state S' = S0 + R by traversing tree of R
         |   CondRule (G, R1, R2) ->

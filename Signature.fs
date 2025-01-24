@@ -46,6 +46,7 @@ type TYPE =         // !!! AsmetaL note: Complex, Real, Natural, Char not implem
 | Rule
 | TypeParam of string
 | TypeCons of string * TYPE list
+| Subset of string * TYPE
 | Prod of TYPE list
 | Seq of TYPE
 | Powerset of TYPE
@@ -68,6 +69,7 @@ let rec type_to_string ty =
     |   String -> "String"
     |   Rule -> "Rule"
     |   TypeCons (s, tys)  -> if List.isEmpty tys then s else s ^ "(" ^ (tys |> type_list_to_string) ^ ")"
+    |   Subset (tyname, main_type) -> (tyname) ^ " subsetof " ^ (type_to_string main_type)
     |   Prod tys -> "Prod(" ^ (tys |> type_list_to_string) ^ ")"
     |   Seq ty -> "Seq(" ^ (type_to_string ty) ^ ")"
     |   Powerset ty -> "Powerset(" ^ (type_to_string ty) ^ ")"
@@ -132,10 +134,14 @@ type TYPE_ENV = TypeEnv.TYPE_ENV
 
 //--------------------------------------------------------------------
 
-let match_type (ty : TYPE) (ty_sign : TYPE) (ty_env : Map<string, TYPE>) : Map<string, TYPE> =
+let rec match_type (ty : TYPE) (ty_sign : TYPE) (ty_env : Map<string, TYPE>) : Map<string, TYPE> =
     if !trace > 0 then fprintf stderr "match_type(%s, %s)\n" (ty |> type_to_string) (ty_sign |> type_to_string)
-    match ty with
-    |   TypeParam a ->
+    match (ty, ty_sign) with
+    |   (_, Subset (_, ty_sign')) ->
+            match_type ty ty_sign' ty_env
+    |   (Subset (_, ty'), _) ->
+            match_type ty' ty_sign ty_env
+    |   (TypeParam a, _) ->
             failwith (sprintf "%s: type parameter not allowed in concrete type to be matched to signature type %s"
                 (type_to_string ty) (type_to_string ty_sign))
     |   _ ->
@@ -336,6 +342,12 @@ let is_right_assoc fct_name (sign : SIGNATURE) =
 
 let precedence fct_name (sign : SIGNATURE) =
     get_fct_info "is_right_assoc" fct_name sign (fun fi -> fi.infix_status |> function Infix (_, n) -> n | _ -> 0)
+
+//--------------------------------------------------------------------
+
+let main_type = function
+|   Subset (_, ty) -> ty
+|   ty -> ty
 
 //--------------------------------------------------------------------
 

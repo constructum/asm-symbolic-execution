@@ -119,8 +119,9 @@ let _iff = function
 | [ BOOL x; BOOL y ] -> BOOL (x = y)
 | _ -> UNDEF
 
-let set_interval _ = 
-    failwith "set_interval: not implemented"
+let set_interval = function
+| [ INT a; INT b; INT step ] -> SET (Set.map (fun x -> INT x) (Set.ofSeq [a .. step .. b]))
+| _ -> UNDEF
 
 
 

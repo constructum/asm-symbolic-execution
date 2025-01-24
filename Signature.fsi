@@ -31,6 +31,7 @@ type TYPE =
 | Rule
 | TypeParam of string
 | TypeCons of string * TYPE list
+| Subset of string * TYPE
 | Prod of TYPE list
 | Seq of TYPE
 | Powerset of TYPE
@@ -130,6 +131,8 @@ val is_left_assoc : string -> SIGNATURE -> bool
 val is_right_assoc : string -> SIGNATURE -> bool
 val precedence : string -> SIGNATURE -> int
 
+val main_type : TYPE -> TYPE
+val match_type : TYPE -> TYPE -> TypeEnv.TYPE_ENV -> TypeEnv.TYPE_ENV
 val match_fct_type : string -> TYPE list -> (TYPE list * TYPE) list -> TYPE
 
 val signature_to_string : SIGNATURE -> string

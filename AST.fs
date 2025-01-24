@@ -12,6 +12,9 @@ type QUANT_KIND =
 |   ExistUnique
 |   Exist
 
+let quant_kind_to_str q_kind =
+    match q_kind with Forall -> "forall" | ExistUnique -> "exist unique " | Exist -> "exist"
+
 type 'annotation ANN_TERM =
 |   Value'      of 'annotation * (VALUE)                     // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
 |   Initial'    of 'annotation * (FCT_NAME * VALUE list)   // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
@@ -209,8 +212,7 @@ let rec pp_term (sign : SIGNATURE) (t : TYPED_TERM) =
         Initial  = fun (_, (f, xs)) -> pp_location_term "initial" (f, xs);
         VarTerm = fun (_, x) -> str x;
         QuantTerm = fun (_, (q_kind, v, t_set, t_cond)) ->
-            let q_kind = match q_kind with Forall -> "(forall " | ExistUnique -> "(exist unique " | Exist -> "(exist "
-            blo0 [ str q_kind; str v; str " in "; t_set; str " with "; t_cond; str ")" ];
+            blo0 [ str ("("^(quant_kind_to_str q_kind)^" "); str v; str " in "; t_set; str " with "; t_cond; str ")" ];
         LetTerm = fun (_, (v, t1, t2)) -> blo0 [ str "let "; str v; str " = "; t1; line_brk; str "in "; t2; line_brk; str "endlet" ];
         DomainTerm = fun (_, tyname) -> str (type_to_string tyname);
     } t
