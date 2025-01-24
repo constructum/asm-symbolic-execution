@@ -399,6 +399,7 @@ let rec simple_term (static_term, env0 : TypeEnv.TYPE_ENV) (s : ParserInput<PARS
     // ExistUniqueTerm 	            ::= 	"(" <EXIST> <UNIQUE> VariableTerm <IN> Term ( "," VariableTerm <IN> Term )* ( <WITH> Term )? ")"
     // ForallTerm 	                ::= 	"(" <FORALL> VariableTerm <IN> Term ( "," VariableTerm <IN> Term )* ( <WITH> Term )? ")" 
     let term_in_env = term
+    let simple_term = simple_term (static_term, env0)
     let term = term (static_term, env0)
     let mkAppTerm = mkAppTerm static_term
         // !!! temporary: only one binding allowed
@@ -423,7 +424,7 @@ let rec simple_term (static_term, env0 : TypeEnv.TYPE_ENV) (s : ParserInput<PARS
         try getDomainByID s
         with _ -> ParserFailure (combine_failures (Set.singleton (get_pos s, ($"type name expected, '{s}' found")), get_failures s))
 
-    (       ( (kw "not" << term)
+    (       ( (kw "not" << simple_term)
                 |||>> fun reg (sign, _) t -> mkAppTerm (Some reg) sign (FctName "not", [t]) )
         <|> ( R3 (kw "if" << term) (kw "then" << term) (poption (kw "else" << term)) >> kw "endif"
                 |||>> fun reg (sign, _) (G, r_then, opt_R_else) -> mkCondTerm (Some reg) (G, r_then, match opt_R_else with Some r_else -> r_else | None -> mkAppTerm (Some reg) sign (UndefConst, [])) )
