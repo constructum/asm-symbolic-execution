@@ -43,7 +43,7 @@ let interpretation_in_context (S : S_STATE) (C : CONTEXT) (f : NAME) (xs : VALUE
         match Map.tryFind f_name (snd C) with
         |   Some f_table ->
             match Map.tryFind xs f_table with
-            |   Some t -> t
+            |   Some t -> fprintf stderr "@"; t
             |   None -> interpretation S f xs
         |   None -> interpretation S f xs
     |   _ -> interpretation S f xs
@@ -102,10 +102,18 @@ let s_xor = function
 |   (phi1, Value' (_, BOOL true)) -> s_not phi1
 |   (phi1, phi2) -> if phi1 = phi2 then Value' (Boolean, BOOL false) else AppTerm' (Boolean, (FctName "xor", [phi1; phi2]))
 
-let s_implies = function
-|   (Value' (_, BOOL b1), phi2) -> s_or (Value' (Boolean, BOOL (not b1)), phi2)
-|   (phi1, Value' (_, BOOL b2)) -> s_or (s_not phi1, Value' (Boolean, BOOL b2))
-|   (phi1, phi2) -> if phi1 = phi2 then Value' (Boolean, BOOL true) else AppTerm' (Boolean, (FctName "implies", [phi1; phi2]))
+let s_implies (t1, t2) =
+    // if !trace > 0 then fprintf stderr "s_implies(%A, %A) -> " t1 t2
+    let result =
+        match (t1,t2) with
+        |   (Value' (_, BOOL b1), phi2) -> s_or (Value' (Boolean, BOOL (not b1)), phi2)
+        |   (phi1, Value' (_, BOOL b2)) -> s_or (s_not phi1, Value' (Boolean, BOOL b2))
+        |   (phi1, phi2) -> if phi1 = phi2 then Value' (Boolean, BOOL true) else AppTerm' (Boolean, (FctName "implies", [phi1; phi2]))
+    if result = Value'(Boolean, BOOL false)
+    then
+        if !trace > 0 then fprintf stderr "s_implies(%A, %A) -> " t1 t2
+        if !trace > 0 then fprintf stderr "%A\n" result
+    result
 
 let s_iff = function
 |   (Value' (_, BOOL false), phi2) -> s_not phi2
@@ -186,17 +194,24 @@ and expand_term t (S, env, C) =
     } t (S, env, C)
 
 and expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C) : TYPED_TERM =
-    match t_set (S, env, C) with
-    |   Value' (Powerset ty, SET xs) ->
-            let eval_instance x = t_cond (S, add_binding env (v, Value' (ty, x), ty), C)
-            let t_conds = List.map eval_instance (Set.toList xs)
-            match q_kind with
-            |   Forall -> List.fold (fun (t_accum : TYPED_TERM) -> fun (t1 : TYPED_TERM) -> s_and (t_accum, t1)) (Value' (Boolean, BOOL true))  t_conds
-            |   Exist  -> List.fold (fun (t_accum : TYPED_TERM) -> fun (t1 : TYPED_TERM) -> s_or  (t_accum, t1)) (Value' (Boolean, BOOL false)) t_conds
-            |   ExistUnique -> failwith "SymbEval.expand_quantifier: 'ExistUnique' not implemented"
-    |   Value' (_, SET xs) -> failwith (sprintf "SymbEval.forall_rule: this should not happen")
-    |   x -> failwith (sprintf "SymbEval.expand_quantifier: not a set (%A): %A v" t_set x)
+    let t_set = t_set (S, env, C)
+    if !trace > 0 then fprintf stderr "expand_quantifier: %s %s in %s ...\n" (quant_kind_to_str q_kind) v (term_to_string (signature_of S) t_set)
+    let result = 
+        match t_set with
+        |   Value' (Powerset ty, SET xs) ->
+                let eval_instance x = t_cond (S, add_binding env (v, Value' (ty, x), ty), C)
+                let t_conds = List.map eval_instance (Set.toList xs)    // !!! it would be more efficient not to evaluate all instances in advance
+                if !trace > 0 then fprintf stderr "%s" (String.concat "\n" (List.map (term_to_string (signature_of S)) t_conds))
+                match q_kind with
+                |   Forall -> List.fold (fun (t_accum : TYPED_TERM) -> fun (t1 : TYPED_TERM) -> s_and (t_accum, t1)) (Value' (Boolean, BOOL true))  t_conds   // !!! more efficient to exit on the first false
+                |   Exist  -> List.fold (fun (t_accum : TYPED_TERM) -> fun (t1 : TYPED_TERM) -> s_or  (t_accum, t1)) (Value' (Boolean, BOOL false)) t_conds   // !!! more efficient to exit on the first true
+                |   ExistUnique -> failwith "SymbEval.expand_quantifier: 'ExistUnique' not implemented"
+        |   Value' (_, SET xs) -> failwith (sprintf "SymbEval.forall_rule: this should not happen")
+        |   x -> failwith (sprintf "SymbEval.expand_quantifier: not a set (%A): %A v" t_set x)
+    if !trace > 0 then fprintf stderr "  -> %s\n" (term_to_string (signature_of S) result)
+    result
 
+(*
 and try_reducing_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (t : TYPED_TERM) : TYPED_TERM =
     let opt_elems = try enum_finite_type ty S with _ -> None
     match t with
@@ -213,6 +228,7 @@ and try_reducing_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT)
                 |   None -> t
                 |   Some x -> Value' (ty, x)
     |   _ -> t
+*)
 
 and try_case_distinction_for_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts0 : TYPED_TERM list) : TYPED_TERM =
     let generate_cond_term (t, cases : (VALUE * TYPED_TERM) list) =
@@ -342,7 +358,12 @@ and s_eval_term_ (t : TYPED_TERM) ((S, env, C) : S_STATE * ENV * CONTEXT) =
     ann_term_induction (fun x -> x) {
         Value      = fun (ty, x) _ -> Value' (ty, x);
         Initial    = fun (ty, (f, xs)) _ -> Initial' (ty, (f, xs)); //Initial (f, xs);
+<<<<<<< HEAD
         AppTerm    = fun (ty, (f, ts)) (S, env, C) -> eval_app_term ty (S, env, C) (f, ts)  // try_reducing_term_with_finite_range ty (S, env, C) (eval_app_term ty (S, env, C) (f, ts));
+=======
+        AppTerm    = fun (ty, (f, ts)) (S, env, C) -> // try_reducing_term_with_finite_range ty (S, env, C) (eval_app_term ty (S, env, C) (f, ts));
+                                    eval_app_term ty (S, env, C) (f, ts) 
+>>>>>>> subset-domains
         CondTerm   = fun (ty, (G, t1, t2)) (S, env, C) -> eval_cond_term ty (S, env, C) (G, t1, t2);
         VarTerm    = fun (ty, v) -> fun (S, env, _) -> fst (get_env env v);
         QuantTerm  = fun (ty, (q_kind, v, t_set, t_cond)) (S, env, C) -> expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C);
@@ -358,7 +379,12 @@ and s_eval_term (t : TYPED_TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TYPED_T
             |   Value' (_, BOOL _)  -> t
             |   _ -> smt_eval_formula t (S, env, C)
     else    match t with
+<<<<<<< HEAD
             |   Initial' (ty, (f, xs)) -> t  // try_reducing_term_with_finite_range ty (S, env, C) t
+=======
+            |   Initial' (ty, (f, xs)) -> t
+                        //try_reducing_term_with_finite_range ty (S, env, C) t
+>>>>>>> subset-domains
             |   _ -> t
 
 //--------------------------------------------------------------------
