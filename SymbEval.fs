@@ -197,23 +197,6 @@ and expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C) : TYPED_TERM 
     |   Value' (_, SET xs) -> failwith (sprintf "SymbEval.forall_rule: this should not happen")
     |   x -> failwith (sprintf "SymbEval.expand_quantifier: not a set (%A): %A v" t_set x)
 
-and try_reducing_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (t : TYPED_TERM) : TYPED_TERM =
-    let opt_elems = try enum_finite_type ty S with _ -> None
-    match t with
-    |   Initial' (_, _) ->
-        match opt_elems with
-        |   None -> t
-        |   Some elems ->
-                let folder result elem =
-                    match result with
-                    |   Some _ -> result
-                    |   None -> if smt_eval_formula (AppTerm' (Boolean, (FctName "=", [t; Value' (ty, elem)]))) (S, env, C) = Value' (Boolean, TRUE) then Some elem else None
-                let opt_elem = Set.fold folder None elems
-                match opt_elem with
-                |   None -> t
-                |   Some x -> Value' (ty, x)
-    |   _ -> t
-
 and try_case_distinction_for_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts0 : TYPED_TERM list) : TYPED_TERM =
     let generate_cond_term (t, cases : (VALUE * TYPED_TERM) list) =
         let ty = get_type t
@@ -336,17 +319,17 @@ and eval_cond_term ty (S : S_STATE, env : ENV, C : CONTEXT) (G, t1 : S_STATE * E
 
 and eval_let_term (S, env, C) (v, t1, t2) =
     let t1 = t1 (S, env, C)
-    t2 (S, add_binding env (v, t1, get_type t1), C)       // !!!!! is this one correct at all?
+    t2 (S, add_binding env (v, t1, get_type t1), C)
 
 and s_eval_term_ (t : TYPED_TERM) ((S, env, C) : S_STATE * ENV * CONTEXT) =
     ann_term_induction (fun x -> x) {
         Value      = fun (ty, x) _ -> Value' (ty, x);
-        Initial    = fun (ty, (f, xs)) _ -> Initial' (ty, (f, xs)); //Initial (f, xs);
-        AppTerm    = fun (ty, (f, ts)) (S, env, C) -> eval_app_term ty (S, env, C) (f, ts)  // try_reducing_term_with_finite_range ty (S, env, C) (eval_app_term ty (S, env, C) (f, ts));
+        Initial    = fun (ty, (f, xs)) _ -> Initial' (ty, (f, xs));
+        AppTerm    = fun (ty, (f, ts)) (S, env, C) -> eval_app_term ty (S, env, C) (f, ts)
         CondTerm   = fun (ty, (G, t1, t2)) (S, env, C) -> eval_cond_term ty (S, env, C) (G, t1, t2);
         VarTerm    = fun (ty, v) -> fun (S, env, _) -> fst (get_env env v);
         QuantTerm  = fun (ty, (q_kind, v, t_set, t_cond)) (S, env, C) -> expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C);
-        LetTerm    = fun (ty, (v, t1, t2)) -> fun (S, env, _) -> eval_let_term (S, env, C) (v, t1, t2) //failwith "s_eval_term: LetTerm: not implemented yet";
+        LetTerm    = fun (ty, (v, t1, t2)) -> fun (S, env, _) -> eval_let_term (S, env, C) (v, t1, t2) 
         DomainTerm = fun (ty, dom) -> fun (S, env, C) -> match enum_finite_type dom S with Some xs -> Value' (ty, SET xs) | None -> failwith (sprintf "SymbEval.s_eval_term_: domain of type '%s' is not enumerable" (dom |> type_to_string))
     } t (S, env, C)
 
@@ -358,7 +341,7 @@ and s_eval_term (t : TYPED_TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TYPED_T
             |   Value' (_, BOOL _)  -> t
             |   _ -> smt_eval_formula t (S, env, C)
     else    match t with
-            |   Initial' (ty, (f, xs)) -> t  // try_reducing_term_with_finite_range ty (S, env, C) t
+            |   Initial' (ty, (f, xs)) -> t 
             |   _ -> t
 
 //--------------------------------------------------------------------

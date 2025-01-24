@@ -117,13 +117,6 @@ let invariant_counter = ref 1
 
 //--------------------------------------------------------------------
 
-let get_signature = Parser.get_signature
-let get_state = Parser.get_state
-let get_signature_from_input = Parser.get_signature_from_input
-let get_state_from_input = Parser.get_state_from_input
-
-//--------------------------------------------------------------------
-
 let pcharf = Parser.pcharf
 let ws_or_comment = Parser.ws_or_comment
 let skip_to_eos = Parser.skip_to_eos

@@ -379,31 +379,12 @@ let rec getDomainByID (s : ParserInput<PARSER_STATE>) : ParserResult<TYPE, PARSE
             let BasicTD = (kw "basic" << kw "domain" << ID_DOMAIN) |>> fun tyname -> add_basic_domain tyname
             AnyDomain <|> EnumTD <|> AbstractTD <|> BasicTD ) s
 
-(*
-let Term env s : ParserResult<TYPED_TERM, PARSER_STATE> =
-    if !trace > 0 then fprintf stderr "AsmetaL.Term\n"
-    let DomainTerm s =
-        if !trace > 0 then fprintf stderr "AsmetaL.DomainTerm\n"
-        try ( getDomainByID s )
-        with _ -> ParserFailure (combine_failures (Set.singleton (get_pos s, ($"type name expected, '{s}' found")), get_failures s))
-    let regularTerm s =
-        if !trace > 0 then fprintf stderr "Parser.term\n"
-        Parser.term s
-    (   ( DomainTerm  |>> fun tyname -> Parser.mkDomainTerm tyname (*!!!! AST.DomainTerm' tyname*) )
-    <|> ( regularTerm env ) ) s
-*)
-
 let rec simple_term (static_term, env0 : TypeEnv.TYPE_ENV) (s : ParserInput<PARSER_STATE>) : ParserResult<TYPED_TERM, PARSER_STATE> = 
-    // FiniteQuantificationTerm 	::= 	( ForallTerm | ExistUniqueTerm | ExistTerm )
-    // ExistTerm 	                ::= 	"(" <EXIST> VariableTerm <IN> Term ( "," VariableTerm <IN> Term )* ( <WITH> Term )? ")"
-    // ExistUniqueTerm 	            ::= 	"(" <EXIST> <UNIQUE> VariableTerm <IN> Term ( "," VariableTerm <IN> Term )* ( <WITH> Term )? ")"
-    // ForallTerm 	                ::= 	"(" <FORALL> VariableTerm <IN> Term ( "," VariableTerm <IN> Term )* ( <WITH> Term )? ")" 
     let term_in_env = term
     let simple_term = simple_term (static_term, env0)
     let term = term (static_term, env0)
     let mkAppTerm = mkAppTerm static_term
         // !!! temporary: only one binding allowed
-
     let quantificationTerm =
         let quantContent q_kind =
             let p1 = (variable_identifier) ++ (kw "in" << term)
@@ -419,11 +400,9 @@ let rec simple_term (static_term, env0 : TypeEnv.TYPE_ENV) (s : ParserInput<PARS
         (   ( kw "forall"                << no_backtrack "'forall' quantifier"       (quantContent Forall) )
         <|> ( kw "exist"  << kw "unique" << no_backtrack "'exist unique' quantifier" (quantContent ExistUnique) )
         <|> ( kw "exist"                 << no_backtrack "'exist' quantifier"        (quantContent Exist) ) )
-
     let DomainTerm s =   // DomainTerm from AsmetaL grammar
         try getDomainByID s
         with _ -> ParserFailure (combine_failures (Set.singleton (get_pos s, ($"type name expected, '{s}' found")), get_failures s))
-
     (       ( (kw "not" << simple_term)
                 |||>> fun reg (sign, _) t -> mkAppTerm (Some reg) sign (FctName "not", [t]) )
         <|> ( R3 (kw "if" << term) (kw "then" << term) (poption (kw "else" << term)) >> kw "endif"
