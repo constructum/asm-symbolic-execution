@@ -15,6 +15,8 @@ open SmtInterface
 
 let trace = ref 0
 let level = ref 0
+let module_name = "SymbEval"
+
 let rec spaces level = if level = 0 then "" else "    " + spaces (level-1)
 let rec indent level ppt = if level = 0 then ppt else blo4 [ indent (level-1) ppt ]
 
@@ -493,7 +495,11 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
     and eval_binary_seq R1 R2 (S, env, C): RULE = 
         match s_eval_rule R1 (S, env, C) with
         |   S_Updates U1 ->
-            (   let S' = sequel_s_state S U1
+            (   let S' =
+                    try sequel_s_state S U1
+                    with SymbUpdates.Error (_, _, SymbUpdates.InconsistentUpdates (sign, _, u1, u2, _)) ->
+                            raise (SymbUpdates.Error (module_name, "s_eval_rule.eval_binary_seq",
+                                SymbUpdates.InconsistentUpdates (sign, Some (List.ofSeq (fst C)), u1, u2, Some U1)))
                 match s_eval_rule R2 (S', env, C) with
                 |   S_Updates U2 ->
                         S_Updates (seq_merge_2 U1 U2)
@@ -645,7 +651,7 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
                 (Set.toList updates >>| fun ((f, xs), t) ->
                     sprintf "%s%s := %s"
                         f (if List.isEmpty xs then "" else "("^(String.concat ", " (xs >>| value_to_string))^")")
-                        (term_to_string sign (reconvert_term sign t)))
+                        (term_to_string sign t))
         let met inv_id =
             update_counters (function (m, v, u) -> (m + 1, v, u)) inv_id
             ""

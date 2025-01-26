@@ -4,27 +4,60 @@ open Common
 open Background
 open AST
 open SymbState
+open Signature
 
 //--------------------------------------------------------------------
 
 let trace = ref 0
 
+let module_name = "SymbUpdates"
+
 //--------------------------------------------------------------------
 
 type LOCATION = string * VALUE list
-
-let location_to_string : LOCATION -> string = Updates.location_to_string
-    
-//--------------------------------------------------------------------
 
 type S_UPDATE = LOCATION * TYPED_TERM
 type S_UPDATE_SET = Set<S_UPDATE>
 type S_UPDATE_MAP = Map<string, Map<VALUE list, TYPED_TERM>>
 
+//--------------------------------------------------------------------
+
+let location_to_string : LOCATION -> string = Updates.location_to_string
+
 let show_s_update sign ((f, xs), t) =
     sprintf "%s := %s"
         (if List.isEmpty xs then f else sprintf "%s (%s)" f (String.concat ", " (List.map value_to_string xs)))
         (PrettyPrinting.toString 80 (pp_term sign t))
+
+let show_s_update_set sign (U :S_UPDATE_SET) =
+    "{ " +
+    ( Set.toList U >>| show_s_update sign
+        |> String.concat ", "   ) +
+    " }"
+
+//--------------------------------------------------------------------
+
+type ErrorDetails =
+|   InconsistentUpdates of SIGNATURE * TYPED_TERM list option * S_UPDATE * S_UPDATE * S_UPDATE_SET option
+
+exception Error of string * string * ErrorDetails
+
+let error_msg (modul : string, fct : string, err : ErrorDetails) = 
+    sprintf "error - function %s.%s:\n" modul fct +
+    match err with
+    |   InconsistentUpdates (sign, opt_conditions, u1, u2, opt_u_set) ->
+            (   sprintf "\n--- inconsistent updates:\n%s\n%s\n" (show_s_update sign u1) (show_s_update sign u2) ) +
+            (   match opt_conditions with    
+                |   None -> ""
+                |   Some ts ->
+                        sprintf "\n--- initial state conditions leading to the inconsistent updates:\n%s\n"
+                            (String.concat "\n" (ts >>| term_to_string sign)) ) +
+            (   match opt_u_set with
+                |   None -> ""
+                |   Some U ->
+                        sprintf "\n--- updates collected on this path so far:\n%s\n" (String.concat "\n" (List.map (show_s_update sign) (List.ofSeq U))) )
+
+//--------------------------------------------------------------------
 
 let add_s_update (U : S_UPDATE_MAP) (u as (loc as (f, args), value): S_UPDATE) =
     if !trace > 0 then fprintf stderr "add_s_update: %s\n" (show_s_update Background.signature u)
@@ -33,23 +66,13 @@ let add_s_update (U : S_UPDATE_MAP) (u as (loc as (f, args), value): S_UPDATE) =
                  | Some table ->
                         Some (  if Map.containsKey args table
                                 then if value <> Map.find args table  // deal with conflicting updates
-                                     then failwith (sprintf
-                                            "SymbUpdates.add_s_update: update set inconsistent at location %s\n  existing update: %s\n  new_update: %s\n"
-                                                (loc |> location_to_string)
-                                                (show_s_update Background.signature (loc, Map.find args table))
-                                                (show_s_update Background.signature (loc, value)))
+                                     then raise (Error (module_name, "add_s_update", InconsistentUpdates (Background.signature, None, (loc, Map.find args table), (loc, value), None)))
                                      else table
                                 else Map.add args value table ) )
         U
 
 let s_update_set_to_s_update_map (U : S_UPDATE_SET) =
     Set.fold add_s_update Map.empty U
-
-let show_s_update_set sign (U :S_UPDATE_SET) =
-    "{ " +
-    ( Set.toList U >>| show_s_update sign
-        |> String.concat ", "   ) +
-    " }"
 
 //--------------------------------------------------------------------
 

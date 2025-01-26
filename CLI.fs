@@ -191,4 +191,5 @@ let CLI(args) =
     with
     |   Parser.Error (fct, reg, err)  -> writeln_err ("\n" + Parser.error_msg (fct, reg, err)); 1
     |   AsmetaL.Error (fct, reg, err) -> writeln_err ("\n" + AsmetaL.error_msg (fct, reg, err)); 1
+    |   SymbUpdates.Error (mdl, fct, err) -> writeln_err ("\n" + SymbUpdates.error_msg (mdl, fct, err)); 1
     |   Failure s -> writeln_err $"\nexception:\n{s}"; 1

@@ -200,7 +200,7 @@ let pp_app_term sign = function
 
 let pp_location_term sign prefix = function
     |   (f : string, xs : VALUE list) when xs <> [] ->
-            blo0 [ str (prefix+"["); str f; str ", "; str "("; blo0 (pp_list [str",";brk 1] (List.map (fun x -> str (value_to_string x)) xs)); str ")]" ]
+            blo0 [ str (prefix+"["); str f; str "("; blo0 (pp_list [str",";brk 1] (List.map (fun x -> str (value_to_string x)) xs)); str ")]" ]
     |   (f, _) -> blo0 [ str $"{prefix}[{f}]" ]
 
 let rec pp_term (sign : SIGNATURE) (t : TYPED_TERM) =
