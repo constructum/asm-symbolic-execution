@@ -33,23 +33,25 @@ dotnet run [OPTION]...
 
 ```
 Options:
-  -str <strg>   load definitions specified in string <strg>
-                  into the top-level environment
-  -file <file>  load definitions contained in file <file>
-                  into top-level environment
+  -str <strg>    load definitions specified in string <strg>
+                   into the top-level environment
+  -file <file>   load definitions contained in file <file>
+                   into top-level environment
 
-  -asmeta       use AsmetaL as input language
+  -asmeta        use AsmetaL as input language
+  -invcheck <n>  (AsmetaL only) check invariants during symbolic execution
+                   for at most <n> steps or indefinitely, if <n> not specified
 
-  -symbolic     symbolic execution of 'Main' rule (default)
-  -steps <n>    symbolic execution of <n> steps of 'Main' rule
-                  starting from initial state (default: n = 1)
+  -symbolic      symbolic execution of 'Main' rule (default)
+  -steps <n>     symbolic execution of <n> steps of 'Main' rule
+                   starting from initial state (default: n = 1)
 
-  -nonsymbolic  execute 'Main' rule non-symbolically
+  -nonsymbolic   execute 'Main' rule non-symbolically
 
-  -turbo2basic  turbo ASM to basic ASM transformation
-                  (all non-static functions are uninterpreted)
+  -turbo2basic   turbo ASM to basic ASM transformation
+                   (all non-static functions are uninterpreted)
 
-  -nosmt        do not use SMT solver
+  -nosmt         do not use SMT solver
 
-  -license      display license information
+  -license       display license information
 ```
