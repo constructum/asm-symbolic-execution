@@ -2,6 +2,8 @@ module SymbEval
 
 //--------------------------------------------------------------------
 
+open System.Diagnostics
+
 open Common
 open Background
 open AST
@@ -627,6 +629,13 @@ let symbolic_execution (R_in : RULE) (steps : int) : int * RULE =
     (count_s_updates R_out, reconvert_rule (S0._signature) R_out)
 
 let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : RULE) : unit =
+    let proc = Process.GetCurrentProcess()
+    let capture_cpu_time (proc : Process) =
+        (proc.TotalProcessorTime, proc.UserProcessorTime, proc.PrivilegedProcessorTime)
+    let measure_cpu_time (proc : Process) (cpu0, usr0, sys0) =
+        let (cpu1, usr1, sys1) = capture_cpu_time proc
+        ( (cpu1 - cpu0).TotalMilliseconds, (usr1 - usr0).TotalMilliseconds, (sys1 - sys0).TotalMilliseconds )
+    let (cpu0, usr0, sys0) = capture_cpu_time proc
     if (!trace > 2) then fprintf stderr "symbolic_execution_for_invariant_checking\n"
     let with_extended_path_cond = with_extended_path_cond (TopLevel.signature())
     match opt_steps with
@@ -641,6 +650,9 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
     let print_counters i () =
         printf "--- S_%d summary:\n" i
         Map.map (fun inv_id (m, v, u) -> printf "'%s': met on %d paths / definitely violated on %d paths / cannot be verified on %d paths\n" inv_id m v u) !counters |> ignore
+        let (cpu, usr, sys) = measure_cpu_time proc (cpu0, usr0, sys0)
+        print_time (cpu, usr, sys)
+        |> ignore
     let rec traverse i conditions R (S, env, C) =
         let initial_state_conditions_to_reach_this_state ts =
             sprintf "- this path is taken when the following conditions hold in the initial state:\n%s"

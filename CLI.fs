@@ -79,9 +79,6 @@ let license () =
             ""
             "" ]  |> String.concat "\n" )
 
-let print_time (cpu, usr, sys) =
-    writeln $"\n--- CPU time: {((float cpu) / 1000.0)}s (usr: {((float usr) / 1000.0)}s, sys: {((float sys) / 1000.0)}s)"
-
 let exec_symbolic (symb_exec_fct : AST.RULE -> 'a * AST.RULE) (main_rule_name : string) : unit =
     let (_, R_in) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
     match Common.time symb_exec_fct R_in with

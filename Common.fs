@@ -47,6 +47,9 @@ let time f args =
         //(None, Some ex, elapsed_time, cpu, usr, sys)
         reraise ()
 
+let print_time (cpu : float, usr  : float, sys : float) =
+    writeln $"\n--- CPU time: {((float cpu) / 1000.0)}s (usr: {((float usr) / 1000.0)}s, sys: {((float sys) / 1000.0)}s)"
+
 let readfile filename =
     try System.IO.File.ReadAllText filename
     with   :? System.IO.IOException as ex -> failwith (sprintf "error while trying to read file '%s'\nI/O error:\n%s\n" filename ex.Message)
