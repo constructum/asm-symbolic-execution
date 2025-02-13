@@ -681,7 +681,7 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
                 (show_cumulative_updates sign updates)
         let check_invariants invs S0 conditions updates =
             let check_one (inv_id, t) =
-                let t' = s_eval_term t (apply_s_update_set S0 updates, Map.empty, empty_context)
+                let t' = s_eval_term t (apply_s_update_set S0 updates, Map.empty, (Set.ofSeq conditions, Map.empty))
                 if smt_formula_is_true sign TopLevel.smt_ctx t'
                 then met inv_id
                 else if smt_formula_is_false sign TopLevel.smt_ctx t' then violated inv_id conditions updates t t'
