@@ -642,14 +642,14 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
     |   Some n -> if n < 0 then failwith "SymbEval.symbolic_execution_for_invariant_checking: number of steps must be >= 0"
     |   None -> ()
     let sign = TopLevel.signature()
-    let S0 = (state_to_s_state (TopLevel.initial_state ()))
+    let S0 = state_to_s_state (TopLevel.initial_state ())
     let invs = Map.toList (TopLevel.invariants ())
     let counters = ref Map.empty
     let reset_counters () = counters := Map.empty
     let update_counters f inv_id = counters := Map.change inv_id (function Some (m, v, u) -> Some (f (m, v, u)) | None -> Some (f (0, 0, 0))) (!counters)
     let print_counters i () =
-        printf "--- S_%d summary:\n" i
-        Map.map (fun inv_id (m, v, u) -> printf "'%s': met on %d paths / definitely violated on %d paths / cannot be verified on %d paths\n" inv_id m v u) !counters |> ignore
+        printf "\n--- S_%d summary:\n\n" i
+        Map.map (fun inv_id (m, v, u) -> printf "'%s': met on %d paths / definitely violated on %d paths / possibly violated on %d paths\n" inv_id m v u) !counters |> ignore
         let (cpu, usr, sys) = measure_cpu_time proc (cpu0, usr0, sys0)
         print_time (cpu, usr, sys)
         |> ignore
@@ -667,15 +667,15 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
         let met inv_id =
             update_counters (function (m, v, u) -> (m + 1, v, u)) inv_id
             ""
-        let not_evaluable inv_id conditions (updates : S_UPDATE_SET) t t' = 
+        let possibly_violated inv_id conditions (updates : S_UPDATE_SET) t t' = 
             update_counters (function (m, v, u) -> (m, v, u + 1)) inv_id
-            sprintf "---------------\n!!! invariant '%s' cannot be verified in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n\n%s\n\n---------------\n"
+            sprintf "\n!!! invariant '%s' possibly violated in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n\n%s\n\n---------------\n"
                 inv_id i (term_to_string sign t) (term_to_string sign t')
                 (initial_state_conditions_to_reach_this_state conditions)
                 (show_cumulative_updates sign updates)
-        let violated inv_id conditions updates t t' =
+        let definitely_violated inv_id conditions updates t t' =
             update_counters (function (m, v, u) -> (m, v + 1, u)) inv_id
-            sprintf "---------------\n!!! invariant '%s' violated in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n\n%s\n\n---------------\n"
+            sprintf "\n!!! invariant '%s' definitely violated in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n\n%s\n\n---------------\n"
                 inv_id i (term_to_string sign t) (term_to_string sign t')
                 (initial_state_conditions_to_reach_this_state conditions)
                 (show_cumulative_updates sign updates)
@@ -684,8 +684,8 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
                 let t' = s_eval_term t (apply_s_update_set S0 updates, Map.empty, (Set.ofSeq conditions, Map.empty))
                 if smt_formula_is_true sign TopLevel.smt_ctx t'
                 then met inv_id
-                else if smt_formula_is_false sign TopLevel.smt_ctx t' then violated inv_id conditions updates t t'
-                else not_evaluable inv_id conditions updates t t'
+                else if smt_formula_is_false sign TopLevel.smt_ctx t' then definitely_violated inv_id conditions updates t t'
+                else possibly_violated inv_id conditions updates t t'
             printf "%s" (String.concat "" (List.filter (fun s -> s <> "") (List.map check_one invs)))
         match R with      // check invariants on all paths of state S' = S0 + R by traversing tree of R
         |   CondRule (G, R1, R2) ->
