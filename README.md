@@ -2,13 +2,13 @@
 
 This is a prototype tool for symbolic execution of Abstract State Machines (ASM). It also supports a subset of the [AsmetaL](https://asmeta.github.io/userdoc.html) ASM-based specification language.
 
-This (https://github.com/constructum/asm-symbolic-execution/blob/main/doc/binary-search-example-animation.pdf)[animation] shows through a simple (https://github.com/constructum/asm-symbolic-execution/blob/main/doc/binary-search-example-animation.pdf)[example] (an ASM rule implementing a binary search) how the ASM symbolic execution works.
+This [animation](https://github.com/constructum/asm-symbolic-execution/blob/main/doc/binary-search-example-animation.pdf) shows through a simple [example](https://github.com/constructum/asm-symbolic-execution/blob/main/doc/binary-search-example-animation.pdf) (an ASM rule implementing a binary search) how the ASM symbolic execution works.
 
 The principles on which the symbolic execution engine is based are described in a short paper titled "Using Symbolic Execution to Transform Turbo Abstract State Machines into Basic Abstract State Machines" accepted for publication in the proceedings of the [ABZ 2024](https://abz-conf.org/site/2024/) conference (Springer Nature). An [extended version of the paper](https://github.com/constructum/asm-symbolic-execution/blob/main/doc/2024--Del-Castillo--extended-version-of-ABZ-2024-paper--Using-Symbolic-Execution-to-Transform-Turbo-ASM-into-Basic-ASM.pdf) (additionally including a summary of ASM syntax and semantics, more detailed explainations, a short description of the implementation, examples and experimental results) is available [here](https://github.com/constructum/asm-symbolic-execution/blob/main/doc/2024--Del-Castillo--extended-version-of-ABZ-2024-paper--Using-Symbolic-Execution-to-Transform-Turbo-ASM-into-Basic-ASM.pdf).
 
 The tool is based on a transformation of ASM transition rules, which eliminates `seq` and `iterate` rules to obtain a transition rule that condenses a whole sequential computation into one single step.
 
-An application of this tool to the detection of vulnerabilities in Ethereum smart contracts, modelled in AsmetaL, will be presented at the [ABZ 2025](https://abz-conf.org/site/2025/). For this purpose, the tool has been extended to support invariant checking in runs of regular single-agent ASMs (specified in the AsmetaL language). The (https://github.com/smart-contract-verification/ABZ2025)[smart contract models] can be found in this (https://github.com/smart-contract-verification/ABZ2025)[GitHub repository].
+An application of this tool to the detection of vulnerabilities in Ethereum smart contracts, modelled in AsmetaL, will be presented at the [ABZ 2025](https://abz-conf.org/site/2025/). For this purpose, the tool has been extended to support invariant checking in runs of regular single-agent ASMs (specified in the AsmetaL language). The [smart contract models](https://github.com/smart-contract-verification/ABZ2025) can be found in this [GitHub repository](https://github.com/smart-contract-verification/ABZ2025).
 
 Note: the 'ABZ2025' branch identifies the version of the tool used for the ABZ 2025 experiments.
 
