@@ -17,7 +17,7 @@ type SrcReg = SrcLoc * SrcPos * SrcPos     // file name, position before region,
 let src_reg_to_string = function
     (loc, pos1, pos2) -> sprintf "%s: [%d:%d]-[%d:%d]:" (src_loc_to_string loc) pos1.line pos1.col pos2.line pos2.col
 
-let opt_src_reg_to_string = function
+let opt_src_reg_to_string : SrcReg option -> string = function
 |   None -> ""
 |   Some reg -> sprintf "%s\n" (src_reg_to_string reg)
 
