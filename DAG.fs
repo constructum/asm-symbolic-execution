@@ -52,7 +52,7 @@ let global_ctxs : GLOBAL_CTX_TABLE = {
 }
 
 
-let mkTerm (GlobalCtx gctx_id) (t' : TERM') : TERM =
+let make_term (GlobalCtx gctx_id) (t' : TERM') : TERM =
     let ctx = global_ctxs.ctx_table.[gctx_id]
     if ctx.fwdTermTable.ContainsKey t' then
         ctx.fwdTermTable.[t']
@@ -70,21 +70,21 @@ let get_term' (gctx: GLOBAL_CTX) (Term term_id) =
     else
         failwith (sprintf "get_term': term %d not found in context %d" term_id gctx_id)
 
-let Value gctx x = mkTerm gctx (Value' x)
+let Value gctx x = make_term gctx (Value' x)
 
-let Initial gctx (f, xs) = mkTerm gctx (Initial' (f, xs))
+let Initial gctx (f, xs) = make_term gctx (Initial' (f, xs))
 
-let AppTerm gctx (f, ts) = mkTerm gctx (AppTerm' (f, ts))
+let AppTerm gctx (f, ts) = make_term gctx (AppTerm' (f, ts))
 
-let CondTerm gctx (G, t1, t2) = mkTerm gctx (CondTerm' (G, t1, t2))
+let CondTerm gctx (G, t1, t2) = make_term gctx (CondTerm' (G, t1, t2))
 
-let VarTerm gctx v = mkTerm gctx (VarTerm' v)
+let VarTerm gctx v = make_term gctx (VarTerm' v)
 
-let QuantTerm gctx (q_kind, v, t_set, t_cond) = mkTerm gctx (QuantTerm' (q_kind, v, t_set, t_cond))
+let QuantTerm gctx (q_kind, v, t_set, t_cond) = make_term gctx (QuantTerm' (q_kind, v, t_set, t_cond))
 
-let LetTerm gctx (x, t1, t2) = mkTerm gctx (LetTerm' (x, t1, t2))
+let LetTerm gctx (x, t1, t2) = make_term gctx (LetTerm' (x, t1, t2))
 
-let DomainTerm gctx tyname = mkTerm gctx (DomainTerm' tyname)    
+let DomainTerm gctx tyname = make_term gctx (DomainTerm' tyname)    
 
 //--------------------------------------------------------------------
 
