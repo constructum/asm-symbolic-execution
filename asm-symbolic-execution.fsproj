@@ -23,6 +23,7 @@
     <Compile Include="Parser.fs" />
     <Compile Include="AsmetaL.fs" />
     <Compile Include="SmtInterface.fs" />
+    <Compile Include="DAG.fs" />
     <Compile Include="TopLevel.fs" />
     <Compile Include="SymbEval.fs" />
     <Compile Include="CLI.fs" />
