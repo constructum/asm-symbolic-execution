@@ -7,9 +7,6 @@ open System.Collections.Generic
 open Common
 open PrettyPrinting
 open Background
-//open Signature
-// open AST
-// open SmtInterface
 
 //--------------------------------------------------------------------
 
@@ -28,10 +25,11 @@ type TERM_ATTRS = {
 }
 
 type GLOBAL_CTX' = {
-    signature    : Signature.SIGNATURE
-    s_state      : SymbState.S_STATE            // use only for initial state in this module, keep track of updates separately
-    fwdTermTable : Dictionary<TERM', TERM>
-    bwdTermTable : Dictionary<TERM, TERM' * TERM_ATTRS>
+    signature     : Signature.SIGNATURE
+    initial_state : State.STATE         // use only for initial state in this module, never use '_dynamic' field - also the second elem. of _dynamic_initial seems not to be used !
+    macros        : MACRO_DB
+    fwdTermTable  : Dictionary<TERM', TERM>
+    bwdTermTable  : Dictionary<TERM, TERM' * TERM_ATTRS>
 }
 
 and GLOBAL_CTX = GlobalCtx of int
@@ -54,19 +52,29 @@ and TERM' =
 
 and TERM = Term of int
 
+and MACRO_DB = Map<Signature.FCT_NAME, string list * TERM>   // for derived functions = macros
+
+and LOCATION = string * VALUE list
+and S_UPDATE = LOCATION * TERM
+and S_UPDATE_SET = Set<S_UPDATE>
+and S_UPDATE_MAP = Map<string, Map<VALUE list, TERM>>
+
+//--------------------------------------------------------------------
+
 let global_ctxs : GLOBAL_CTX_TABLE = {
     ctx_table = new Dictionary<int, GLOBAL_CTX'>()
     next_ctx  = ref 0
 }
 
-let new_global_ctx (sign : Signature.SIGNATURE, s_state : SymbState.S_STATE) =
+let new_global_ctx (sign : Signature.SIGNATURE, initial_state : State.STATE) =
     let ctx_id = !global_ctxs.next_ctx
     global_ctxs.next_ctx := ctx_id + 1
     let new_ctx = {
-        signature    = sign
-        s_state      = s_state
-        fwdTermTable = new Dictionary<TERM', TERM>(HashIdentity.Structural)
-        bwdTermTable = new Dictionary<TERM, TERM' * TERM_ATTRS>(HashIdentity.Structural)
+        signature     = sign
+        initial_state = initial_state
+        macros        = Map.empty
+        fwdTermTable  = new Dictionary<TERM', TERM>(HashIdentity.Structural)
+        bwdTermTable  = new Dictionary<TERM, TERM' * TERM_ATTRS>(HashIdentity.Structural)
     }
     global_ctxs.ctx_table.[ctx_id] <- new_ctx
     GlobalCtx ctx_id
@@ -80,8 +88,11 @@ let get_global_ctx' (GlobalCtx gctx_id) =
 let signature_of (GlobalCtx gctx_id) =
     global_ctxs.ctx_table.[gctx_id].signature
 
-let s_state_of (GlobalCtx gctx_id) =
-    global_ctxs.ctx_table.[gctx_id].s_state
+let initial_state_of (GlobalCtx gctx_id) =
+    global_ctxs.ctx_table.[gctx_id].initial_state
+
+let macros_of (GlobalCtx gctx_id) =
+    global_ctxs.ctx_table.[gctx_id].macros
 
 let rec compute_type gctx (t' : TERM') : Signature.TYPE =
     let (sign, get_type) = (signature_of gctx, get_type gctx)
@@ -279,6 +290,101 @@ let name_to_string t    = t |> pp_name |> PrettyPrinting.toString 80
 let term_to_string sign t    = t |> pp_term sign |> PrettyPrinting.toString 80
 let rule_to_string sign t    = t |> pp_rule sign |> PrettyPrinting.toString 80
 
+//--------------------------------------------------------------------
+//
+//  locations, symbolic updates, symbolic update sets
+//
+//--------------------------------------------------------------------
+
+let location_to_string : LOCATION -> string = Updates.location_to_string
+
+let show_s_update gctx ((f, xs), t) =
+    sprintf "%s := %s"
+        (if List.isEmpty xs then f else sprintf "%s (%s)" f (String.concat ", " (List.map value_to_string xs)))
+        (PrettyPrinting.toString 80 (pp_term gctx t))
+
+let show_s_update_set sign (U :S_UPDATE_SET) =
+    "{ " +
+    ( Set.toList U >>| show_s_update sign
+        |> String.concat ", "   ) +
+    " }"
+
+type ErrorDetails =
+|   InconsistentUpdates of GLOBAL_CTX * TERM list option * S_UPDATE * S_UPDATE * S_UPDATE_SET option
+
+exception Error of GLOBAL_CTX * string * string * ErrorDetails
+
+let error_msg (gctx : GLOBAL_CTX, modul : string, fct : string, err : ErrorDetails) = 
+    sprintf "error - function %s.%s:\n" modul fct +
+    match err with
+    |   InconsistentUpdates (gctx, opt_conditions, u1, u2, opt_u_set) ->
+            (   sprintf "\n--- inconsistent updates:\n%s\n%s\n" (show_s_update gctx u1) (show_s_update gctx u2) ) +
+            (   match opt_conditions with    
+                |   None -> ""
+                |   Some ts ->
+                        sprintf "\n--- initial state conditions leading to the inconsistent updates:\n%s\n"
+                            (String.concat "\n" (ts >>| term_to_string gctx)) ) +
+            (   match opt_u_set with
+                |   None -> ""
+                |   Some U ->
+                        sprintf "\n--- updates collected on this path so far:\n%s\n" (String.concat "\n" (List.map (show_s_update gctx) (List.ofSeq U))) )
+
+let add_s_update gctx (U : S_UPDATE_MAP) (u as (loc as (f, args), value): S_UPDATE) =
+    if !trace > 0 then fprintf stderr "add_s_update: %s\n" (show_s_update gctx u)
+    Map.change f
+        ( function None -> Some (Map.add args value Map.empty)
+                 | Some table ->
+                        Some (  if Map.containsKey args table
+                                then if value <> Map.find args table  // deal with conflicting updates
+                                     then raise (Error (gctx, module_name, "add_s_update", InconsistentUpdates (gctx, None, (loc, Map.find args table), (loc, value), None)))
+                                     else table
+                                else Map.add args value table ) )
+        U
+
+let s_update_set_to_s_update_map gctx (U : S_UPDATE_SET) =
+    Set.fold (add_s_update gctx) Map.empty U
+
+let consistent gctx (U : S_UPDATE_SET) =
+    try let x = s_update_set_to_s_update_map gctx U
+        in true
+    with Failure _ -> false
+    
+let locations (U : S_UPDATE_SET) : Set<LOCATION> =
+    Set.map (fun (loc, value) -> loc) U
+
+let seq_merge_2 gctx (U : S_UPDATE_SET) (V : S_UPDATE_SET) =
+    if not (consistent gctx U)
+    then U
+    else let U_reduced = Set.filter (fun (loc, _) -> not (Set.contains loc (locations V))) U
+         in Set.union U_reduced V
+
+let seq_merge_n gctx (Us : S_UPDATE_SET list) : S_UPDATE_SET =
+    List.fold (seq_merge_2 gctx) Set.empty Us
+
+let apply_s_update_map (UM0 : S_UPDATE_MAP) (UM' : S_UPDATE_MAP) =
+    let update_dynamic_function_table (f_table : Map<VALUE list, TERM>) (updates_of_f : Map<VALUE list, TERM>) =
+            Map.fold (fun table args value -> Map.add args value table) f_table updates_of_f
+    let apply_to_s_update_map (UM0 : S_UPDATE_MAP) (UM' : S_UPDATE_MAP) =
+            Map.fold
+                ( fun UM f updates_of_f ->
+                    Map.change f
+                        (function None -> Some (update_dynamic_function_table Map.empty updates_of_f) 
+                                | Some f_table -> Some (update_dynamic_function_table f_table updates_of_f)) UM )
+                UM0 UM'
+    in  apply_to_s_update_map UM0 UM'
+
+let apply_s_update_set gctx S U =
+    apply_s_update_map S (s_update_set_to_s_update_map gctx U)
+
+let sequel_s_state = apply_s_update_set
+
+//--------------------------------------------------------------------
+
+let empty_macro_db : MACRO_DB = Map.empty
+let macro_db_override (db1 : MACRO_DB) (db' : MACRO_DB) : MACRO_DB = Common.map_override db1 db'
+let add_macro macro_name ((args, t) : string list * TERM) (db : MACRO_DB) = Map.add macro_name (args, t) db
+let exists_macro macro_name (db : MACRO_DB) = Map.containsKey macro_name db
+let get_macro macro_name (db : MACRO_DB) = Map.find macro_name db
 
 //--------------------------------------------------------------------
 
@@ -305,26 +411,150 @@ let get_values S (ts : TERM list) : VALUE list option =    // only if all argume
 
 //--------------------------------------------------------------------
 
-type CONTEXT = Set<TERM> // * S_UPDATE_MAP
+type PATH_COND = Set<TERM> // * S_UPDATE_MAP
 
 //let empty_context : CONTEXT = (Set.empty, Map.empty)
 //let add_cond (G : TERM) (C : CONTEXT as (C1, C2)) = (Set.add G C1, C2)
-let add_cond (G : TERM) (C : CONTEXT) = (Set.add G C)
+let add_cond (G : TERM) (C : PATH_COND) = (Set.add G C)
 //let add_intp (f : string, xs : VALUE list, t : TERM) (C : CONTEXT as (C1, C2)) = (C1, SymbUpdates.add_s_update C2 ((f, xs), t))
 
-let interpretation_in_context (S : SymbState.S_STATE) (C : CONTEXT) (f : Signature.NAME) (xs : VALUE list) =
-    SymbState.interpretation S f xs
-(*
+let fct_name_interpretation (S : GLOBAL_CTX) (UM : S_UPDATE_MAP) (C : PATH_COND) (f : Signature.FCT_NAME) (args : VALUE list) =
+    let initial_state = initial_state_of S
+    let (sign, Value) = (signature_of S, Value S)
+    let (static_state, dynamic_initial_state) = (initial_state._static, initial_state._dynamic_initial)
+    let kind =
+        try Signature.fct_kind f (signature_of S)
+        with _ -> failwith (sprintf "DAG.fct_name_interpretation: function '%s' not defined in signature" f)
+    if !trace > 0 then fprintfn stderr "DAG.fct_name_interpretation: %s kind=%s" f (Signature.fct_kind_to_string kind)
+    match kind with
+    |   Signature.Constructor ->
+            if !trace > 0 then fprintfn stderr "DAG.fct_name_interpretation: constructor '%s'" f
+            Value (CELL (f, args))
+    |   Signature.Static -> 
+            let f' = try Map.find f static_state with _ -> failwith (sprintf "DAG.fct_name_interpretation: static function name '%s' has no interpretation" f)
+            match f' args with 
+            |   UNDEF -> failwith (sprintf "DAG.fct_name_interpretation: static function '%s' not defined on (%s)" f (String.concat ", " (args >>| value_to_string)))
+            |   x -> Value x 
+    |   Signature.Controlled ->
+            try Map.find args (Map.find f UM)
+            with _ ->
+                try Value (Map.find f (fst dynamic_initial_state) args)
+                with _ -> ( try Initial S (f, args)
+                            with _ -> failwith (sprintf "DAG.fct_name_interpretation: mkInitial failed for function '%s', arguments (%s)" f (String.concat ", " (args >>| value_to_string))) )
+    |   _ ->
+        failwith (sprintf "DAG.fct_name_interpretation: unsupported function kind '%s' for function name '%s'" (Signature.fct_kind_to_string kind) f)
+
+
+let interpretation (S : GLOBAL_CTX) (UM : S_UPDATE_MAP) (C : PATH_COND) (f : Signature.NAME) =
     match f with
-    |   Signature.FctName f_name ->
-        match Map.tryFind f_name (snd C) with
-        |   Some f_table ->
-            match Map.tryFind xs f_table with
-            |   Some t -> t
-            |   None -> SymbState.interpretation S f xs
-        |   None -> SymbState.interpretation S f xs
-    |   _ -> SymbState.interpretation S f xs
-*)
+    |   Signature.UndefConst -> (fun _ -> Value S UNDEF)
+    |   Signature.BoolConst b -> (fun _ -> Value S (BOOL b))
+    |   Signature.IntConst i -> (fun _ -> Value S (INT i))
+    |   Signature.StringConst s -> (fun _ -> Value S (STRING s))
+    |   Signature.FctName f -> (fun (args : VALUE list) -> fct_name_interpretation S UM C f args)
+
+//--------------------------------------------------------------------
+//
+//  SMT solver interface
+//  
+//--------------------------------------------------------------------
+
+let rec smt_map_term_background_function gctx (C : SmtInterface.SMT_CONTEXT) (f, ts : TERM list) : SmtInterface.SMT_EXPR =
+    let sign = signature_of gctx
+    let ctx = !C.ctx
+    let es = ts >>| smt_map_term gctx C
+    match (f, es) with
+    |   ("=",       [ SmtInterface.SMT_BoolExpr e1; SmtInterface.SMT_BoolExpr e2 ]) -> SmtInterface.SMT_BoolExpr (ctx.MkEq (e1, e2))
+    |   ("=",       [ SmtInterface.SMT_IntExpr e1;  SmtInterface.SMT_IntExpr e2 ])  -> SmtInterface.SMT_BoolExpr (ctx.MkEq (e1, e2))
+    |   ("=",       [ SmtInterface.SMT_Expr e1;     SmtInterface.SMT_Expr e2 ])     -> SmtInterface.SMT_BoolExpr (ctx.MkEq (e1, e2))
+    |   ("!=",      [ SmtInterface.SMT_BoolExpr e1; SmtInterface.SMT_BoolExpr e2 ]) -> SmtInterface.SMT_BoolExpr (ctx.MkNot (ctx.MkEq (e1, e2)))
+    |   ("!=",      [ SmtInterface.SMT_IntExpr e1;  SmtInterface.SMT_IntExpr e2 ])  -> SmtInterface.SMT_BoolExpr (ctx.MkNot (ctx.MkEq (e1, e2)))
+    |   ("!=",      [ SmtInterface.SMT_Expr e1;     SmtInterface.SMT_Expr e2 ])     -> SmtInterface.SMT_BoolExpr (ctx.MkNot (ctx.MkEq (e1, e2)))
+    |   ("not",     [ SmtInterface.SMT_BoolExpr e ])                                -> SmtInterface.SMT_BoolExpr (ctx.MkNot e)
+    |   ("and",     [ SmtInterface.SMT_BoolExpr e1; SmtInterface.SMT_BoolExpr e2 ]) -> SmtInterface.SMT_BoolExpr (ctx.MkAnd (e1, e2))
+    |   ("or",      [ SmtInterface.SMT_BoolExpr e1; SmtInterface.SMT_BoolExpr e2 ]) -> SmtInterface.SMT_BoolExpr (ctx.MkOr (e1, e2))
+    |   ("xor",     [ SmtInterface.SMT_BoolExpr e1; SmtInterface.SMT_BoolExpr e2 ]) -> SmtInterface.SMT_BoolExpr (ctx.MkXor (e1, e2))
+    |   ("implies", [ SmtInterface.SMT_BoolExpr e1; SmtInterface.SMT_BoolExpr e2 ]) -> SmtInterface.SMT_BoolExpr (ctx.MkImplies (e1, e2))
+    |   ("iff",     [ SmtInterface.SMT_BoolExpr e1; SmtInterface.SMT_BoolExpr e2 ]) -> SmtInterface.SMT_BoolExpr (ctx.MkIff (e1, e2))
+    |   (">",       [ SmtInterface.SMT_IntExpr e1;  SmtInterface.SMT_IntExpr e2 ])  -> SmtInterface.SMT_BoolExpr (ctx.MkGt (e1, e2))
+    |   (">=",      [ SmtInterface.SMT_IntExpr e1;  SmtInterface.SMT_IntExpr e2 ])  -> SmtInterface.SMT_BoolExpr (ctx.MkGe (e1, e2))
+    |   ("<",       [ SmtInterface.SMT_IntExpr e1;  SmtInterface.SMT_IntExpr e2 ])  -> SmtInterface.SMT_BoolExpr (ctx.MkLt (e1, e2))
+    |   ("<=",      [ SmtInterface.SMT_IntExpr e1;  SmtInterface.SMT_IntExpr e2 ])  -> SmtInterface.SMT_BoolExpr (ctx.MkLe (e1, e2))
+    |   ("+",       [ SmtInterface.SMT_IntExpr e1;  SmtInterface.SMT_IntExpr e2 ])  -> SmtInterface.SMT_IntExpr (ctx.MkAdd (e1, e2) :?> Microsoft.Z3.IntExpr)
+    |   ("-",       [ SmtInterface.SMT_IntExpr e1;  SmtInterface.SMT_IntExpr e2 ])  -> SmtInterface.SMT_IntExpr (ctx.MkSub (e1, e2) :?> Microsoft.Z3.IntExpr)
+    |   ("*",       [ SmtInterface.SMT_IntExpr e1;  SmtInterface.SMT_IntExpr e2 ])  -> SmtInterface.SMT_IntExpr (ctx.MkMul (e1, e2) :?> Microsoft.Z3.IntExpr)
+    |   _ -> failwith (sprintf "smt_map_term_background_function: error (t = %s)" (term_to_string gctx (AppTerm gctx (Signature.FctName f, ts))))
+
+and smt_map_term_user_defined_function gctx (C : SmtInterface.SMT_CONTEXT) (f, ts : TERM list) : SmtInterface.SMT_EXPR =
+    let sign = signature_of gctx
+    let (ctx, fct) = (!C.ctx, !C.fct)
+    let fail (f, dom, ran) =
+        failwith (sprintf "smt_map_term_user_defined_function: function '%s : %s -> %s' not found" f (Signature.type_list_to_string dom) (Signature.type_to_string ran))
+    if Signature.fct_kind f sign = Signature.Controlled
+    then
+        match (f, Signature.fct_type f sign, ts >>| fun t -> smt_map_term gctx C t) with
+        |   (f, (dom, Signature.Boolean), es) ->
+                try SmtInterface.SMT_BoolExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| SmtInterface.convert_to_expr)) :?> Microsoft.Z3.BoolExpr) with _ -> fail (f, dom, Signature.Boolean)
+        |   (f, (dom, Signature.Subset (_, Signature.Boolean)), es) ->       // !!! is it allowed in AsmetaL to have nested subset types? in that case this would fail
+                try SmtInterface.SMT_BoolExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| SmtInterface.convert_to_expr)) :?> Microsoft.Z3.BoolExpr) with _ -> fail (f, dom, Signature.Boolean)
+        |   (f, (dom, Signature.Integer), es) ->
+                try SmtInterface.SMT_IntExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| SmtInterface.convert_to_expr)) :?> Microsoft.Z3.IntExpr) with _ -> fail (f, dom, Signature.Integer)
+        |   (f, (dom, Signature.Subset (_, Signature.Integer)), es) ->       // !!! is it allowed in AsmetaL to have nested subset types? in that case this would fail
+                try SmtInterface.SMT_IntExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| SmtInterface.convert_to_expr)) :?> Microsoft.Z3.IntExpr) with _ -> fail (f, dom, Signature.Integer)
+        |   (f, (dom, (ran as Signature.TypeCons (tyname, []))), es) ->
+                let (kind, ar) = (Signature.type_kind tyname sign, Signature.type_arity tyname sign)
+                if kind <> Signature.EnumType || ar <> 0 then failwith (sprintf "smt_map_term_user_defined_function: types in function '%s : %s -> %s' not supported" f (Signature.type_list_to_string dom) (Signature.type_to_string ran))
+                try SmtInterface.SMT_Expr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| SmtInterface.convert_to_expr))) with _ -> fail (f, dom, ran)
+        |   (f, (_, ran), _) -> failwith (sprintf "smt_map_term_user_defined_function : error (t = %s)" (term_to_string gctx (AppTerm gctx (Signature.FctName f, ts))))
+    else failwith (sprintf "smt_map_term_user_defined_function: unsupported function kind '%s' of function '%s'" (Signature.fct_kind f sign |> Signature.fct_kind_to_string) f)
+
+and smt_map_ITE gctx (C : SmtInterface.SMT_CONTEXT) (G_, t1_, t2_) : SmtInterface.SMT_EXPR =
+    let sign = signature_of gctx
+    let ctx = !C.ctx
+    let err_msg (G, T_G, t1, T_t1, t2, T_t2) =
+        failwith (sprintf "smt_map_ITE: type error: for term %s the expected type is (Boolean, T, T), where T is Boolean, Integer or a user-defined type; type (%s, %s, %s) found instead"
+            (term_to_string gctx (CondTerm gctx (G, t1, t2))) (Signature.type_to_string T_G) (Signature.type_to_string T_t1) (Signature.type_to_string T_t2) )
+    match (smt_map_term gctx C G_, get_type gctx G_, smt_map_term gctx C t1_, get_type gctx t1_, smt_map_term gctx C t2_, get_type gctx t2_) with
+    |   (SmtInterface.SMT_BoolExpr G, Signature.Boolean, SmtInterface.SMT_BoolExpr t1, Signature.Boolean, SmtInterface.SMT_BoolExpr t2, Boolean) ->
+            SmtInterface.SMT_BoolExpr (ctx.MkITE (G, t1 :> Microsoft.Z3.Expr, t2 :> Microsoft.Z3.Expr) :?> Microsoft.Z3.BoolExpr)
+    |   (SmtInterface.SMT_BoolExpr G, Signature.Boolean, SmtInterface.SMT_IntExpr t1, Signature.Integer, SmtInterface.SMT_IntExpr t2, Integer) ->
+            SmtInterface.SMT_IntExpr (ctx.MkITE (G, t1 :> Microsoft.Z3.Expr, t2 :> Microsoft.Z3.Expr) :?> Microsoft.Z3.IntExpr)
+    |   (SmtInterface.SMT_BoolExpr G, Signature.Boolean, SmtInterface.SMT_Expr t1, Signature.TypeCons (tyname1, []), SmtInterface.SMT_Expr t2, Signature.TypeCons (tyname2, [])) ->
+            if tyname1 = tyname2
+            then SmtInterface.SMT_Expr (ctx.MkITE (G, (t1 : Microsoft.Z3.Expr), (t2 : Microsoft.Z3.Expr)) : Microsoft.Z3.Expr)
+            else err_msg (G_, Signature.Boolean, t1_, Signature.TypeCons (tyname1, []), t2_, Signature.TypeCons (tyname2, []))
+    |   (_, T_G, _, T_t1, _, T_t2) -> err_msg (G_, T_G, t1_, T_t1, t2_, T_t2)
+
+and smt_map_app_term gctx (C : SmtInterface.SMT_CONTEXT) (f, ts) : SmtInterface.SMT_EXPR =
+    let sign = signature_of gctx
+    if Set.contains f (Signature.fct_names Background.signature)
+    then smt_map_term_background_function gctx C (f, ts)
+    else if Signature.fct_kind f sign = Signature.Static
+         then smt_map_term_user_defined_function gctx C (f, ts)
+         else failwith (sprintf "smt_map_app_term: '%s' is not a static function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
+
+and smt_map_initial gctx (C : SmtInterface.SMT_CONTEXT) (f, ts) : SmtInterface.SMT_EXPR =
+    let sign = signature_of gctx
+    if Signature.fct_kind f sign = Signature.Controlled
+    then smt_map_term_user_defined_function gctx C (f, ts)
+    else failwith (sprintf "smt_map_app_term: '%s' is not a controlled function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
+
+and smt_map_term (gctx : GLOBAL_CTX) (C : SmtInterface.SMT_CONTEXT) (t : TERM) : SmtInterface.SMT_EXPR =
+    //if !trace > 0 then fprintf stderr "smt_map_term: %s -> " (term_to_string sign t)
+    let ctx = !C.ctx
+    let result = 
+        match get_term' gctx t with
+        |   AppTerm' (Signature.IntConst i, [])    -> SmtInterface.SMT_IntExpr (ctx.MkInt i)
+        |   Value' (INT i)               -> SmtInterface.SMT_IntExpr (ctx.MkInt i)
+        |   AppTerm' (Signature.BoolConst b, [])   -> SmtInterface.SMT_BoolExpr (ctx.MkBool b)
+        |   Value' (BOOL b)              -> SmtInterface.SMT_BoolExpr (ctx.MkBool b)
+        |   Value' (CELL (cons, []))     -> SmtInterface.SMT_Expr (Map.find cons (!C.con))
+        |   Initial' (f, xs)             -> smt_map_initial gctx C (f, xs >>| Value gctx)
+        |   CondTerm' (G, t1, t2)        -> smt_map_ITE gctx C (G, t1, t2)
+        |   AppTerm' (Signature.FctName f, ts) -> smt_map_app_term gctx C (f, ts)
+        |   _ -> failwith (sprintf "smt_map_term: not supported (t = %s)" (term_to_string gctx t))
+    result
+
 //--------------------------------------------------------------------
 //
 //  symbolic evaluator
@@ -384,13 +614,16 @@ let s_iff S (phi1, phi2) =
     |   (_, Value' (BOOL true)) -> phi1
     |   (_, _) -> if phi1 = phi2 then Value S TRUE else AppTerm S (Signature.FctName "iff", [phi1; phi2])
 
-//--------------------------------------------------------------------
 
 let ctx_condition S C =
     List.fold (fun a -> fun b -> s_and S (a, b)) (Value S TRUE) (Set.toList C)
 
-// let smt_assert_update (S, env, C) ((f, xs), t) =
-//     smt_assert (signature_of S) TopLevel.smt_ctx (s_equals (AppTerm (FctName f, xs >>| Value), t))
+let smt_assert (S : GLOBAL_CTX) C (phi : TERM) =
+    if get_type S phi = Signature.Boolean
+    then match smt_map_term S C phi with
+         | SmtInterface.SMT_BoolExpr be -> C.ctr := !C.ctr + 1; (!C.slv).Assert be
+         | _ -> failwith (sprintf "smt_assert: error converting Boolean term (term = %s)" (term_to_string S phi))
+    else failwith (sprintf "'smt_assert' expects a Boolean term, %s found instead " (term_to_string S phi))
 
 (*
 let ctx_to_smt (S, env, C) =
@@ -399,10 +632,12 @@ let ctx_to_smt (S, env, C) =
     Set.map (fun phi -> smt_assert (signature_of S) TopLevel.smt_ctx phi) C |> ignore
 *)
 
-let with_extended_path_cond sign (G : TERM) eval_fct (S : SymbState.S_STATE, env : ENV, C : CONTEXT) =
+//let with_extended_path_cond sign G eval_fct (S : S_STATE, env : ENV, C : CONTEXT) =
+
+let with_extended_path_cond (gctx : GLOBAL_CTX) (G : TERM) eval_fct (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) =
     SmtInterface.smt_solver_push TopLevel.smt_ctx
-    SmtInterface.smt_assert sign TopLevel.smt_ctx G
-    let result = eval_fct () (S, env, add_cond G C)
+    smt_assert gctx TopLevel.smt_ctx G
+    let result = eval_fct () gctx (UM, env, add_cond G pc)
     SmtInterface.smt_solver_pop TopLevel.smt_ctx
     result
 
@@ -411,7 +646,7 @@ let with_extended_path_cond sign (G : TERM) eval_fct (S : SymbState.S_STATE, env
 let smt_formula_is_true (S : GLOBAL_CTX) (C : SmtInterface.SMT_CONTEXT) (phi : TERM) =
     let get_type = get_type S
     if get_type phi = Signature.Boolean
-    then match smt_map_term sign C phi with
+    then match smt_map_term S C phi with
          | SmtInterface.SMT_BoolExpr be -> C.ctr := !C.ctr + 1; ((!C.slv).Check ((!C.ctx).MkNot be) = Microsoft.Z3.Status.UNSATISFIABLE)
          | _ -> failwith (sprintf "smt_formula_is_true: error converting Boolean term (term = %s)" (term_to_string S phi))
     else failwith (sprintf "'smt_formula_is_true' expects a Boolean term, %s found instead " (term_to_string S phi))
@@ -419,259 +654,259 @@ let smt_formula_is_true (S : GLOBAL_CTX) (C : SmtInterface.SMT_CONTEXT) (phi : T
 let smt_formula_is_false (S : GLOBAL_CTX) (C : SmtInterface.SMT_CONTEXT) (phi : TERM) =
     let get_type = get_type S
     if get_type phi = Signature.Boolean
-    then match smt_map_term sign C phi with
+    then match smt_map_term S C phi with
          | SmtInterface.SMT_BoolExpr be -> C.ctr := !C.ctr + 1; ((!C.slv).Check be = Microsoft.Z3.Status.UNSATISFIABLE)
          | _ -> failwith (sprintf "smt_formula_is_false: error converting Boolean term (term = %s)" (term_to_string S phi))
     else failwith (sprintf "'smt_formula_is_false' expects a Boolean term, %s found instead " (term_to_string S phi))
 
-let rec smt_eval_formula (phi : TERM) (S : GLOBAL_CTX, env, C) =
+let rec smt_eval_formula (phi : TERM) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env, pc : PATH_COND) =
     // precondition: term_type sign phi = Boolean
-    let sign = signature_of S
-    if !trace > 0 then fprintf stderr "smt_eval_formula(%s) -> " (term_to_string S phi)
-    let phi = expand_term phi (S, env, C)
+    let sign = signature_of C
+    if !trace > 0 then fprintf stderr "smt_eval_formula(%s) -> " (term_to_string C phi)
+    let phi = expand_term phi C (UM, env, pc)
     let result =
-        if (!SymbEval.use_smt_solver && smt_formula_is_true S TopLevel.smt_ctx phi)
-        then Value S (BOOL true)
-        else if (!SymbEval.use_smt_solver && smt_formula_is_true S TopLevel.smt_ctx (s_not S phi))
-        then Value S (BOOL false)
+        if (!SymbEval.use_smt_solver && smt_formula_is_true C TopLevel.smt_ctx phi)
+        then Value C (BOOL true)
+        else if (!SymbEval.use_smt_solver && smt_formula_is_true C TopLevel.smt_ctx (s_not C phi))
+        then Value C (BOOL false)
         else phi
     // old version before using solver push and pop: // smt_solver_reset TopLevel.smt_ctx
-    if !trace > 0 then fprintf stderr "%s\n" (term_to_string S result)
+    if !trace > 0 then fprintf stderr "%s\n" (term_to_string C result)
     result
 
-and expand_term t (S : GLOBAL_CTX, env, C) : TERM =
-    let (s_state, get_type) = (s_state_of S, get_type S)
-    term_induction S (fun x -> x) {
-        Value   = fun x (S, env, C) -> Value S x;
-        Initial = fun (f, xs) (S, env, C) -> Initial S (f, xs)
-        AppTerm = fun (f, ts) (S, env, C) ->
-            let sign = signature_of S
+and expand_term t (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+    let get_type = get_type C
+    term_induction C (fun x -> x) {
+        Value   = fun x (UM, env, pc) -> Value C x;
+        Initial = fun (f, xs) (UM, env, pc) -> Initial C (f, xs)
+        AppTerm = fun (f, ts) (UM : S_UPDATE_MAP, env, pc) ->
+            let sign = signature_of C
             match f with
             |   Signature.FctName fct_name ->
                     // static functions that are not primitive functions (i.e. not in the 'background') are expanded like macros
                     if Signature.fct_kind fct_name sign = Signature.Static && not (Map.containsKey fct_name Background.state) then
                         let (formals, body) =
-                            try Map.find fct_name (TopLevel.macros ())     // !!! should not use global TopLevel.macros
-                            with _ -> failwith (sprintf "SymbEval.expand_term: definition of static function '%s' not found in macros database" fct_name)
-                        let ts = ts >>| fun t -> t (S, env, C)
+                            try Map.find fct_name (macros_of C)     // !!! should not use global TopLevel.macros
+                            with _ -> failwith (sprintf "DAG.expand_term: definition of static function '%s' not found in macros database" fct_name)
+                        let ts = ts >>| fun t -> t (UM, env, pc)
                         let env' =
-                            List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (S, env, C), get_type arg)) env formals ts
-                        s_eval_term body (S, env', C)
-                    else AppTerm S (f, ts >>| fun t -> t (S, env, C))
-            |   _ -> AppTerm S (f, ts >>| fun t -> t (S, env, C));
-        CondTerm  = fun (G, t1, t2) (S, env, C) -> CondTerm S (G (S, env, C), t1 (S, env, C), t2 (S, env, C));
-        VarTerm   = fun v           (S, env, C) -> fst (get_env env v);
-        QuantTerm = fun (q_kind, v, t_set, t_cond) (S, env, C) -> expand_quantifier (q_kind, v, t_set, t_cond) (S, env, C);
-        LetTerm   = fun (v, t1, t2) (S, env, C) ->
-                        let t1_val = t1 (S, env, C)
-                        t2 (S, add_binding env (v, t1_val, get_type t1_val), C);
-        DomainTerm = fun dom (S, env, C) -> match SymbState.enum_finite_type dom s_state with Some xs -> Value S (SET xs) | _ -> failwith (sprintf "SymbEval.expand_term: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
-    } t (S, env, C)
+                            List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg C (UM, env, pc), get_type arg)) env formals ts
+                        s_eval_term body C (UM, env', pc)
+                    else AppTerm C (f, ts >>| fun t -> t (UM, env, pc))
+            |   _ -> AppTerm C (f, ts >>| fun t -> t (UM, env, pc));
+        CondTerm  = fun (G, t1, t2) (UM : S_UPDATE_MAP, env, pc) -> CondTerm C (G (UM, env, pc), t1 (UM, env, pc), t2 (UM, env, pc));
+        VarTerm   = fun v           (UM : S_UPDATE_MAP, env, pc) -> fst (get_env env v);
+        QuantTerm = fun (q_kind, v, t_set, t_cond) (UM : S_UPDATE_MAP, env, pc) -> expand_quantifier (q_kind, v, t_set, t_cond) C (UM, env, pc);
+        LetTerm   = fun (v, t1, t2) (UM : S_UPDATE_MAP, env, pc) ->
+                        let t1_val = t1 (UM, env, pc)
+                        t2 (UM, add_binding env (v, t1_val, get_type t1_val), pc);
+        DomainTerm = fun dom (UM : S_UPDATE_MAP, env, pc) -> match State.enum_finite_type dom (initial_state_of C) with Some xs -> Value C (SET xs) | _ -> failwith (sprintf "DAG.expand_term: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
+    } t ((UM : S_UPDATE_MAP), (env : ENV), (pc : PATH_COND))
 
-and expand_quantifier (q_kind, v, t_set, t_cond) (S, env, C) : TERM =
-    let t_set = t_set (S, env, C)
-    let t_set_type = get_type S t_set
+and expand_quantifier (q_kind, v, t_set : S_UPDATE_MAP * ENV * PATH_COND -> TERM, t_cond : S_UPDATE_MAP * ENV * PATH_COND -> TERM)
+                        (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+    let t_set = t_set (UM, env, pc)
+    let t_set_type = get_type C t_set
     let elem_type =
         match t_set_type with
         |   Signature.Powerset tyname -> tyname
-        |   _ -> failwith (sprintf "SymbEval.expand_quantifier: expected a set or domain type, %s found instead" (Signature.type_to_string t_set_type))
-    match get_term' S t_set with
+        |   _ -> failwith (sprintf "DAG.expand_quantifier: expected a set or domain type, %s found instead" (Signature.type_to_string t_set_type))
+    match get_term' C t_set with
     |   Value' (Background.SET xs) ->
-            let eval_instance x = t_cond (S, add_binding env (v, Value S x, elem_type), C)
+            let eval_instance x = t_cond (UM, add_binding env (v, Value C x, elem_type), pc)
             let t_conds = List.map eval_instance (Set.toList xs)
             match q_kind with
-            |   AST.Forall -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_and S (t_accum, t1)) (Value S (BOOL true))  t_conds
-            |   AST.Exist  -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_or  S (t_accum, t1)) (Value S (BOOL false)) t_conds
-            |   AST.ExistUnique -> failwith "SymbEval.expand_quantifier: 'ExistUnique' not implemented"
-    |   x -> failwith (sprintf "SymbEval.expand_quantifier: not a set (%A): %A v" t_set x)
+            |   AST.Forall -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_and C (t_accum, t1)) (Value C (BOOL true))  t_conds
+            |   AST.Exist  -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_or  C (t_accum, t1)) (Value C (BOOL false)) t_conds
+            |   AST.ExistUnique -> failwith "DAG.expand_quantifier: 'ExistUnique' not implemented"
+    |   x -> failwith (sprintf "DAG.expand_quantifier: not a set (%A): %A v" t_set x)
 
-and try_case_distinction_for_term_with_finite_range (S, env, C) (f : Signature.FCT_NAME) (ts0 : TERM list) : TERM =
+and try_case_distinction_for_term_with_finite_range (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env, pc : PATH_COND) (f : Signature.FCT_NAME) (ts0 : TERM list) : TERM =
     let generate_cond_term (t, cases : (VALUE * TERM) list) =
-        let mkCondTerm (G, t1, t2) = CondTerm S (G, t1, t2)
-        let mkEq t1 t2 = s_equals S (t1, t2)
+        let mkCondTerm (G, t1, t2) = CondTerm C (G, t1, t2)
+        let mkEq t1 t2 = s_equals C (t1, t2)
         let rec mk_cond_term (cases : (VALUE * TERM) list) =
             match cases with
             |   [] -> failwith "mk_cond_term: empty list of cases"
             |   [(t1, t2)] -> t2
             |   (t1, t2) :: cases' ->
-                    let eq_term  = s_eval_term (mkEq t (Value S t1)) (S, env, C)
-                    match get_term' S eq_term with
+                    let eq_term  = s_eval_term (mkEq t (Value C t1)) C (UM, env, pc)
+                    match get_term' C eq_term with
                     |   Value' (BOOL true) -> t2
                     |   Value' (BOOL false) -> mk_cond_term cases'
                     |   _ -> mkCondTerm (eq_term, t2, mk_cond_term cases')
         mk_cond_term cases
     let make_case_distinction (t : TERM) (elem_term_pairs : (VALUE * TERM) list) =
         if List.isEmpty elem_term_pairs
-        then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string S t))
+        then failwith (sprintf "DAG.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string C t))
         generate_cond_term (t, elem_term_pairs)
     let rec F past_args = function
-    |   [] -> AppTerm S (Signature.FctName f, List.rev past_args)
+    |   [] -> AppTerm C (Signature.FctName f, List.rev past_args)
     |   t1 :: ts' ->
-            let t1 = s_eval_term t1 (S, env, C)
-            match get_term' S t1 with
-            |   Value' x1 -> F (Value S x1 :: past_args) ts'
+            let t1 = s_eval_term t1 C (UM, env, pc)
+            match get_term' C t1 with
+            |   Value' x1 -> F (Value C x1 :: past_args) ts'
             |   _ ->
-                    match (try SymbState.enum_finite_type (get_type S t1) (s_state_of S) with _ -> None) with
+                    match (try State.enum_finite_type (get_type C t1) (initial_state_of C) with _ -> None) with
                     |   None ->
                             failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
-                                        f (term_to_string S (AppTerm S (Signature.FctName f, ts0))))
+                                        f (term_to_string C (AppTerm C (Signature.FctName f, ts0))))
                     |   Some elems ->
-                            make_case_distinction t1 (List.map (fun elem -> (elem, F (Value S elem :: past_args) ts')) (Set.toList elems))
+                            make_case_distinction t1 (List.map (fun elem -> (elem, F (Value C elem :: past_args) ts')) (Set.toList elems))
     let result = F [] ts0
     result
 
-and eval_app_term (S, env : ENV, C) (fct_name, ts) : TERM = 
-    let sign = signature_of S
-    let with_extended_path_cond = with_extended_path_cond sign
+and eval_app_term (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) (fct_name, ts : (GLOBAL_CTX -> S_UPDATE_MAP * ENV * PATH_COND -> TERM) list) : TERM = 
+    let sign = signature_of C
+//  let with_extended_path_cond = with_extended_path_cond C
     //if !trace > 0 then fprintfn stderr "|signature|=%d | eval_app_term %s%s\n" (Map.count sign) (spaces !level) (term_to_string sign (AppTerm (fct_name, [])))
     let rec F (ts_past : TERM list) ts =
         match ts with
         |   t :: ts_fut ->
-                let t = t (S, env, C)
-                match get_term' S t with
+                let t = t C (UM, env, pc)
+                match get_term' C t with
                 |   Value' x1             -> F (t :: ts_past) ts_fut
                 |   Initial'  (f, xs)     -> F (t :: ts_past) ts_fut
-                |   CondTerm' (G1, t11, t12) -> s_eval_term_ (CondTerm S (G1, F ts_past ((fun (S, env, C) -> t11) :: ts_fut), F ts_past ((fun (S, env, C) -> t12) :: ts_fut))) (S, env, C)
+                |   CondTerm' (G1, t11, t12) -> s_eval_term_ (CondTerm C (G1, F ts_past ((fun _ _ -> t11) :: ts_fut), F ts_past ((fun _ _ -> t12) :: ts_fut))) C (UM, env, pc)
                 |   LetTerm'  (v, t1, t2) -> F (t :: ts_past) ts_fut
                 |   VarTerm'  v           -> F (t :: ts_past) ts_fut
                 |   AppTerm'  _           -> F (t :: ts_past) ts_fut
-                |   QuantTerm' _          -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
-                |   DomainTerm' _         -> failwith "SymbEval.eval_app_term: DomainTerm not implemented"
+                |   QuantTerm' _          -> failwith "DAG.eval_app_term: QuantTerm not implemented"
+                |   DomainTerm' _         -> failwith "DAG.eval_app_term: DomainTerm not implemented"
         |   [] ->
                 match (fct_name, List.rev ts_past) with
-                |   (Signature.FctName "and", [ t1; t2 ]) -> s_and S (t1, t2)
-                |   (Signature.FctName "or", [ t1; t2 ])  -> s_or S (t1, t2)
-                |   (Signature.FctName "xor", [ t1; t2 ]) -> s_xor S (t1, t2)
-                |   (Signature.FctName "implies", [ t1; t2 ]) -> s_implies S (t1, t2)
-                |   (Signature.FctName "iff", [ t1; t2 ]) -> s_iff S (t1, t2)
-                |   (Signature.FctName "=", [ t1; t2 ])   -> s_equals S (t1, t2)
+                |   (Signature.FctName "and", [ t1; t2 ]) -> s_and C (t1, t2)
+                |   (Signature.FctName "or", [ t1; t2 ])  -> s_or C (t1, t2)
+                |   (Signature.FctName "xor", [ t1; t2 ]) -> s_xor C (t1, t2)
+                |   (Signature.FctName "implies", [ t1; t2 ]) -> s_implies C (t1, t2)
+                |   (Signature.FctName "iff", [ t1; t2 ]) -> s_iff C (t1, t2)
+                |   (Signature.FctName "=", [ t1; t2 ])   -> s_equals C (t1, t2)
                 |   (Signature.FctName f, ts)    ->
-                    match get_values S ts with
-                    |   Some xs -> interpretation_in_context (s_state_of S) C fct_name xs
+                    match get_values C ts with
+                    |   Some xs -> interpretation C UM pc fct_name xs
                     |   None ->
                         match (Signature.fct_kind f sign) with
                         |   Signature.Static -> 
                                 match Signature.fct_type f sign with
                                 |   (_, Signature.Boolean) ->
-                                        let t = AppTerm S (Signature.FctName f, ts)
-                                        if Set.contains t C                  then Value S TRUE
-                                        else if Set.contains (s_not S t) C   then Value S FALSE
-                                        else smt_eval_formula t (S, env, C)
-                                | _ -> AppTerm S (Signature.FctName f, ts)
-                        |   Signature.Controlled ->  s_eval_term (try_case_distinction_for_term_with_finite_range (S, env, C) f ts) (S, env, C)
-                        |   other_kind -> failwith (sprintf "SymbEval.eval_app_term: kind '%s' of function '%s' not implemented" (Signature.fct_kind_to_string other_kind) f)
-                |   (Signature.UndefConst, _)    -> Value S (Background.UNDEF)
-                |   (Signature.BoolConst b, _)   -> Value S (BOOL b)
-                |   (Signature.IntConst i, _)    -> Value S (INT i)
-                |   (Signature.StringConst s, _) -> Value S (STRING s)
+                                        let t = AppTerm C (Signature.FctName f, ts)
+                                        if Set.contains t pc                  then Value C TRUE
+                                        else if Set.contains (s_not C t) pc   then Value C FALSE
+                                        else smt_eval_formula t C (UM, env, pc)
+                                | _ -> AppTerm C (Signature.FctName f, ts)
+                        |   Signature.Controlled ->  s_eval_term (try_case_distinction_for_term_with_finite_range C (UM, env, pc) f ts) C (UM, env, pc)
+                        |   other_kind -> failwith (sprintf "DAG.eval_app_term: kind '%s' of function '%s' not implemented" (Signature.fct_kind_to_string other_kind) f)
+                |   (Signature.UndefConst, _)    -> Value C (Background.UNDEF)
+                |   (Signature.BoolConst b, _)   -> Value C (BOOL b)
+                |   (Signature.IntConst i, _)    -> Value C (INT i)
+                |   (Signature.StringConst s, _) -> Value C (STRING s)
     match (fct_name, ts) with
     |   (Signature.FctName "and", [ t1; t2 ]) ->
-            let t1 = t1 (S, env, C)
-            match get_term' S t1 with
-            |   Value' (BOOL false) -> Value S (BOOL false)
-            |   Value' (BOOL true)  -> t2 (S, env, C)        // alternative: with_extended_path_cond t1' (fun _ -> t2) (S, env, C)
+            let t1 = t1 C (UM, env, pc)
+            match get_term' C t1 with
+            |   Value' (BOOL false) -> Value C (BOOL false)
+            |   Value' (BOOL true)  -> t2 C (UM, env, pc)        // alternative: with_extended_path_cond t1' (fun _ -> t2) (S, env, C)
             |   t1' ->
-                let t2 = t2 (S, env, C)
-                match get_term' S t2 with
-                |   Value' (BOOL false) -> Value S (BOOL false)
+                let t2 = t2 C (UM, env, pc)
+                match get_term' C t2 with
+                |   Value' (BOOL false) -> Value C (BOOL false)
                 |   Value' (BOOL true) -> t1    // with_extended_path_cond t2' (fun _ -> t1) (S, env, C)
-                |   t2' -> if t1' = t2' then t1 else F [] [(fun _ -> t1); (fun _ -> t2)]
+                |   t2' -> if t1' = t2' then t1 else F [] [(fun _ _ -> t1); (fun _ _ -> t2)]
     |   (Signature.FctName "or", [ t1; t2 ]) ->
-            match get_term' S (t1 (S, env, C)) with
-            |   Value' (BOOL true) -> Value S (BOOL true)
-            |   Value' (BOOL false) -> t2 (S, env, C)
+            match get_term' C (t1 C (UM, env, pc)) with
+            |   Value' (BOOL true) -> Value C (BOOL true)
+            |   Value' (BOOL false) -> t2 C (UM, env, pc)
             |   t1' ->
-                match get_term' S (t2 (S, env, C)) with
-                |   Value' (BOOL true) -> Value S (BOOL true)
-                |   Value' (BOOL false) -> make_term S t1'
-                |   t2' -> if t1' = t2' then make_term S t1' else F [] [(fun _ -> make_term S t1'); (fun _ -> make_term S t2')]
+                match get_term' C (t2 C (UM, env, pc)) with
+                |   Value' (BOOL true) -> Value C (BOOL true)
+                |   Value' (BOOL false) -> make_term C t1'
+                |   t2' -> if t1' = t2' then make_term C t1' else F [] [( fun _ _ -> make_term C t1'); ( fun _ _ -> make_term C t2')]
     |   (Signature.FctName "implies", [ t1; t2 ]) ->
-            match get_term' S (t1 (S, env, C)) with
-            |   Value' (BOOL false) -> Value S (BOOL true)
-            |   t1' as Value' (BOOL true)  -> t2 (S, env, C)       // with_extended_path_cond t1' (fun _ -> t2) (S, env, C)
+            match get_term' C (t1 C (UM, env, pc)) with
+            |   Value' (BOOL false) -> Value C (BOOL true)
+            |   t1' as Value' (BOOL true)  -> t2 C (UM, env, pc)       // with_extended_path_cond t1' ( fun _ _ -> t2) (S, env, C)
             |   t1' ->
-                match get_term' S (t2 (S, env, C)) with
-                |   Value' (BOOL false) -> s_not S (make_term S t1')
-                |   Value' (BOOL true)  -> Value S (BOOL true)
-                |   t2' -> if t1' = t2' then Value S (BOOL true) else F [] [(fun _ -> make_term S t1'); (fun _ -> make_term S t2')]
+                match get_term' C (t2 C (UM, env, pc)) with
+                |   Value' (BOOL false) -> s_not C (make_term C t1')
+                |   Value' (BOOL true)  -> Value C (BOOL true)
+                |   t2' -> if t1' = t2' then Value C (BOOL true) else F [] [( fun _ _ -> make_term C t1'); ( fun _ _ -> make_term C t2')]
     |   (Signature.FctName "iff", [ t1; t2 ]) ->
-        match get_term' S (t1 (S, env, C)) with
-        |   Value' (BOOL false) -> s_not S (t2 (S, env, C))
-        |   Value' (BOOL true)  -> t2 (S, env, C)
+        match get_term' C (t1 C (UM, env, pc)) with
+        |   Value' (BOOL false) -> s_not C (t2 C (UM, env, pc))
+        |   Value' (BOOL true)  -> t2 C (UM, env, pc)
         |   t1' ->
-            match get_term' S (t2 (S, env, C)) with
-            |   Value' (BOOL false) -> s_not S (make_term S t1')
-            |   Value' (BOOL true)  -> make_term S t1'
-            |   t2' -> if t1' = t2' then Value S (BOOL true) else F [] [(fun _ -> make_term S t1'); (fun _ -> make_term S t2')]
+            match get_term' C (t2 C (UM, env, pc)) with
+            |   Value' (BOOL false) -> s_not C (make_term C t1')
+            |   Value' (BOOL true)  -> make_term C t1'
+            |   t2' -> if t1' = t2' then Value C (BOOL true) else F [] [( fun _ _ -> make_term C t1'); ( fun _ _ -> make_term C t2')]
     |   (Signature.FctName "=", [ t1; t2 ]) ->
-        match get_term' S (t1 (S, env, C)) with
+        match get_term' C (t1 C (UM, env, pc)) with
         |   t1' as Value' x1 ->
-            match get_term' S (t2 (S, env, C)) with
-            |   Value' x2 -> Value S (BOOL (x1 = x2))
-            |   t2' -> F [] [(fun _ -> make_term S t1'); fun _ -> make_term S t2']
-        |   t1' -> F [] [(fun _ -> make_term S t1'); fun _ -> t2 (S, env, C)]
+            match get_term' C (t2 C (UM, env, pc)) with
+            |   Value' x2 -> Value C (BOOL (x1 = x2))
+            |   t2' -> F [] [( fun _ _ -> make_term C t1');  fun _ _ -> make_term C t2']
+        |   t1' -> F [] [( fun _ _ -> make_term C t1');  fun _ _ -> t2 C (UM, env, pc)]
     |   _ ->
     F [] ts
 
-and eval_cond_term (S, env : ENV, C) (G, t1, t2) = 
-    let (sign, get_type) = (signature_of S, get_type S)
-    let with_extended_path_cond = with_extended_path_cond sign
-    let term_to_string = term_to_string S
-    match get_term' S (G (S, env, C)) with
-    |   Value' (BOOL true)  -> t1 (S, env, C)
-    |   Value' (BOOL false) -> t2 (S, env, C)
+and eval_cond_term (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) (G, t1 : GLOBAL_CTX -> S_UPDATE_MAP * ENV * PATH_COND -> TERM, t2) : TERM = 
+    let (sign, get_type) = (signature_of C, get_type C)
+    let with_extended_path_cond = with_extended_path_cond C
+    let term_to_string = term_to_string C
+    match get_term' C (G C (UM, env, pc)) with
+    |   Value' (BOOL true)  -> t1 C (UM, env, pc)
+    |   Value' (BOOL false) -> t2 C (UM, env, pc)
     |   CondTerm' (G', G1, G2) ->
             if get_type G1 <> Signature.Boolean || get_type G2 <> Signature.Boolean
             then failwith (sprintf "eval_cond_term: '%s' and '%s' must be boolean terms" (term_to_string G1) (term_to_string G2))
-            else let t1_G'     = t1 (S, env, add_cond G' (add_cond G1 C))
-                 let t1_not_G' = t1 (S, env, add_cond (s_not S G') (add_cond G1 C))
-                 let t2_G'     = t2 (S, env, add_cond G' (add_cond G2 C))
-                 let t2_not_G' = t2 (S, env, add_cond (s_not S G') (add_cond G2 C))
-                 s_eval_term (CondTerm S (G', CondTerm S (G1, t1_G', t2_G'), CondTerm S (G2, t1_not_G', t2_not_G'))) (S, env, C)
-    |   G ->    let G = make_term S G
+            else let t1_G'     = t1 C (UM, env, add_cond G' (add_cond G1 pc))
+                 let t1_not_G' = t1 C (UM, env, add_cond (s_not C G') (add_cond G1 pc))
+                 let t2_G'     = t2 C (UM, env, add_cond G' (add_cond G2 pc))
+                 let t2_not_G' = t2 C (UM, env, add_cond (s_not C G') (add_cond G2 pc))
+                 s_eval_term (CondTerm C (G', CondTerm C (G1, t1_G', t2_G'), CondTerm C (G2, t1_not_G', t2_not_G'))) C (UM, env, pc)
+    |   G ->    let G = make_term C G
                 if (!trace > 1)
-                then fprintfn stderr "\n%sctx_condition: %s" (spaces !level) (term_to_string (ctx_condition S C))
+                then fprintfn stderr "\n%sctx_condition: %s" (spaces !level) (term_to_string (ctx_condition C pc))
                 if not SymbEval.simplify_cond then
                     // version 1: no simplification whatsoever (inefficient, but useful for debugging)
-                    CondTerm S (G, t1 (S, env, add_cond G C), t2 (S, env, add_cond (s_not S G) C))
+                    CondTerm C (G, t1 C (UM, env, add_cond G pc), t2 C (UM, env, add_cond (s_not C G) pc))
                 else 
                     // version 2: with simplification
-                    if Set.contains G C
-                    then t1 (S, env, C)
-                    else if Set.contains (s_not S G) C
-                    then t2 (S, env, C)
-                    else let (t1', t2') = (t1 (S, env, add_cond G C), t2 (S, env, add_cond (s_not S G) C))
+                    if Set.contains G pc
+                    then t1 C (UM, env, pc)
+                    else if Set.contains (s_not C G) pc
+                    then t2 C (UM, env, pc)
+                    else let (t1', t2') = (t1 C (UM, env, add_cond G pc), t2 C (UM, env, add_cond (s_not C G) pc))
                          if t1' = t2' then t1'
-                         else let sign = signature_of S
+                         else let sign = signature_of C
                               if not !SymbEval.use_smt_solver
-                              then  let t1' = s_eval_term t1' (S, env, add_cond G C)
-                                    let t2' = s_eval_term t2' (S, env, add_cond (s_not S G) C)
-                                    if t1' = t2' then t1' else CondTerm S (G, t1', t2')
-                              else  let t1' = with_extended_path_cond G         (fun _ -> s_eval_term t1') (S, env, C)  
-                                    let t2' = with_extended_path_cond (s_not S G) (fun _ -> s_eval_term t2') (S, env, C)  
-                                    if t1' = t2' then t1' else CondTerm S (G, t1', t2')
+                              then  let t1' = s_eval_term t1' C (UM, env, add_cond G pc)
+                                    let t2' = s_eval_term t2' C (UM, env, add_cond (s_not C G) pc)
+                                    if t1' = t2' then t1' else CondTerm C (G, t1', t2')
+                              else  let t1' = with_extended_path_cond G           ( fun _ -> s_eval_term t1') (UM, env, pc)  
+                                    let t2' = with_extended_path_cond (s_not C G) ( fun _ -> s_eval_term t2') (UM, env, pc)  
+                                    if t1' = t2' then t1' else CondTerm C (G, t1', t2')
+and eval_let_term (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) (v, t1, t2) : TERM =
+    let t1 = t1 C (UM, env, pc)
+    t2 C (UM, add_binding env (v, t1, get_type C t1), pc)
 
-and eval_let_term (S, env, C) (v, t1, t2) =
-    let t1 = t1 (S, env, C)
-    t2 (S, add_binding env (v, t1, get_type S t1), C)
+and s_eval_term_ (t : TERM) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+    term_induction C (fun x -> x) {
+        Value      = fun x C _ -> Value C x;
+        Initial    = fun (f, xs) C _ -> Initial C (f, xs);
+        AppTerm    = fun (f, ts) C (UM, env, pc) -> eval_app_term C (UM, env, pc) (f, ts)
+        CondTerm   = fun (G, t1, t2) C (UM, env, pc) -> eval_cond_term C (UM, env, pc) (G, t1, t2);
+        VarTerm    = fun v -> fun C (_, env, _) -> fst (get_env env v);
+        QuantTerm  = fun (q_kind, v, t_set, t_cond) C (UM, env, pc) -> expand_quantifier (q_kind, v, t_set C, t_cond C) C (UM, env, pc);
+        LetTerm    = fun (v, t1, t2) C (_, env, _) -> eval_let_term C (UM, env, pc) (v, t1, t2) 
+        DomainTerm = fun dom C (_, _, _) -> match State.enum_finite_type dom (initial_state_of C) with Some xs -> Value C (SET xs) | None -> failwith (sprintf "DAG.s_eval_term_: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
+    } t C (UM, env, pc)
 
-and s_eval_term_ (t : TERM) (S, env, C) =
-    term_induction S (fun x -> x) {
-        Value      = fun x _ -> Value S x;
-        Initial    = fun (f, xs) _ -> Initial S (f, xs);
-        AppTerm    = fun (f, ts) (S, env, C) -> eval_app_term (S, env, C) (f, ts)
-        CondTerm   = fun (G, t1, t2) (S, env, C) -> eval_cond_term (S, env, C) (G, t1, t2);
-        VarTerm    = fun v -> fun (S, env, _) -> fst (get_env env v);
-        QuantTerm  = fun (q_kind, v, t_set, t_cond) (S, env, C) -> expand_quantifier (q_kind, v, t_set, t_cond) (S, env, C);
-        LetTerm    = fun (v, t1, t2) -> fun (S, env, _) -> eval_let_term (S, env, C) (v, t1, t2) 
-        DomainTerm = fun dom -> fun (S, env, C) -> match SymbState.enum_finite_type dom (s_state_of S) with Some xs -> Value S (SET xs) | None -> failwith (sprintf "SymbEval.s_eval_term_: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
-    } t (S, env, C)
-
-and s_eval_term (t : TERM) (S : GLOBAL_CTX, env : ENV, C) : TERM =
-    let sign = signature_of S
-    let t = s_eval_term_ t (S, env, C)
-    if get_type S t = Signature.Boolean
-    then    match get_term' S t with
+and s_eval_term (t : TERM) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+    let sign = signature_of C
+    let t = s_eval_term_ t C (UM, env, pc)
+    if get_type C t = Signature.Boolean
+    then    match get_term' C t with
             |   Value' (BOOL _)  -> t
-            |   _ -> smt_eval_formula t (S, env, C)
+            |   _ -> smt_eval_formula t C (UM, env, pc)
     else    t
