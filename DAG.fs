@@ -28,6 +28,7 @@ type GLOBAL_CTX' = {
     signature     : Signature.SIGNATURE
     initial_state : State.STATE         // use only for initial state in this module, never use '_dynamic' field - also the second elem. of _dynamic_initial seems not to be used !
     macros        : MACRO_DB
+    rules         : RULES_DB
     fwdTermTable  : Dictionary<TERM', TERM>
     bwdTermTable  : Dictionary<TERM, TERM' * TERM_ATTRS>
 }
@@ -52,7 +53,19 @@ and TERM' =
 
 and TERM = Term of int
 
-and MACRO_DB = Map<Signature.FCT_NAME, string list * TERM>   // for derived functions = macros
+and RULE =
+| S_Updates of Set<(Signature.FCT_NAME * VALUE list) * TERM>  //Map<FCT_NAME * VALUE list, TERM>   // used for special purposes (symbolic evaluation): "partially interpreted rules", not actual rules of the language
+| UpdateRule of (Signature.FCT_NAME * TERM list) * TERM
+| CondRule of TERM * RULE * RULE
+| ParRule of RULE list
+| SeqRule of RULE list
+| IterRule of RULE
+| LetRule of string * TERM * RULE
+| ForallRule of string * TERM * TERM * RULE
+| MacroRuleCall of Signature.RULE_NAME * TERM list
+
+and MACRO_DB = Map<Signature.FCT_NAME, string list * TERM>     // for derived functions ("macros")
+and RULES_DB = Map<Signature.RULE_NAME, string list * RULE>   // for rule macros
 
 and LOCATION = string * VALUE list
 and S_UPDATE = LOCATION * TERM
@@ -73,6 +86,7 @@ let new_global_ctx (sign : Signature.SIGNATURE, initial_state : State.STATE) =
         signature     = sign
         initial_state = initial_state
         macros        = Map.empty
+        rules         = Map.empty
         fwdTermTable  = new Dictionary<TERM', TERM>(HashIdentity.Structural)
         bwdTermTable  = new Dictionary<TERM, TERM' * TERM_ATTRS>(HashIdentity.Structural)
     }
@@ -93,6 +107,9 @@ let initial_state_of (GlobalCtx gctx_id) =
 
 let macros_of (GlobalCtx gctx_id) =
     global_ctxs.ctx_table.[gctx_id].macros
+
+let rules_of (GlobalCtx gctx_id) =
+    global_ctxs.ctx_table.[gctx_id].rules
 
 let rec compute_type gctx (t' : TERM') : Signature.TYPE =
     let (sign, get_type) = (signature_of gctx, get_type gctx)
@@ -178,17 +195,6 @@ let rec term_induction (gctx: GLOBAL_CTX) (name : Signature.NAME -> 'name) (F : 
     |   DomainTerm' tyname    -> F.DomainTerm tyname
 
 //--------------------------------------------------------------------
-
-type RULE =
-| S_Updates of Set<(Signature.FCT_NAME * VALUE list) * TERM>  //Map<FCT_NAME * VALUE list, TERM>   // used for special purposes (symbolic evaluation): "partially interpreted rules", not actual rules of the language
-| UpdateRule of (Signature.FCT_NAME * TERM list) * TERM
-| CondRule of TERM * RULE * RULE
-| ParRule of RULE list
-| SeqRule of RULE list
-| IterRule of RULE
-| LetRule of string * TERM * RULE
-| ForallRule of string * TERM * TERM * RULE
-| MacroRuleCall of Signature.RULE_NAME * TERM list
 
 let skipRule = ParRule []
 
@@ -309,6 +315,12 @@ let show_s_update_set sign (U :S_UPDATE_SET) =
         |> String.concat ", "   ) +
     " }"
 
+let show_s_update_map sign (U :S_UPDATE_MAP) =
+    let s_update_set = Set.ofSeq (Map.toSeq U |> Seq.collect (fun (f, table) -> table |> Map.toSeq |> Seq.map (fun (args, value) -> (f, args), value)))
+    show_s_update_set sign s_update_set
+
+//--------------------------------------------------------------------
+    
 type ErrorDetails =
 |   InconsistentUpdates of GLOBAL_CTX * TERM list option * S_UPDATE * S_UPDATE * S_UPDATE_SET option
 
@@ -376,7 +388,7 @@ let apply_s_update_map (UM0 : S_UPDATE_MAP) (UM' : S_UPDATE_MAP) =
 let apply_s_update_set gctx S U =
     apply_s_update_map S (s_update_set_to_s_update_map gctx U)
 
-let sequel_s_state = apply_s_update_set
+let sequel_s_state : GLOBAL_CTX -> S_UPDATE_MAP -> S_UPDATE_SET -> S_UPDATE_MAP = apply_s_update_set
 
 //--------------------------------------------------------------------
 
@@ -385,6 +397,14 @@ let macro_db_override (db1 : MACRO_DB) (db' : MACRO_DB) : MACRO_DB = Common.map_
 let add_macro macro_name ((args, t) : string list * TERM) (db : MACRO_DB) = Map.add macro_name (args, t) db
 let exists_macro macro_name (db : MACRO_DB) = Map.containsKey macro_name db
 let get_macro macro_name (db : MACRO_DB) = Map.find macro_name db
+
+//--------------------------------------------------------------------
+
+let empty_rules_db : RULES_DB = Map.empty
+let rules_db_override (db1 : RULES_DB) (db' : RULES_DB) = Common.map_override db1 db'
+let add_rule rule_name ((args, R) : string list * RULE) (db : RULES_DB) = Map.add rule_name (args, R) db
+let exists_rule rule_name (db : RULES_DB) = Map.containsKey rule_name db
+let get_rule rule_name (db : RULES_DB) = Map.find rule_name db
 
 //--------------------------------------------------------------------
 
@@ -624,15 +644,6 @@ let smt_assert (S : GLOBAL_CTX) C (phi : TERM) =
          | SmtInterface.SMT_BoolExpr be -> C.ctr := !C.ctr + 1; (!C.slv).Assert be
          | _ -> failwith (sprintf "smt_assert: error converting Boolean term (term = %s)" (term_to_string S phi))
     else failwith (sprintf "'smt_assert' expects a Boolean term, %s found instead " (term_to_string S phi))
-
-(*
-let ctx_to_smt (S, env, C) =
-    // !!!! tbd: if there is any initialisation in S0, it should be mapped as well: for the moment there is none
-    // !!!! List.map (fun ((f, xs), t) -> smt_assert_update (S, env, C) (f, xs), t) (Map.toList C.U) |> ignore
-    Set.map (fun phi -> smt_assert (signature_of S) TopLevel.smt_ctx phi) C |> ignore
-*)
-
-//let with_extended_path_cond sign G eval_fct (S : S_STATE, env : ENV, C : CONTEXT) =
 
 let with_extended_path_cond (gctx : GLOBAL_CTX) (G : TERM) eval_fct (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) =
     SmtInterface.smt_solver_push TopLevel.smt_ctx
@@ -910,3 +921,189 @@ and s_eval_term (t : TERM) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : 
             |   Value' (BOOL _)  -> t
             |   _ -> smt_eval_formula t C (UM, env, pc)
     else    t
+
+//--------------------------------------------------------------------
+
+let rec try_case_distinction_for_update_with_finite_domain
+        (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND)
+        (f : Signature.FCT_NAME) (ts0 : TERM list) (t_rhs : TERM): RULE =
+    let mkEq (t1 : TERM) t2 = s_equals C (t1, t2)  // AppTerm' (Boolean, (FctName "=", [t1; t2]))
+    let generate_cond_rule (t, cases : (VALUE * RULE) list) =
+        let t = s_eval_term t C (UM, env, pc)
+        let ty = get_type C t
+        let rec mk_cond_rule cases =
+            match cases with
+            |   [] -> failwith "mk_cond_rule: empty list of cases"
+            |   [(t1, R)] -> s_eval_rule R C (UM, env, pc)
+            |   (t1, R) :: cases' ->
+                    let eq_term0 = mkEq t (Value C t1)
+                    let eq_term  = s_eval_term eq_term0 C (UM, env, pc)
+                    match get_term' C eq_term with
+                    |   Value' (BOOL true) -> s_eval_rule R C (UM, env, pc)
+                    |   Value' (BOOL false) -> mk_cond_rule cases'
+                    |   _ -> CondRule (eq_term, s_eval_rule R C (UM, env, pc), mk_cond_rule cases')
+        mk_cond_rule cases
+    let make_case_distinction (t : TERM) (elem_rule_pairs : (VALUE * RULE) list) =
+        if List.isEmpty elem_rule_pairs
+        then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string C t))
+        generate_cond_rule (t, elem_rule_pairs)
+    let rec F past_args = function
+        |   [] -> UpdateRule ((f, List.rev past_args), t_rhs)
+        |   t1 :: ts' ->
+            let t1 = s_eval_term t1 C (UM, env, pc)
+            match get_term' C t1 with
+            |   Value' x1 -> F (Value C x1 :: past_args) ts'
+            |   _ ->
+                    match (try State.enum_finite_type (get_type C t1) (initial_state_of C) with _ -> None) with
+                    |   None ->
+                            failwith (sprintf "location (%s, (%s)) on the lhs of update cannot be fully evaluated"
+                                        f (String.concat ", " (ts0 >>| term_to_string C)))
+                    |   Some elems ->
+                            make_case_distinction t1 (List.map (fun elem -> (elem, F (Value C elem :: past_args) ts')) (Set.toList elems))
+    F [] ts0
+
+and s_eval_rule (R : RULE) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) : RULE =
+    let s_eval_term t = s_eval_term t C
+    let s_eval_rule R = s_eval_rule R C
+    let get_type, with_extended_path_cond = get_type C, with_extended_path_cond C
+    let rule_to_string, term_to_string, pp_rule = rule_to_string C, term_to_string C, pp_rule C
+
+    if (!trace > 1)
+    then fprintf stderr "%s----------------------\n%ss_eval_rule %s\n%s\n\n"
+            (spaces !level) (spaces !level) (show_s_update_map C UM) (toString 80 (indent (!level) (pp_rule R)))
+    level := !level + 1
+
+    let eval_update ((f, ts), t_rhs) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) : RULE =
+        if !trace > 0 then fprintf stderr "eval_update: %s\n" (rule_to_string (UpdateRule ((f, ts), t_rhs)))
+        match get_term' C (s_eval_term t_rhs (UM, env, pc)) with
+        |   CondTerm' (G, t1, t2) ->
+                s_eval_rule (CondRule (G, UpdateRule ((f, ts), t1), UpdateRule ((f, ts), t2))) (UM, env, pc)
+        |   _ ->
+            let rec F (ts_past : TERM list) : TERM list -> RULE = function
+                |   (t1 :: ts_fut) ->
+                    match get_term' C t1 with
+                    |   Value' _        -> F (t1 :: ts_past) ts_fut
+                    |   Initial' _      -> F (t1 :: ts_past) ts_fut
+                    |   CondTerm' (G1, t11, t12) ->
+                           s_eval_rule (CondRule (G1, F ts_past (t11 :: ts_fut), F ts_past (t12 :: ts_fut))) (UM, env, pc)
+                    |   QuantTerm' _          -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
+                    |   LetTerm' _            -> failwith "SymbEval.eval_app_term: LetTerm not implemented"
+                    |   VarTerm' _      -> F (s_eval_term_ t1 C (UM, env, pc) :: ts_past) ts_fut
+                    |   AppTerm' _      -> F (s_eval_term_ t1 C (UM, env, pc) :: ts_past) ts_fut
+                    |   DomainTerm' _   -> failwith "SymbEval.eval_app_term: DomainTerm not implemented"
+                |   [] ->
+                    match get_values C (ts_past >>| fun t -> s_eval_term t (UM, env, pc)) with
+                    |   Some xs -> S_Updates (Set.singleton ((f, List.rev xs), s_eval_term t_rhs (UM, env, pc)));
+                    |   None -> try_case_distinction_for_update_with_finite_domain C (UM, env, pc) f ts t_rhs
+            F [] ts
+
+    let eval_cond (G, R1, R2) (UM, env, pc) = 
+        match get_term' C (s_eval_term G (UM, env, pc)) with
+        |   Value' (BOOL true)  -> s_eval_rule R1 (UM, env, pc)
+        |   Value' (BOOL false) -> s_eval_rule R2 (UM, env, pc)
+        |   CondTerm' (G', G1, G2) ->
+                if get_type G1 <> Signature.Boolean || get_type G2 <> Signature.Boolean
+                then failwith (sprintf "s_eval_rule.eval_cond: '%s' and '%s' must be boolean terms" (term_to_string G1) (term_to_string G2))
+                else s_eval_rule (CondRule (G', CondRule (G1, R1, R2), CondRule (G2, R1, R2))) (UM, env, pc)
+        |   _ ->    //let (R1', R2') = (s_eval_rule R1 (S, env, add_cond G C), s_eval_rule R2 (S, env, add_cond (s_not G) C)_
+                    if not !SymbEval.use_smt_solver
+                    then    let R1' = s_eval_rule R1 (UM, env, (add_cond G pc))
+                            let R2' = s_eval_rule R2 (UM, env, (add_cond (s_not C G) pc))
+                            if R1' = R2' then R1' else CondRule (G, R1', R2')
+                    else    let R1' = with_extended_path_cond G           (fun _ _ -> s_eval_rule R1) (UM, env, pc)
+                            let R2' = with_extended_path_cond (s_not C G) (fun _ _ -> s_eval_rule R2) (UM, env, pc)  
+                            if R1' = R2' then R1' else CondRule (G, R1', R2')
+
+    let rec eval_par Rs (UM, env, pc) =
+        match Rs with
+        |   []          -> S_Updates Set.empty
+        |   [R1]        -> s_eval_rule R1 (UM, env, pc)
+        |   R1 :: Rs    -> List.fold (fun R1 R2 -> eval_binary_par R1 R2 (UM, env, pc)) R1 Rs
+
+    and eval_binary_par R1 R2 (UM, env, pc) : RULE =
+        match s_eval_rule R1 (UM, env, pc) with
+        |   S_Updates U1 ->
+                match s_eval_rule R2 (UM, env, pc) with
+                |   S_Updates U2 ->
+                        S_Updates (Set.union U1 U2)
+                |   CondRule (G2, R21, R22) ->
+                        s_eval_rule (CondRule (G2, ParRule [ S_Updates U1; R21 ], ParRule [ S_Updates U1; R22 ])) (UM, env, pc)
+                |   _ -> failwith (sprintf "eval_binary_par: %s" (rule_to_string R2))
+        |   CondRule (G1, R11, R12) ->
+                s_eval_rule (CondRule (G1, ParRule [ R11; R2 ], ParRule [ R12; R2 ])) (UM, env, pc)
+        |   _ -> failwith (sprintf "eval_binary_par: %s" (rule_to_string R1))
+
+    and eval_seq Rs (UM, env, pc) =
+        match Rs with
+        |   []          -> S_Updates Set.empty
+        |   [R1]        -> s_eval_rule R1 (UM, env, pc)
+        |   R1 :: Rs    -> List.fold (fun R1 R2 -> eval_binary_seq R1 R2 (UM, env, pc)) R1 Rs
+
+    and eval_binary_seq R1 R2 (UM, env, pc): RULE = 
+        match s_eval_rule R1 (UM, env, pc) with
+        |   S_Updates U1 ->
+                let S' =
+                    try sequel_s_state C UM U1
+                    with Error (_, _, _, InconsistentUpdates (C, _, u1, u2, _)) ->
+                            raise (Error (C, module_name, "s_eval_rule.eval_binary_seq",
+                                InconsistentUpdates (C, Some (List.ofSeq pc), u1, u2, Some U1)))
+                match s_eval_rule R2 (S', env, pc) with
+                |   S_Updates U2 ->
+                        S_Updates (seq_merge_2 C U1 U2)
+                |   CondRule (G2, R21, R22) ->
+                        s_eval_rule (CondRule (G2, SeqRule [ S_Updates U1; R21 ], SeqRule [ S_Updates U1; R22 ])) (UM, env, pc)
+                |   _ -> failwith (sprintf "eval_binary_seq: %s" (rule_to_string R2))
+        |   CondRule (G1, R11, R12) ->
+                s_eval_rule (CondRule (G1, SeqRule [ R11; R2 ], SeqRule [ R12; R2 ])) (UM, env, pc)
+        |   _ -> failwith (sprintf "eval_binary_seq: %s" (rule_to_string R1))
+
+    and eval_iter R (UM, env, pc) =
+        match s_eval_rule R (UM, env, pc) with
+        |   S_Updates U ->
+                if Set.isEmpty U
+                then S_Updates Set.empty
+                else s_eval_rule (SeqRule [ S_Updates U; IterRule R ]) (UM, env, pc)
+        |   (CondRule (G, R1, R2)) ->
+                //s_eval_rule (SeqRule [ CondRule (G, R1, R2); IterRule R ]) (UM, env, pc)
+                s_eval_rule (CondRule (G, SeqRule [R1; IterRule R], SeqRule [R2; IterRule R])) (UM, env, pc)
+        |   R' -> failwith (sprintf "SymEvalRules.s_eval_rule: eval_iter_rule - R'' = %s" (rule_to_string R'))
+    
+    and eval_let (v, t, R) (UM, env, pc) =
+        s_eval_rule R (UM, add_binding env (v, s_eval_term t (UM, env, pc), get_type t), pc)       // !!!!! is this one correct at all?
+
+    and eval_forall (v, ts, G, R) (UM, env, pc) =
+        match get_term' C (s_eval_term ts (UM, env, pc)) with
+        |   Value' (SET xs) ->
+                let eval_instance x =
+                    let env' = let t_x = Value C x in add_binding env (v, t_x, get_type t_x)
+                    CondRule (s_eval_term G (UM, env', pc), s_eval_rule R (UM, env', pc), skipRule)
+                let Rs = List.map (fun x -> eval_instance x) (Set.toList xs)
+                s_eval_rule (ParRule Rs) (UM, env, pc)
+        |   x -> failwith (sprintf "SymbEval.forall_rule: not a set (%A): %A v" ts x)
+
+    and eval_macro_rule_call (r, args) (UM, env, pc) =
+        let (formals, body) =
+            try Map.find r (rules_of C)     // !!! should not use global TopLevel.rules
+            with _ -> failwith (sprintf "SymbEval.s_eval_rule: macro rule %s not found" r)
+        let env' =
+            List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (UM, env, pc), get_type arg)) env formals args
+        s_eval_rule body (UM, env', pc)
+ 
+    let R =
+        match R with
+        |   UpdateRule ((f, ts), t) -> eval_update ((f, ts), t) (UM, env, pc)
+        |   CondRule (G, R1, R2)    -> eval_cond (G, R1, R2) (UM, env, pc)
+        |   ParRule Rs              -> eval_par Rs (UM, env, pc)
+        |   SeqRule Rs              -> eval_seq Rs (UM, env, pc)
+        |   IterRule R              -> eval_iter R (UM, env, pc)
+        |   LetRule (v, t, R)       -> eval_let (v, t, R) (UM, env, pc) 
+        |   ForallRule (v, t, G, R) -> eval_forall (v, t, G, R) (UM, env, pc) 
+        |   MacroRuleCall (r, args) -> eval_macro_rule_call (r, args) (UM, env, pc)
+        |   S_Updates S             -> S_Updates S
+
+    level := !level - 1
+    if (!trace > 1)
+    then fprintf stderr "%ss_eval_rule result = \n%s\n%s----------------------\n" (spaces !level) (toString 120 (indent (!level) (pp_rule R))) (spaces !level)
+
+    R
+
