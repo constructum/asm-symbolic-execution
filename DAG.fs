@@ -72,46 +72,37 @@ and S_UPDATE = LOCATION * TERM
 and S_UPDATE_SET = Set<S_UPDATE>
 and S_UPDATE_MAP = Map<string, Map<VALUE list, TERM>>
 
-//--------------------------------------------------------------------
-
 let global_ctxs : GLOBAL_CTX_TABLE = {
     ctx_table = new Dictionary<int, GLOBAL_CTX'>()
     next_ctx  = ref 0
 }
 
-let new_global_ctx (sign : Signature.SIGNATURE, initial_state : State.STATE) =
-    let ctx_id = !global_ctxs.next_ctx
-    global_ctxs.next_ctx := ctx_id + 1
-    let new_ctx = {
-        signature     = sign
-        initial_state = initial_state
-        macros        = Map.empty
-        rules         = Map.empty
-        fwdTermTable  = new Dictionary<TERM', TERM>(HashIdentity.Structural)
-        bwdTermTable  = new Dictionary<TERM, TERM' * TERM_ATTRS>(HashIdentity.Structural)
-    }
-    global_ctxs.ctx_table.[ctx_id] <- new_ctx
-    GlobalCtx ctx_id
-
-let get_global_ctx' (GlobalCtx gctx_id) =
-    if global_ctxs.ctx_table.ContainsKey gctx_id then
-        global_ctxs.ctx_table.[gctx_id]
+let rec make_term (GlobalCtx gctx_id) (t' : TERM') : TERM =
+    let ctx = global_ctxs.ctx_table.[gctx_id]
+    if ctx.fwdTermTable.ContainsKey t' then
+        ctx.fwdTermTable.[t']
     else
-        failwith (sprintf "get_global_ctx': context %d not found" gctx_id)
+        let term_id = ctx.fwdTermTable.Count
+        let attrs = {
+            term_id   = term_id
+            term_type = compute_type (GlobalCtx gctx_id) t'
+        }
+        ctx.fwdTermTable.[t'] <- Term term_id
+        ctx.bwdTermTable.[Term term_id] <- (t', attrs)
+        Term term_id
 
-let signature_of (GlobalCtx gctx_id) =
-    global_ctxs.ctx_table.[gctx_id].signature
+and get_term'_attrs (gctx: GLOBAL_CTX) (Term term_id) =
+    let (GlobalCtx gctx_id) = gctx
+    let ctx = global_ctxs.ctx_table.[gctx_id]
+    if ctx.bwdTermTable.ContainsKey (Term term_id) then
+        ctx.bwdTermTable.[Term term_id]
+    else
+        failwith (sprintf "get_term': term %d not found in context %d" term_id gctx_id)
 
-let initial_state_of (GlobalCtx gctx_id) =
-    global_ctxs.ctx_table.[gctx_id].initial_state
+and get_term' (gctx: GLOBAL_CTX) (Term term_id) = get_term'_attrs gctx (Term term_id) |> fst
+and get_attrs (gctx: GLOBAL_CTX) (Term term_id) = get_term'_attrs gctx (Term term_id) |> snd
 
-let macros_of (GlobalCtx gctx_id) =
-    global_ctxs.ctx_table.[gctx_id].macros
-
-let rules_of (GlobalCtx gctx_id) =
-    global_ctxs.ctx_table.[gctx_id].rules
-
-let rec compute_type gctx (t' : TERM') : Signature.TYPE =
+and compute_type gctx (t' : TERM') : Signature.TYPE =
     let (sign, get_type) = (signature_of gctx, get_type gctx)
     match t' with
     |   Value' x -> Background.type_of_value sign x
@@ -135,40 +126,83 @@ and get_type (gctx as GlobalCtx gctx_id) (t : TERM) : Signature.TYPE =
     else
         failwith (sprintf "get_type: term %A not found in context %d" t gctx_id)
 
-let make_term (GlobalCtx gctx_id) (t' : TERM') : TERM =
-    let ctx = global_ctxs.ctx_table.[gctx_id]
-    if ctx.fwdTermTable.ContainsKey t' then
-        ctx.fwdTermTable.[t']
-    else
-        let term_id = ctx.fwdTermTable.Count
-        let attrs = {
-            term_id   = term_id
-            term_type = compute_type (GlobalCtx gctx_id) t'
+and Value gctx x = make_term gctx (Value' x)
+and Initial gctx (f, xs) = make_term gctx (Initial' (f, xs))
+and AppTerm gctx (f, ts) = make_term gctx (AppTerm' (f, ts))
+and CondTerm gctx (G, t1, t2) = make_term gctx (CondTerm' (G, t1, t2))
+and VarTerm gctx v = make_term gctx (VarTerm' v)
+and QuantTerm gctx (q_kind, v, t_set, t_cond) = make_term gctx (QuantTerm' (q_kind, v, t_set, t_cond))
+and LetTerm gctx (x, t1, t2) = make_term gctx (LetTerm' (x, t1, t2))
+and DomainTerm gctx tyname = make_term gctx (DomainTerm' tyname)    
+
+and convert_term (C : GLOBAL_CTX) (t : AST.TYPED_TERM) : TERM =
+    AST.ann_term_induction (fun x -> x) {
+        Value      = fun (_, x) -> Value C x;
+        Initial    = fun (_, (f, xs)) -> Initial C (f, xs);
+        AppTerm    = fun (_, (f, ts)) -> AppTerm C (f, ts);
+        CondTerm   = fun (_, (G, t1, t2)) -> CondTerm C (G, t1, t2);
+        VarTerm    = fun (_, v) -> VarTerm C v;
+        QuantTerm  = fun (_, (q_kind, v, t_set, t_cond)) -> QuantTerm C (q_kind, v, t_set, t_cond);
+        LetTerm    = fun (_, (v, t1, t2)) -> LetTerm C (v, t1, t2);
+        DomainTerm = fun (_, D) -> DomainTerm C D;
+    } t
+
+and convert_rule (C : GLOBAL_CTX) (R : AST.RULE) : RULE =
+    AST.rule_induction (convert_term C) {
+        UpdateRule = fun ((f, ts), t_rhs) -> UpdateRule ((f, ts), t_rhs);
+        CondRule   = fun (G, R1, R2) -> CondRule (G, R1, R2);
+        ParRule    = fun Rs -> ParRule Rs;
+        SeqRule    = fun Rs -> SeqRule Rs;
+        IterRule   = fun R' -> IterRule R';
+        LetRule    = fun (v, t1, R') -> LetRule (v, t1, R');
+        MacroRuleCall = fun (r, args) -> MacroRuleCall (r, args);
+        ForallRule = fun (v, t_set, G, R') -> ForallRule (v, t_set, G, R');
+        S_Updates  = failwith "DAG.convert_rule: S_Updates should not occur here"
+    } R
+
+and convert_macros (C : GLOBAL_CTX) (rdb : AST.MACRO_DB) : MACRO_DB =
+    Map.map (fun _ (args, t) -> (args, convert_term C t)) rdb
+
+and convert_rules (C : GLOBAL_CTX) (rdb : AST.RULES_DB) : RULES_DB =
+    Map.map (fun _ (args, R) -> (args, convert_rule C R)) rdb
+
+and new_global_ctx (sign : Signature.SIGNATURE, initial_state : State.STATE, macros : AST.MACRO_DB, rules : AST.RULES_DB) : GLOBAL_CTX =
+    let ctx_id = !global_ctxs.next_ctx
+    global_ctxs.next_ctx := ctx_id + 1
+    let new_ctx = {
+        signature     = sign
+        initial_state = initial_state
+        macros        = Map.empty
+        rules         = Map.empty
+        fwdTermTable  = new Dictionary<TERM', TERM>(HashIdentity.Structural)
+        bwdTermTable  = new Dictionary<TERM, TERM' * TERM_ATTRS>(HashIdentity.Structural)
+    }
+    global_ctxs.ctx_table.[ctx_id] <- new_ctx
+    let new_ctx = {
+        new_ctx with
+            macros = convert_macros (GlobalCtx ctx_id) macros
+            rules  = convert_rules (GlobalCtx ctx_id) rules
         }
-        ctx.fwdTermTable.[t'] <- Term term_id
-        ctx.bwdTermTable.[Term term_id] <- (t', attrs)
-        Term term_id
+    global_ctxs.ctx_table.[ctx_id] <- new_ctx
+    GlobalCtx ctx_id
 
-let get_term'_attrs (gctx: GLOBAL_CTX) (Term term_id) =
-    let (GlobalCtx gctx_id) = gctx
-    let ctx = global_ctxs.ctx_table.[gctx_id]
-    if ctx.bwdTermTable.ContainsKey (Term term_id) then
-        ctx.bwdTermTable.[Term term_id]
+and get_global_ctx' (GlobalCtx gctx_id : GLOBAL_CTX) : GLOBAL_CTX' =
+    if global_ctxs.ctx_table.ContainsKey gctx_id then
+        global_ctxs.ctx_table.[gctx_id]
     else
-        failwith (sprintf "get_term': term %d not found in context %d" term_id gctx_id)
+        failwith (sprintf "get_global_ctx': context %d not found" gctx_id)
 
-let get_term' (gctx: GLOBAL_CTX) (Term term_id) = get_term'_attrs gctx (Term term_id) |> fst
-let get_attrs (gctx: GLOBAL_CTX) (Term term_id) = get_term'_attrs gctx (Term term_id) |> snd
+and signature_of (GlobalCtx gctx_id) =
+    global_ctxs.ctx_table.[gctx_id].signature
 
+and initial_state_of (GlobalCtx gctx_id) =
+    global_ctxs.ctx_table.[gctx_id].initial_state
 
-let Value gctx x = make_term gctx (Value' x)
-let Initial gctx (f, xs) = make_term gctx (Initial' (f, xs))
-let AppTerm gctx (f, ts) = make_term gctx (AppTerm' (f, ts))
-let CondTerm gctx (G, t1, t2) = make_term gctx (CondTerm' (G, t1, t2))
-let VarTerm gctx v = make_term gctx (VarTerm' v)
-let QuantTerm gctx (q_kind, v, t_set, t_cond) = make_term gctx (QuantTerm' (q_kind, v, t_set, t_cond))
-let LetTerm gctx (x, t1, t2) = make_term gctx (LetTerm' (x, t1, t2))
-let DomainTerm gctx tyname = make_term gctx (DomainTerm' tyname)    
+and macros_of (GlobalCtx gctx_id) =
+    global_ctxs.ctx_table.[gctx_id].macros
+
+and rules_of (GlobalCtx gctx_id) =
+    global_ctxs.ctx_table.[gctx_id].rules
 
 //--------------------------------------------------------------------
 
@@ -1107,3 +1141,97 @@ and s_eval_rule (R : RULE) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : 
 
     R
 
+
+//--------------------------------------------------------------------
+// convert partially evaluated terms and rules to regular ones
+
+let rec reconvert_value (C : GLOBAL_CTX) x =
+    let sign = signature_of C
+    match x with
+    |   UNDEF    -> AppTerm C (Signature.UndefConst, [])
+    |   BOOL b   -> AppTerm C (Signature.BoolConst b, [])
+    |   INT i    -> AppTerm C (Signature.IntConst i, [])
+    |   STRING s -> AppTerm C (Signature.StringConst s, [])
+    |   SET fs   -> //AppTerm (FctName "asSet", ?????)
+                    failwith "reconvert_value: SET not implemented yet"
+    |   CELL (tag, args) -> AppTerm C (Signature.FctName tag, args >>| reconvert_value C)
+
+let reconvert_term (C : GLOBAL_CTX) t =
+    term_induction C (fun x -> x) {
+        Value      = fun x -> reconvert_value C x;
+        Initial    = fun (f, xs) -> AppTerm C (Signature.FctName f, xs >>| Value C);
+        AppTerm    = AppTerm C;
+        CondTerm   = CondTerm C;
+        VarTerm    = VarTerm C;
+        QuantTerm  = QuantTerm C;
+        LetTerm    = LetTerm C;
+        DomainTerm = DomainTerm C;
+    } t
+
+let reconvert_rule (C : GLOBAL_CTX) R = 
+    rule_induction (reconvert_term C) {
+        UpdateRule = UpdateRule;
+        CondRule   = CondRule;
+        ParRule    = ParRule;
+        SeqRule    = SeqRule;
+        IterRule   = IterRule;
+        LetRule    = LetRule;
+        MacroRuleCall = MacroRuleCall;
+        ForallRule = ForallRule;
+        S_Updates  = fun upds -> ParRule (List.map (fun ((f, xs), t_rhs) -> UpdateRule ((f, xs >>| Value C), reconvert_term C t_rhs)) (Set.toList upds))
+    } R
+
+//--------------------------------------------------------------------
+
+let count_s_updates = rule_induction (fun _ -> ()) {
+    UpdateRule = fun _ -> failwith "there should be no UpdateRule here";
+    CondRule  = fun (_, R1, R2) -> R1 + R2;
+    ParRule   = fun _ -> failwith "there should be no ParRule here";
+    SeqRule   = fun _ -> failwith "there should be no SeqRule here";
+    IterRule  = fun _ -> failwith "there should be no IterRule here";
+    LetRule   = fun _ -> failwith "there should be no LetRule here";
+    MacroRuleCall = fun _ -> failwith "there should be no MacroRuleCall here";
+    ForallRule = fun _ -> failwith "there should be no ForallRule here";
+    S_Updates = fun _ -> 1;   // not relevant, but define somehow to allow printing for debugging
+}
+
+//--------------------------------------------------------------------
+
+let name_size name = 1
+
+let term_size C =
+    term_induction C name_size {
+        Value = fun _ -> 1;
+        AppTerm = fun (f, ts : int list) -> 1 + f + List.sum ts;
+        CondTerm = fun (G, t1, t2) -> 1 + G + t1 + t2;
+        Initial = fun _ -> 1;
+        VarTerm = fun _ -> 1;
+        QuantTerm = fun (q_kind, v, t_set, t_cond) -> 1 + t_set + t_cond;
+        LetTerm = fun (v, t1, t2) -> 1 + t1 + t2;
+        DomainTerm = fun _ -> 1;
+    }
+
+let rule_size C =
+    rule_induction (term_size C) {
+        S_Updates = fun U -> Set.count U;   // not relevant, but define somehow to allow printing for debugging
+        UpdateRule = fun ((f, ts), t) -> 1 + 1 + List.sum ts + t;
+        CondRule = fun (G, R1, R2) -> 1 + G + R1 + R2;
+        ParRule = fun Rs -> 1 + List.sum Rs;
+        SeqRule = fun Rs -> 1 + List.sum Rs;
+        IterRule = fun R' -> 1 + R';
+        LetRule = fun (_, t, R) -> 1 + t + R;
+        ForallRule = fun (_, t_set, t_filter, R) -> 1 + t_set + t_filter + R;
+        MacroRuleCall = fun (r, ts) -> 1 + 1 + List.sum ts;
+    }
+
+//--------------------------------------------------------------------
+// first element of pair returned is the number of S_Updates rules, i.e. paths in the decision tree
+let symbolic_execution (C : GLOBAL_CTX) (R_in : RULE) (steps : int) : int * RULE =
+    if (!trace > 2) then fprintf stderr "symbolic_execution\n"
+    if (steps <= 0) then failwith "SymbEval.symbolic_execution: number of steps must be >= 1"
+    let S0 = TopLevel.initial_state ()
+    if (!trace > 2) then fprintf stderr "---\n%s\n---\n" (Signature.signature_to_string (signature_of C))
+    let R_in_n_times = [ for _ in 1..steps -> R_in ]
+    let R_in' = SeqRule (R_in_n_times @ [ skipRule ])      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
+    let R_out = s_eval_rule R_in' C (Map.empty, Map.empty, Set.empty)
+    (count_s_updates R_out, reconvert_rule C R_out)

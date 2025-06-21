@@ -26,8 +26,8 @@
     
     <Compile Include="TopLevel.fs" />
     <Compile Include="SymbEval.fs" /><Compile Include="DAG.fs" />
-    <Compile Include="CLI.fs" />
-    <Compile Include="Main.fs" />
+    
+    <Compile Include="CLI.fs" /><Compile Include="Main.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Z3" Version="4.12.2" />
