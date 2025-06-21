@@ -12,7 +12,7 @@ signature:
 
 
 definitions:
-    function n = 3
+    function n = 6
 
     main rule r_Main = seq
         //--- sorting algorithm

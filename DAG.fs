@@ -29,8 +29,8 @@ type GLOBAL_CTX' = {
     initial_state : State.STATE         // use only for initial state in this module, never use '_dynamic' field - also the second elem. of _dynamic_initial seems not to be used !
     macros        : MACRO_DB
     rules         : RULES_DB
-    fwdTermTable  : Dictionary<TERM', TERM>
-    bwdTermTable  : Dictionary<TERM, TERM' * TERM_ATTRS>
+    termIdxTable  : Dictionary<TERM', TERM>
+    termTable     : Dictionary<int, TERM' * TERM_ATTRS>
     smtExprTable  : Dictionary<TERM, SmtInterface.SMT_EXPR> // for SMT solver
 }
 
@@ -80,16 +80,16 @@ let global_ctxs : GLOBAL_CTX_TABLE = {
 
 let rec make_term_with_opt_type (GlobalCtx gctx_id) (t' : TERM') (opt_ty : Signature.TYPE option) : TERM =
     let ctx = global_ctxs.ctx_table.[gctx_id]
-    if ctx.fwdTermTable.ContainsKey t' then
-        ctx.fwdTermTable.[t']
+    if ctx.termIdxTable.ContainsKey t' then
+        ctx.termIdxTable.[t']
     else
-        let term_id = ctx.fwdTermTable.Count
+        let term_id = ctx.termIdxTable.Count
         let attrs = {
             term_id   = term_id
             term_type = match opt_ty with None -> compute_type (GlobalCtx gctx_id) t' | Some ty -> ty
         }
-        ctx.fwdTermTable.[t'] <- Term term_id
-        ctx.bwdTermTable.[Term term_id] <- (t', attrs)
+        ctx.termIdxTable.[t'] <- Term term_id
+        ctx.termTable.[term_id] <- (t', attrs)
         Term term_id
 
 and make_term_with_type C (t' : TERM') ty : TERM = make_term_with_opt_type C t' (Some ty)
@@ -98,8 +98,8 @@ and make_term C (t' : TERM') : TERM              = make_term_with_opt_type C t' 
 and get_term'_attrs (gctx: GLOBAL_CTX) (Term term_id) =
     let (GlobalCtx gctx_id) = gctx
     let ctx = global_ctxs.ctx_table.[gctx_id]
-    if ctx.bwdTermTable.ContainsKey (Term term_id) then
-        ctx.bwdTermTable.[Term term_id]
+    if ctx.termTable.ContainsKey (term_id) then
+        ctx.termTable.[term_id]
     else
         failwith (sprintf "get_term': term %d not found in context %d" term_id gctx_id)
 
@@ -122,13 +122,13 @@ and compute_type gctx (t' : TERM') : Signature.TYPE =
     |   LetTerm' (_, t1, _) -> get_type t1
     |   DomainTerm' tyname -> tyname
 
-and get_type (gctx as GlobalCtx gctx_id) (t : TERM) : Signature.TYPE =
+and get_type (gctx as GlobalCtx gctx_id) (t as Term term_id : TERM) : Signature.TYPE =
     let ctx = global_ctxs.ctx_table.[gctx_id]
-    if ctx.bwdTermTable.ContainsKey t then
-        let (_, attrs) = ctx.bwdTermTable.[t]
+    if ctx.termTable.ContainsKey term_id then
+        let (_, attrs) = ctx.termTable.[term_id]
         attrs.term_type
     else
-        failwith (sprintf "get_type: term %A not found in context %d" t gctx_id)
+        failwith (sprintf "get_type: term %A not found in context %d" (get_term' gctx t) gctx_id)
 
 and Value gctx x = make_term gctx (Value' x)
 and Initial gctx (f, xs) = make_term gctx (Initial' (f, xs))
@@ -178,8 +178,8 @@ and new_global_ctx (sign : Signature.SIGNATURE, initial_state : State.STATE, mac
         initial_state = initial_state
         macros        = Map.empty
         rules         = Map.empty
-        fwdTermTable  = new Dictionary<TERM', TERM>(HashIdentity.Structural)
-        bwdTermTable  = new Dictionary<TERM, TERM' * TERM_ATTRS>(HashIdentity.Structural)
+        termIdxTable  = new Dictionary<TERM', TERM>(HashIdentity.Structural)
+        termTable     = new Dictionary<int, TERM' * TERM_ATTRS>(HashIdentity.Structural)
         smtExprTable  = new Dictionary<TERM, SmtInterface.SMT_EXPR>(HashIdentity.Structural)
     }
     global_ctxs.ctx_table.[ctx_id] <- new_ctx
