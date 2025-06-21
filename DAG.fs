@@ -31,6 +31,7 @@ type GLOBAL_CTX' = {
     rules         : RULES_DB
     fwdTermTable  : Dictionary<TERM', TERM>
     bwdTermTable  : Dictionary<TERM, TERM' * TERM_ATTRS>
+    smtExprTable  : Dictionary<TERM, SmtInterface.SMT_EXPR> // for SMT solver
 }
 
 and GLOBAL_CTX = GlobalCtx of int
@@ -77,7 +78,7 @@ let global_ctxs : GLOBAL_CTX_TABLE = {
     next_ctx  = ref 0
 }
 
-let rec make_term (GlobalCtx gctx_id) (t' : TERM') : TERM =
+let rec make_term_with_opt_type (GlobalCtx gctx_id) (t' : TERM') (opt_ty : Signature.TYPE option) : TERM =
     let ctx = global_ctxs.ctx_table.[gctx_id]
     if ctx.fwdTermTable.ContainsKey t' then
         ctx.fwdTermTable.[t']
@@ -85,11 +86,14 @@ let rec make_term (GlobalCtx gctx_id) (t' : TERM') : TERM =
         let term_id = ctx.fwdTermTable.Count
         let attrs = {
             term_id   = term_id
-            term_type = compute_type (GlobalCtx gctx_id) t'
+            term_type = match opt_ty with None -> compute_type (GlobalCtx gctx_id) t' | Some ty -> ty
         }
         ctx.fwdTermTable.[t'] <- Term term_id
         ctx.bwdTermTable.[Term term_id] <- (t', attrs)
         Term term_id
+
+and make_term_with_type C (t' : TERM') ty : TERM = make_term_with_opt_type C t' (Some ty)
+and make_term C (t' : TERM') : TERM              = make_term_with_opt_type C t' None
 
 and get_term'_attrs (gctx: GLOBAL_CTX) (Term term_id) =
     let (GlobalCtx gctx_id) = gctx
@@ -141,7 +145,7 @@ and convert_term (C : GLOBAL_CTX) (t : AST.TYPED_TERM) : TERM =
         Initial    = fun (_, (f, xs)) -> Initial C (f, xs);
         AppTerm    = fun (_, (f, ts)) -> AppTerm C (f, ts);
         CondTerm   = fun (_, (G, t1, t2)) -> CondTerm C (G, t1, t2);
-        VarTerm    = fun (_, v) -> VarTerm C v;
+        VarTerm    = fun (ty, v) -> make_term_with_type C (VarTerm' v) ty
         QuantTerm  = fun (_, (q_kind, v, t_set, t_cond)) -> QuantTerm C (q_kind, v, t_set, t_cond);
         LetTerm    = fun (_, (v, t1, t2)) -> LetTerm C (v, t1, t2);
         DomainTerm = fun (_, D) -> DomainTerm C D;
@@ -157,7 +161,7 @@ and convert_rule (C : GLOBAL_CTX) (R : AST.RULE) : RULE =
         LetRule    = fun (v, t1, R') -> LetRule (v, t1, R');
         MacroRuleCall = fun (r, args) -> MacroRuleCall (r, args);
         ForallRule = fun (v, t_set, G, R') -> ForallRule (v, t_set, G, R');
-        S_Updates  = failwith "DAG.convert_rule: S_Updates should not occur here"
+        S_Updates  = fun upds -> S_Updates (Set.map (fun ((f, xs), t_rhs) -> (f, xs), convert_term C t_rhs) upds)
     } R
 
 and convert_macros (C : GLOBAL_CTX) (rdb : AST.MACRO_DB) : MACRO_DB =
@@ -176,6 +180,7 @@ and new_global_ctx (sign : Signature.SIGNATURE, initial_state : State.STATE, mac
         rules         = Map.empty
         fwdTermTable  = new Dictionary<TERM', TERM>(HashIdentity.Structural)
         bwdTermTable  = new Dictionary<TERM, TERM' * TERM_ATTRS>(HashIdentity.Structural)
+        smtExprTable  = new Dictionary<TERM, SmtInterface.SMT_EXPR>(HashIdentity.Structural)
     }
     global_ctxs.ctx_table.[ctx_id] <- new_ctx
     let new_ctx = {
@@ -513,6 +518,8 @@ let interpretation (S : GLOBAL_CTX) (UM : S_UPDATE_MAP) (C : PATH_COND) (f : Sig
 //  
 //--------------------------------------------------------------------
 
+// let smt_map_app_ctr = ref 0
+
 let rec smt_map_term_background_function gctx (C : SmtInterface.SMT_CONTEXT) (f, ts : TERM list) : SmtInterface.SMT_EXPR =
     let sign = signature_of gctx
     let ctx = !C.ctx
@@ -591,23 +598,31 @@ and smt_map_initial gctx (C : SmtInterface.SMT_CONTEXT) (f, ts) : SmtInterface.S
     let sign = signature_of gctx
     if Signature.fct_kind f sign = Signature.Controlled
     then smt_map_term_user_defined_function gctx C (f, ts)
-    else failwith (sprintf "smt_map_app_term: '%s' is not a controlled function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
+    else failwith (sprintf "smt_map_initial: '%s' is not a controlled function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
-and smt_map_term (gctx : GLOBAL_CTX) (C : SmtInterface.SMT_CONTEXT) (t : TERM) : SmtInterface.SMT_EXPR =
+and smt_map_term (gctx as GlobalCtx ctx_id : GLOBAL_CTX) (C : SmtInterface.SMT_CONTEXT) (t : TERM) : SmtInterface.SMT_EXPR =
     //if !trace > 0 then fprintf stderr "smt_map_term: %s -> " (term_to_string sign t)
     let ctx = !C.ctx
-    let result = 
-        match get_term' gctx t with
-        |   AppTerm' (Signature.IntConst i, [])    -> SmtInterface.SMT_IntExpr (ctx.MkInt i)
-        |   Value' (INT i)               -> SmtInterface.SMT_IntExpr (ctx.MkInt i)
-        |   AppTerm' (Signature.BoolConst b, [])   -> SmtInterface.SMT_BoolExpr (ctx.MkBool b)
-        |   Value' (BOOL b)              -> SmtInterface.SMT_BoolExpr (ctx.MkBool b)
-        |   Value' (CELL (cons, []))     -> SmtInterface.SMT_Expr (Map.find cons (!C.con))
-        |   Initial' (f, xs)             -> smt_map_initial gctx C (f, xs >>| Value gctx)
-        |   CondTerm' (G, t1, t2)        -> smt_map_ITE gctx C (G, t1, t2)
-        |   AppTerm' (Signature.FctName f, ts) -> smt_map_app_term gctx C (f, ts)
-        |   _ -> failwith (sprintf "smt_map_term: not supported (t = %s)" (term_to_string gctx t))
-    result
+    let gctx' = get_global_ctx' gctx
+    if gctx'.smtExprTable.ContainsKey t then
+        gctx'.smtExprTable.[t]
+    else
+        let result = 
+            match get_term' gctx t with
+            |   AppTerm' (Signature.IntConst i, [])    -> SmtInterface.SMT_IntExpr (ctx.MkInt i)
+            |   Value' (INT i)               -> SmtInterface.SMT_IntExpr (ctx.MkInt i)
+            |   AppTerm' (Signature.BoolConst b, [])   -> SmtInterface.SMT_BoolExpr (ctx.MkBool b)
+            |   Value' (BOOL b)              -> SmtInterface.SMT_BoolExpr (ctx.MkBool b)
+            |   Value' (CELL (cons, []))     -> SmtInterface.SMT_Expr (Map.find cons (!C.con))
+            |   Initial' (f, xs)             -> smt_map_initial gctx C (f, xs >>| Value gctx)
+            |   CondTerm' (G, t1, t2)        -> smt_map_ITE gctx C (G, t1, t2)
+            |   AppTerm' (Signature.FctName f, ts) ->
+                    // smt_map_app_ctr := !smt_map_app_ctr + 1;
+                    // fprintf stderr "%d: %A: %A\n" (!smt_map_app_ctr) t (term_to_string gctx t);
+                    smt_map_app_term gctx C (f, ts)
+            |   _ -> failwith (sprintf "smt_map_term: not supported (t = %s)" (term_to_string gctx t))
+        gctx'.smtExprTable.[t] <- result
+        result
 
 //--------------------------------------------------------------------
 //
@@ -898,7 +913,8 @@ and eval_cond_term (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_CON
     let (sign, get_type) = (signature_of C, get_type C)
     let with_extended_path_cond = with_extended_path_cond C
     let term_to_string = term_to_string C
-    match get_term' C (G C (UM, env, pc)) with
+    let G = G C (UM, env, pc)
+    match get_term' C G with
     |   Value' (BOOL true)  -> t1 C (UM, env, pc)
     |   Value' (BOOL false) -> t2 C (UM, env, pc)
     |   CondTerm' (G', G1, G2) ->
@@ -1032,7 +1048,8 @@ and s_eval_rule (R : RULE) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : 
             F [] ts
 
     let eval_cond (G, R1, R2) (UM, env, pc) = 
-        match get_term' C (s_eval_term G (UM, env, pc)) with
+        let G = s_eval_term G (UM, env, pc)
+        match get_term' C G with
         |   Value' (BOOL true)  -> s_eval_rule R1 (UM, env, pc)
         |   Value' (BOOL false) -> s_eval_rule R2 (UM, env, pc)
         |   CondTerm' (G', G1, G2) ->
@@ -1103,7 +1120,9 @@ and s_eval_rule (R : RULE) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : 
         |   R' -> failwith (sprintf "SymEvalRules.s_eval_rule: eval_iter_rule - R'' = %s" (rule_to_string R'))
     
     and eval_let (v, t, R) (UM, env, pc) =
-        s_eval_rule R (UM, add_binding env (v, s_eval_term t (UM, env, pc), get_type t), pc)       // !!!!! is this one correct at all?
+        let t' = s_eval_term t (UM, env, pc)
+        let R' = s_eval_rule R (UM, add_binding env (v, t', get_type t'), pc)
+        R'
 
     and eval_forall (v, ts, G, R) (UM, env, pc) =
         match get_term' C (s_eval_term ts (UM, env, pc)) with

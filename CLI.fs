@@ -166,22 +166,24 @@ let CLI_with_ex(args) =
                 |   "-str"         -> fprintf stderr "-str %s " args[i+1]; objects_to_load := Str args[i+1] :: !objects_to_load; parse_arguments (i+2)
                 |   "-file"        -> fprintf stderr "-file %s " args[i+1]; objects_to_load := File args[i+1] :: !objects_to_load; parse_arguments (i+2)
                 |   s -> writeln_err $"unknown option: {s}"; exit 1
-        let rec load_everything L =
-            let _ = TopLevel.init (!asmeta_flag || !asmeta_dag_flag)  // use AsmetaL parser
-            match L with
+        let load_everything L =
+            TopLevel.init (!asmeta_flag || !asmeta_dag_flag)  // use AsmetaL parser
+            let rec loadfiles = function
             |   [] -> () 
-            |   (Str s) :: rest  -> TopLevel.loadstr !asmeta_flag s; load_everything rest
-            |   (File f) :: rest -> loadfile !asmeta_flag f; load_everything rest
+            |   (Str s) :: rest  -> TopLevel.loadstr !asmeta_flag s; loadfiles rest
+            |   (File f) :: rest -> loadfile !asmeta_flag f; loadfiles rest
+            loadfiles L
         try parse_arguments 0 with _ -> usage (); exit 1
         if !asmeta_dag_flag  // experimental AsmetaL DAG mode
         then
             if !asmeta_flag
             then writeln_err "AsmetaL DAG mode is not compatible with regular AsmetaL mode"; exit 1
             else
+                asmeta_flag := true
                 load_everything (List.rev !objects_to_load)
                 let sign = TopLevel.signature ()
                 let exec_symbolic = exec_symbolic sign
-                let (_, R_in) = try AST.get_rule !main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
+                let (_, R_in) = try AST.get_rule !main_rule_name (TopLevel.rules ()) with _ -> failwith ("rule '" + !main_rule_name + " not defined")
                 let C = DAG.new_global_ctx (TopLevel.signature (), TopLevel.initial_state (), TopLevel.macros (), TopLevel.rules ())
                 let R_in = DAG.convert_rule C R_in
                 exec_symbolic (fun (R : DAG.RULE) -> DAG.symbolic_execution C R (!steps)) R_in (DAG.pp_rule C, DAG.rule_size C)
@@ -191,7 +193,7 @@ let CLI_with_ex(args) =
             load_everything (List.rev !objects_to_load)
             let sign = TopLevel.signature ()
             let exec_symbolic = exec_symbolic sign
-            let (_, R_in) = try AST.get_rule !main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
+            let (_, R_in) = try AST.get_rule (!main_rule_name) (TopLevel.rules ()) with _ -> failwith ("rule '" + !main_rule_name + "' not defined")
             if !invcheck
             then simple_exec (SymbEval.symbolic_execution_for_invariant_checking (!invcheck_steps)) R_in
             else if !turbo2basic
@@ -201,6 +203,7 @@ let CLI_with_ex(args) =
             else exec_nonsymbolic (!main_rule_name)
         0
 
+(*
 let CLI(args) =
     try
         CLI_with_ex(args)
@@ -209,3 +212,8 @@ let CLI(args) =
     |   AsmetaL.Error (fct, reg, err) -> writeln_err ("\n" + AsmetaL.error_msg (fct, reg, err)); 1
     |   SymbUpdates.Error (mdl, fct, err) -> writeln_err ("\n" + SymbUpdates.error_msg (mdl, fct, err)); 1
     |   Failure s -> writeln_err $"\nexception:\n{s}"; 1
+*)
+
+let CLI(args) =
+    CLI_with_ex(args)
+
