@@ -203,17 +203,11 @@ let CLI_with_ex(args) =
             else exec_nonsymbolic (!main_rule_name)
         0
 
-(*
 let CLI(args) =
     try
         CLI_with_ex(args)
     with
-    |   Parser.Error (fct, reg, err)  -> writeln_err ("\n" + Parser.error_msg (fct, reg, err)); 1
-    |   AsmetaL.Error (fct, reg, err) -> writeln_err ("\n" + AsmetaL.error_msg (fct, reg, err)); 1
-    |   SymbUpdates.Error (mdl, fct, err) -> writeln_err ("\n" + SymbUpdates.error_msg (mdl, fct, err)); 1
-    |   Failure s -> writeln_err $"\nexception:\n{s}"; 1
-*)
-
-let CLI(args) =
-    CLI_with_ex(args)
-
+    |   ex as Parser.Error (fct, reg, err)  -> writeln_err ("\n" + Parser.error_msg (fct, reg, err)); raise ex
+    |   ex as AsmetaL.Error (fct, reg, err) -> writeln_err ("\n" + AsmetaL.error_msg (fct, reg, err)); raise ex
+    |   ex as SymbUpdates.Error (mdl, fct, err) -> writeln_err ("\n" + SymbUpdates.error_msg (mdl, fct, err)); raise ex
+    |   ex as Failure s -> writeln_err $"\nexception:\n{s}"; raise ex
