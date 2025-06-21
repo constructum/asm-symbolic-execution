@@ -22,6 +22,7 @@ let rec indent level ppt = if level = 0 then ppt else blo4 [ indent (level-1) pp
 type TERM_ATTRS = {
     term_id   : int
     term_type : Signature.TYPE
+    smt_expr  : SmtInterface.SMT_EXPR option ref  // for SMT solver
 }
 
 type GLOBAL_CTX' = {
@@ -30,16 +31,13 @@ type GLOBAL_CTX' = {
     macros        : MACRO_DB
     rules         : RULES_DB
     termIdxTable  : Dictionary<TERM', TERM>
-    termTable     : Dictionary<int, TERM' * TERM_ATTRS>
-    smtExprTable  : Dictionary<TERM, SmtInterface.SMT_EXPR> // for SMT solver
+    termTable     : ResizeArray<TERM' * TERM_ATTRS>
+//    smtExprTable  : ResizeArray<SmtInterface.SMT_EXPR>  //!!!Dictionary<TERM, SmtInterface.SMT_EXPR> // for SMT solver
 }
 
 and GLOBAL_CTX = GlobalCtx of int
 
-and GLOBAL_CTX_TABLE = {
-    ctx_table : Dictionary<int, GLOBAL_CTX'>
-    next_ctx  : int ref
-}
+and GLOBAL_CTX_TABLE = ResizeArray<GLOBAL_CTX'>
 
 and TERM' =
 |   Value'      of (VALUE)                     // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
@@ -73,13 +71,10 @@ and S_UPDATE = LOCATION * TERM
 and S_UPDATE_SET = Set<S_UPDATE>
 and S_UPDATE_MAP = Map<string, Map<VALUE list, TERM>>
 
-let global_ctxs : GLOBAL_CTX_TABLE = {
-    ctx_table = new Dictionary<int, GLOBAL_CTX'>()
-    next_ctx  = ref 0
-}
+let global_ctxs = new ResizeArray<GLOBAL_CTX'>()
 
-let rec make_term_with_opt_type (GlobalCtx gctx_id) (t' : TERM') (opt_ty : Signature.TYPE option) : TERM =
-    let ctx = global_ctxs.ctx_table.[gctx_id]
+let rec inline make_term_with_opt_type (GlobalCtx gctx_id) (t' : TERM') (opt_ty : Signature.TYPE option) : TERM =
+    let ctx = global_ctxs.[gctx_id]
     if ctx.termIdxTable.ContainsKey t' then
         ctx.termIdxTable.[t']
     else
@@ -87,24 +82,25 @@ let rec make_term_with_opt_type (GlobalCtx gctx_id) (t' : TERM') (opt_ty : Signa
         let attrs = {
             term_id   = term_id
             term_type = match opt_ty with None -> compute_type (GlobalCtx gctx_id) t' | Some ty -> ty
+            smt_expr  = ref None
         }
         ctx.termIdxTable.[t'] <- Term term_id
-        ctx.termTable.[term_id] <- (t', attrs)
+        ctx.termTable.Add (t', attrs)
         Term term_id
 
-and make_term_with_type C (t' : TERM') ty : TERM = make_term_with_opt_type C t' (Some ty)
-and make_term C (t' : TERM') : TERM              = make_term_with_opt_type C t' None
+and inline make_term_with_type C (t' : TERM') ty : TERM = make_term_with_opt_type C t' (Some ty)
+and inline make_term C (t' : TERM') : TERM              = make_term_with_opt_type C t' None
 
-and get_term'_attrs (gctx: GLOBAL_CTX) (Term term_id) =
+and inline get_term'_attrs (gctx: GLOBAL_CTX) (Term term_id) =
     let (GlobalCtx gctx_id) = gctx
-    let ctx = global_ctxs.ctx_table.[gctx_id]
-    if ctx.termTable.ContainsKey (term_id) then
+    let ctx = global_ctxs.[gctx_id]
+    if term_id < ctx.termTable.Count then
         ctx.termTable.[term_id]
     else
         failwith (sprintf "get_term': term %d not found in context %d" term_id gctx_id)
 
-and get_term' (gctx: GLOBAL_CTX) (Term term_id) = get_term'_attrs gctx (Term term_id) |> fst
-and get_attrs (gctx: GLOBAL_CTX) (Term term_id) = get_term'_attrs gctx (Term term_id) |> snd
+and inline get_term' (gctx: GLOBAL_CTX) (Term term_id) = get_term'_attrs gctx (Term term_id) |> fst
+and inline get_attrs (gctx: GLOBAL_CTX) (Term term_id) = get_term'_attrs gctx (Term term_id) |> snd
 
 and compute_type gctx (t' : TERM') : Signature.TYPE =
     let (sign, get_type) = (signature_of gctx, get_type gctx)
@@ -123,21 +119,34 @@ and compute_type gctx (t' : TERM') : Signature.TYPE =
     |   DomainTerm' tyname -> tyname
 
 and get_type (gctx as GlobalCtx gctx_id) (t as Term term_id : TERM) : Signature.TYPE =
-    let ctx = global_ctxs.ctx_table.[gctx_id]
-    if ctx.termTable.ContainsKey term_id then
-        let (_, attrs) = ctx.termTable.[term_id]
-        attrs.term_type
+    let termTable = global_ctxs.[gctx_id].termTable
+    if term_id < termTable.Count then
+        (snd termTable.[term_id]).term_type
     else
         failwith (sprintf "get_type: term %A not found in context %d" (get_term' gctx t) gctx_id)
 
-and Value gctx x = make_term gctx (Value' x)
-and Initial gctx (f, xs) = make_term gctx (Initial' (f, xs))
-and AppTerm gctx (f, ts) = make_term gctx (AppTerm' (f, ts))
-and CondTerm gctx (G, t1, t2) = make_term gctx (CondTerm' (G, t1, t2))
-and VarTerm gctx v = make_term gctx (VarTerm' v)
-and QuantTerm gctx (q_kind, v, t_set, t_cond) = make_term gctx (QuantTerm' (q_kind, v, t_set, t_cond))
-and LetTerm gctx (x, t1, t2) = make_term gctx (LetTerm' (x, t1, t2))
-and DomainTerm gctx tyname = make_term gctx (DomainTerm' tyname)    
+and get_smt_expr (gctx as GlobalCtx gctx_id) (t as Term term_id : TERM) : SmtInterface.SMT_EXPR option =
+    let termTable = global_ctxs.[gctx_id].termTable
+    if term_id < termTable.Count then
+        !(snd termTable.[term_id]).smt_expr
+    else
+        failwith (sprintf "get_type: term %A not found in context %d" (get_term' gctx t) gctx_id)
+
+and set_smt_expr (gctx as GlobalCtx gctx_id) (t as Term term_id : TERM) (smt_expr : SmtInterface.SMT_EXPR) =
+    let termTable = global_ctxs.[gctx_id].termTable
+    if term_id < termTable.Count then
+        (snd termTable.[term_id]).smt_expr := Some smt_expr
+    else
+        failwith (sprintf "set_smt_expr: term %A not found in context %d" (get_term' gctx t) gctx_id)
+
+and inline Value gctx x = make_term gctx (Value' x)
+and inline Initial gctx (f, xs) = make_term gctx (Initial' (f, xs))
+and inline AppTerm gctx (f, ts) = make_term gctx (AppTerm' (f, ts))
+and inline CondTerm gctx (G, t1, t2) = make_term gctx (CondTerm' (G, t1, t2))
+and inline VarTerm gctx v = make_term gctx (VarTerm' v)
+and inline QuantTerm gctx (q_kind, v, t_set, t_cond) = make_term gctx (QuantTerm' (q_kind, v, t_set, t_cond))
+and inline LetTerm gctx (x, t1, t2) = make_term gctx (LetTerm' (x, t1, t2))
+and inline DomainTerm gctx tyname = make_term gctx (DomainTerm' tyname)    
 
 and convert_term (C : GLOBAL_CTX) (t : AST.TYPED_TERM) : TERM =
     AST.ann_term_induction (fun x -> x) {
@@ -171,43 +180,41 @@ and convert_rules (C : GLOBAL_CTX) (rdb : AST.RULES_DB) : RULES_DB =
     Map.map (fun _ (args, R) -> (args, convert_rule C R)) rdb
 
 and new_global_ctx (sign : Signature.SIGNATURE, initial_state : State.STATE, macros : AST.MACRO_DB, rules : AST.RULES_DB) : GLOBAL_CTX =
-    let ctx_id = !global_ctxs.next_ctx
-    global_ctxs.next_ctx := ctx_id + 1
+    let ctx_id = global_ctxs.Count
     let new_ctx = {
         signature     = sign
         initial_state = initial_state
         macros        = Map.empty
         rules         = Map.empty
         termIdxTable  = new Dictionary<TERM', TERM>(HashIdentity.Structural)
-        termTable     = new Dictionary<int, TERM' * TERM_ATTRS>(HashIdentity.Structural)
-        smtExprTable  = new Dictionary<TERM, SmtInterface.SMT_EXPR>(HashIdentity.Structural)
+        termTable     = new ResizeArray<TERM' * TERM_ATTRS>()
     }
-    global_ctxs.ctx_table.[ctx_id] <- new_ctx
+    global_ctxs.Add new_ctx
     let new_ctx = {
         new_ctx with
             macros = convert_macros (GlobalCtx ctx_id) macros
             rules  = convert_rules (GlobalCtx ctx_id) rules
         }
-    global_ctxs.ctx_table.[ctx_id] <- new_ctx
+    global_ctxs.[ctx_id] <- new_ctx
     GlobalCtx ctx_id
 
 and get_global_ctx' (GlobalCtx gctx_id : GLOBAL_CTX) : GLOBAL_CTX' =
-    if global_ctxs.ctx_table.ContainsKey gctx_id then
-        global_ctxs.ctx_table.[gctx_id]
+    if gctx_id < global_ctxs.Count then
+        global_ctxs.[gctx_id]
     else
         failwith (sprintf "get_global_ctx': context %d not found" gctx_id)
 
 and signature_of (GlobalCtx gctx_id) =
-    global_ctxs.ctx_table.[gctx_id].signature
+    global_ctxs.[gctx_id].signature
 
 and initial_state_of (GlobalCtx gctx_id) =
-    global_ctxs.ctx_table.[gctx_id].initial_state
+    global_ctxs.[gctx_id].initial_state
 
 and macros_of (GlobalCtx gctx_id) =
-    global_ctxs.ctx_table.[gctx_id].macros
+    global_ctxs.[gctx_id].macros
 
 and rules_of (GlobalCtx gctx_id) =
-    global_ctxs.ctx_table.[gctx_id].rules
+    global_ctxs.[gctx_id].rules
 
 //--------------------------------------------------------------------
 
@@ -603,26 +610,26 @@ and smt_map_initial gctx (C : SmtInterface.SMT_CONTEXT) (f, ts) : SmtInterface.S
 and smt_map_term (gctx as GlobalCtx ctx_id : GLOBAL_CTX) (C : SmtInterface.SMT_CONTEXT) (t : TERM) : SmtInterface.SMT_EXPR =
     //if !trace > 0 then fprintf stderr "smt_map_term: %s -> " (term_to_string sign t)
     let ctx = !C.ctx
-    let gctx' = get_global_ctx' gctx
-    if gctx'.smtExprTable.ContainsKey t then
-        gctx'.smtExprTable.[t]
-    else
-        let result = 
-            match get_term' gctx t with
-            |   AppTerm' (Signature.IntConst i, [])    -> SmtInterface.SMT_IntExpr (ctx.MkInt i)
-            |   Value' (INT i)               -> SmtInterface.SMT_IntExpr (ctx.MkInt i)
-            |   AppTerm' (Signature.BoolConst b, [])   -> SmtInterface.SMT_BoolExpr (ctx.MkBool b)
-            |   Value' (BOOL b)              -> SmtInterface.SMT_BoolExpr (ctx.MkBool b)
-            |   Value' (CELL (cons, []))     -> SmtInterface.SMT_Expr (Map.find cons (!C.con))
-            |   Initial' (f, xs)             -> smt_map_initial gctx C (f, xs >>| Value gctx)
-            |   CondTerm' (G, t1, t2)        -> smt_map_ITE gctx C (G, t1, t2)
-            |   AppTerm' (Signature.FctName f, ts) ->
-                    // smt_map_app_ctr := !smt_map_app_ctr + 1;
-                    // fprintf stderr "%d: %A: %A\n" (!smt_map_app_ctr) t (term_to_string gctx t);
-                    smt_map_app_term gctx C (f, ts)
-            |   _ -> failwith (sprintf "smt_map_term: not supported (t = %s)" (term_to_string gctx t))
-        gctx'.smtExprTable.[t] <- result
-        result
+    //let gctx' = get_global_ctx' gctx
+    match get_smt_expr gctx t with
+    |   Some e -> e
+    |   None ->
+            let result = 
+                match get_term' gctx t with
+                |   AppTerm' (Signature.IntConst i, [])    -> SmtInterface.SMT_IntExpr (ctx.MkInt i)
+                |   Value' (INT i)               -> SmtInterface.SMT_IntExpr (ctx.MkInt i)
+                |   AppTerm' (Signature.BoolConst b, [])   -> SmtInterface.SMT_BoolExpr (ctx.MkBool b)
+                |   Value' (BOOL b)              -> SmtInterface.SMT_BoolExpr (ctx.MkBool b)
+                |   Value' (CELL (cons, []))     -> SmtInterface.SMT_Expr (Map.find cons (!C.con))
+                |   Initial' (f, xs)             -> smt_map_initial gctx C (f, xs >>| Value gctx)
+                |   CondTerm' (G, t1, t2)        -> smt_map_ITE gctx C (G, t1, t2)
+                |   AppTerm' (Signature.FctName f, ts) ->
+                        // smt_map_app_ctr := !smt_map_app_ctr + 1;
+                        // fprintf stderr "%d: %A: %A\n" (!smt_map_app_ctr) t (term_to_string gctx t);
+                        smt_map_app_term gctx C (f, ts)
+                |   _ -> failwith (sprintf "smt_map_term: not supported (t = %s)" (term_to_string gctx t))
+            set_smt_expr gctx t result
+            result
 
 //--------------------------------------------------------------------
 //
