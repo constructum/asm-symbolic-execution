@@ -178,15 +178,18 @@ let CLI_with_ex(args) =
         then
             if !asmeta_flag
             then writeln_err "AsmetaL DAG mode is not compatible with regular AsmetaL mode"; exit 1
+            else if !turbo2basic
+            then writeln_err "'-turbo2basic' option not yet supported with '-asmeta-dag"; exit 1
             else
                 asmeta_flag := true
                 load_everything (List.rev !objects_to_load)
                 let sign = TopLevel.signature ()
-                let exec_symbolic = exec_symbolic sign
                 let (_, R_in) = try AST.get_rule !main_rule_name (TopLevel.rules ()) with _ -> failwith ("rule '" + !main_rule_name + " not defined")
-                let C = DAG.new_global_ctx (TopLevel.signature (), TopLevel.initial_state (), TopLevel.macros (), TopLevel.rules ())
+                let C = DAG.new_global_ctx (TopLevel.signature (), TopLevel.initial_state (), TopLevel.macros (), TopLevel.rules (), TopLevel.invariants ())
                 let R_in = DAG.convert_rule C R_in
-                exec_symbolic (fun (R : DAG.RULE) -> DAG.symbolic_execution C R (!steps)) R_in (DAG.pp_rule C, DAG.rule_size C)
+                if !invcheck
+                then simple_exec (DAG.symbolic_execution_for_invariant_checking C !invcheck_steps) R_in
+                else exec_symbolic sign (fun (R : DAG.RULE) -> DAG.symbolic_execution C R (!steps)) R_in (DAG.pp_rule C, DAG.rule_size C)
                 ()
         else  // all other options
             // !!! tbd: for AsmetaL the main rule name it not always 'r_Main', but should be set according to the content of the ASM file
@@ -195,7 +198,7 @@ let CLI_with_ex(args) =
             let exec_symbolic = exec_symbolic sign
             let (_, R_in) = try AST.get_rule (!main_rule_name) (TopLevel.rules ()) with _ -> failwith ("rule '" + !main_rule_name + "' not defined")
             if !invcheck
-            then simple_exec (SymbEval.symbolic_execution_for_invariant_checking (!invcheck_steps)) R_in
+            then simple_exec (SymbEval.symbolic_execution_for_invariant_checking !invcheck_steps) R_in
             else if !turbo2basic
             then exec_symbolic SymbEval.symbolic_execution_for_turbo_asm_to_basic_asm_transformation R_in (AST.pp_rule sign, AST.rule_size)
             else if !symbolic

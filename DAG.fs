@@ -2,6 +2,7 @@ module DAG
 
 //--------------------------------------------------------------------
 
+open System.Diagnostics
 open System.Collections.Generic
 
 open Common
@@ -30,6 +31,7 @@ type GLOBAL_CTX' = {
     initial_state : State.STATE         // use only for initial state in this module, never use '_dynamic' field - also the second elem. of _dynamic_initial seems not to be used !
     macros        : MACRO_DB
     rules         : RULES_DB
+    invariants    : Map<string, TERM>   // Added invariants field
     termIdxTable  : Dictionary<TERM', TERM>
     termTable     : ResizeArray<TERM' * TERM_ATTRS>
 //    smtExprTable  : ResizeArray<SmtInterface.SMT_EXPR>  //!!!Dictionary<TERM, SmtInterface.SMT_EXPR> // for SMT solver
@@ -179,13 +181,14 @@ and convert_macros (C : GLOBAL_CTX) (rdb : AST.MACRO_DB) : MACRO_DB =
 and convert_rules (C : GLOBAL_CTX) (rdb : AST.RULES_DB) : RULES_DB =
     Map.map (fun _ (args, R) -> (args, convert_rule C R)) rdb
 
-and new_global_ctx (sign : Signature.SIGNATURE, initial_state : State.STATE, macros : AST.MACRO_DB, rules : AST.RULES_DB) : GLOBAL_CTX =
+and new_global_ctx (sign : Signature.SIGNATURE, initial_state : State.STATE, macros : AST.MACRO_DB, rules : AST.RULES_DB, invariants : Map<string, AST.TYPED_TERM>) : GLOBAL_CTX =
     let ctx_id = global_ctxs.Count
     let new_ctx = {
         signature     = sign
         initial_state = initial_state
         macros        = Map.empty
         rules         = Map.empty
+        invariants    = Map.empty
         termIdxTable  = new Dictionary<TERM', TERM>(HashIdentity.Structural)
         termTable     = new ResizeArray<TERM' * TERM_ATTRS>()
     }
@@ -194,6 +197,7 @@ and new_global_ctx (sign : Signature.SIGNATURE, initial_state : State.STATE, mac
         new_ctx with
             macros = convert_macros (GlobalCtx ctx_id) macros
             rules  = convert_rules (GlobalCtx ctx_id) rules
+            invariants = Map.map (fun _ t -> convert_term (GlobalCtx ctx_id) t) invariants
         }
     global_ctxs.[ctx_id] <- new_ctx
     GlobalCtx ctx_id
@@ -215,6 +219,9 @@ and macros_of (GlobalCtx gctx_id) =
 
 and rules_of (GlobalCtx gctx_id) =
     global_ctxs.[gctx_id].rules
+
+and invariants_of (GlobalCtx gctx_id) =
+    global_ctxs.[gctx_id].invariants
 
 //--------------------------------------------------------------------
 
@@ -1261,3 +1268,81 @@ let symbolic_execution (C : GLOBAL_CTX) (R_in : RULE) (steps : int) : int * RULE
     let R_in' = SeqRule (R_in_n_times @ [ skipRule ])      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
     let R_out = s_eval_rule R_in' C (Map.empty, Map.empty, Set.empty)
     (count_s_updates R_out, reconvert_rule C R_out)
+
+let symbolic_execution_for_invariant_checking (C : GLOBAL_CTX) (opt_steps : int option) (R_in : RULE) : unit =
+    let proc = Process.GetCurrentProcess()
+    let capture_cpu_time (proc : Process) =
+        (proc.TotalProcessorTime, proc.UserProcessorTime, proc.PrivilegedProcessorTime)
+    let measure_cpu_time (proc : Process) (cpu0, usr0, sys0) =
+        let (cpu1, usr1, sys1) = capture_cpu_time proc
+        ( (cpu1 - cpu0).TotalMilliseconds, (usr1 - usr0).TotalMilliseconds, (sys1 - sys0).TotalMilliseconds )
+    let (cpu0, usr0, sys0) = capture_cpu_time proc
+    if (!trace > 2) then fprintf stderr "symbolic_execution_for_invariant_checking\n"
+    let with_extended_path_cond = with_extended_path_cond C
+    match opt_steps with
+    |   Some n -> if n < 0 then failwith "SymbEval.symbolic_execution_for_invariant_checking: number of steps must be >= 0"
+    |   None -> ()
+    let UM0 = Map.empty
+    let invs = Map.toList (invariants_of C)
+    let counters = ref Map.empty
+    let reset_counters () = counters := Map.empty
+    let update_counters f inv_id = counters := Map.change inv_id (function Some (m, v, u) -> Some (f (m, v, u)) | None -> Some (f (0, 0, 0))) (!counters)
+    let print_counters i () =
+        printf "\n--- S_%d summary:\n\n" i
+        Map.map (fun inv_id (m, v, u) -> printf "'%s': met on %d paths / definitely violated on %d paths / possibly violated on %d paths\n" inv_id m v u) !counters |> ignore
+        let (cpu, usr, sys) = measure_cpu_time proc (cpu0, usr0, sys0)
+        print_time (cpu, usr, sys)
+        |> ignore
+    let rec traverse i conditions R (UM, env, pc) =
+        let initial_state_conditions_to_reach_this_state ts =
+            sprintf "- this path is taken when the following conditions hold in the initial state:\n%s"
+                (String.concat "\n" (List.rev ts >>| fun t -> term_to_string C (reconvert_term C t)))
+        let show_cumulative_updates sign updates =
+            "- cumulative update set for this path:\n" ^
+            String.concat "\n"
+                (Set.toList updates >>| fun ((f, xs), t) ->
+                    sprintf "%s%s := %s"
+                        f (if List.isEmpty xs then "" else "("^(String.concat ", " (xs >>| value_to_string))^")")
+                        (term_to_string sign t))
+        let met inv_id =
+            update_counters (function (m, v, u) -> (m + 1, v, u)) inv_id
+            ""
+        let possibly_violated inv_id conditions (updates : S_UPDATE_SET) t t' = 
+            update_counters (function (m, v, u) -> (m, v, u + 1)) inv_id
+            sprintf "\n!!! invariant '%s' possibly violated in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n\n%s\n\n---------------\n"
+                inv_id i (term_to_string C t) (term_to_string C t')
+                (initial_state_conditions_to_reach_this_state conditions)
+                (show_cumulative_updates C updates)
+        let definitely_violated inv_id conditions updates t t' =
+            update_counters (function (m, v, u) -> (m, v + 1, u)) inv_id
+            sprintf "\n!!! invariant '%s' definitely violated in S_%d:\n%s\n\n- in this state and path, it symbolically evaluates to:\n%s\n\n%s\n\n%s\n\n---------------\n"
+                inv_id i (term_to_string C t) (term_to_string C t')
+                (initial_state_conditions_to_reach_this_state conditions)
+                (show_cumulative_updates C updates)
+        let check_invariants invs S0 conditions updates =
+            let check_one (inv_id, t) =
+                let t' = s_eval_term t C (apply_s_update_set C S0 updates, Map.empty, Set.empty)
+                if smt_formula_is_true C TopLevel.smt_ctx t'
+                then met inv_id
+                else if smt_formula_is_false C TopLevel.smt_ctx t' then definitely_violated inv_id conditions updates t t'
+                else possibly_violated inv_id conditions updates t t'
+            printf "%s" (String.concat "" (List.filter (fun s -> s <> "") (List.map check_one invs)))
+        match R with      // check invariants on all paths of state S' = S0 + R by traversing tree of R
+        |   CondRule (G, R1, R2) ->
+                with_extended_path_cond G           (fun _ _ -> traverse i (G::conditions) R1) (UM, env, pc)
+                with_extended_path_cond (s_not C G) (fun _ _ -> traverse i ((s_not C G)::conditions) R2) (UM, env, pc)
+        |   S_Updates updates    ->
+                check_invariants invs UM0 conditions updates
+        |   R -> failwith (sprintf "symbolic_execution_for_invariant_checking: there should be no such rule here: %s\n" (rule_to_string C R))
+    let state_header i = printf "\n=== state S_%d =====================================\n" i
+    let rec F R_acc R_in i =
+        reset_counters ()
+        state_header i
+        traverse i [] R_acc  (UM0, Map.empty, Set.empty)
+        print_counters i ()
+        if (match opt_steps with Some n -> i < n | None -> true)
+        then let R_acc = s_eval_rule (SeqRule ([ R_acc; R_in; skipRule ])) C (UM0, Map.empty, Set.empty)
+             F R_acc R_in (i+1)
+    F (S_Updates Set.empty) (SeqRule ([ R_in; skipRule ])) 0
+    printf "\n=================================================\n"
+
