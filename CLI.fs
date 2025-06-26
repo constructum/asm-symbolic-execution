@@ -87,7 +87,7 @@ let exec_symbolic (sign : Signature.SIGNATURE) (symb_exec_fct : 'rule -> 'a * 'r
             PrettyPrinting.pr stdout 80 (rule_to_string R_out)
             write $"\n\n--- size of generated rule: {(rule_size R_out)}\n"
             write $"\n--- number of leaves in decision tree: {no_of_leaves}\n"
-            write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n" 
+            write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n"     //!!! in DAG version, Toplevel should not be used
             print_time (cpu, usr, sys)
     |   (_, Some ex, _, cpu, usr, sys) ->
             print_time (cpu, usr, sys)
@@ -99,7 +99,7 @@ let simple_exec exec_fct (R_in : 'rule) =
     //let (_, R_in) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
     match Common.time exec_fct R_in with
     |   (Some _, _, _, cpu, usr, sys) ->
-            write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n" 
+            write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n"     //!!! in DAG version, Toplevel should not be used
             print_time (cpu, usr, sys)
     |   (_, Some ex, _, cpu, usr, sys) ->
             write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n" 
@@ -190,6 +190,7 @@ let CLI_with_ex(args) =
                 if !invcheck
                 then simple_exec (DAG.symbolic_execution_for_invariant_checking C !invcheck_steps) R_in
                 else exec_symbolic sign (fun (R : DAG.RULE) -> DAG.symbolic_execution C R (!steps)) R_in (DAG.pp_rule C, DAG.rule_size C)
+                write $"\n--- number of generated terms (term table size): {(DAG.get_global_ctx' C).termTable.Count}\n" 
                 ()
         else  // all other options
             // !!! tbd: for AsmetaL the main rule name it not always 'r_Main', but should be set according to the content of the ASM file

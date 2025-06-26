@@ -34,7 +34,6 @@ type GLOBAL_CTX' = {
     invariants    : Map<string, TERM>   // Added invariants field
     termIdxTable  : Dictionary<TERM', TERM>
     termTable     : ResizeArray<TERM' * TERM_ATTRS>
-//    smtExprTable  : ResizeArray<SmtInterface.SMT_EXPR>  //!!!Dictionary<TERM, SmtInterface.SMT_EXPR> // for SMT solver
 }
 
 and GLOBAL_CTX = GlobalCtx of int
@@ -74,6 +73,7 @@ and S_UPDATE_SET = Set<S_UPDATE>
 and S_UPDATE_MAP = Map<string, Map<VALUE list, TERM>>
 
 let global_ctxs = new ResizeArray<GLOBAL_CTX'>()
+
 
 let rec inline make_term_with_opt_type (GlobalCtx gctx_id) (t' : TERM') (opt_ty : Signature.TYPE option) : TERM =
     let ctx = global_ctxs.[gctx_id]
@@ -116,9 +116,9 @@ and compute_type gctx (t' : TERM') : Signature.TYPE =
     |   AppTerm' (Signature.FctName f, ts)    -> Signature.match_fct_type f (ts >>| get_type) (Signature.fct_types f sign)
     |   CondTerm' (G, t1, t2) -> if get_type t1 = get_type t2 then get_type t1 else failwith "compute_type: types of branches of conditional term do not match"
     |   VarTerm' v -> failwith (sprintf "compute_type: variable '%s' does not have a type" v)
-    |   QuantTerm' (_, _, t_set, _) -> get_type t_set
-    |   LetTerm' (_, t1, _) -> get_type t1
-    |   DomainTerm' tyname -> tyname
+    |   QuantTerm' (_, _, t_set, _) -> Signature.Boolean
+    |   LetTerm' (_, t1, t2) -> get_type t2
+    |   DomainTerm' tyname -> Signature.Powerset tyname
 
 and get_type (gctx as GlobalCtx gctx_id) (t as Term term_id : TERM) : Signature.TYPE =
     let termTable = global_ctxs.[gctx_id].termTable
@@ -154,10 +154,15 @@ and convert_term (C : GLOBAL_CTX) (t : AST.TYPED_TERM) : TERM =
     AST.ann_term_induction (fun x -> x) {
         Value      = fun (_, x) -> Value C x;
         Initial    = fun (_, (f, xs)) -> Initial C (f, xs);
-        AppTerm    = fun (_, (f, ts)) -> AppTerm C (f, ts);
+        AppTerm    = fun (ty, (f, ts)) ->
+                        try
+                            AppTerm C (f, ts)
+                        with ex as Signature.Error (Signature.NoMatchingFunctionType (f, tys)) ->
+                            fprintf stderr "convert_term: in term %A\n" (AppTerm C (Signature.FctName f, ts))
+                            raise ex
         CondTerm   = fun (_, (G, t1, t2)) -> CondTerm C (G, t1, t2);
         VarTerm    = fun (ty, v) -> make_term_with_type C (VarTerm' v) ty
-        QuantTerm  = fun (_, (q_kind, v, t_set, t_cond)) -> QuantTerm C (q_kind, v, t_set, t_cond);
+        QuantTerm  = fun (ty, (q_kind, v, t_set, t_cond)) -> fprintf stderr "QuantTerm type: %s" (Signature.type_to_string ty); QuantTerm C (q_kind, v, t_set, t_cond);
         LetTerm    = fun (_, (v, t1, t2)) -> LetTerm C (v, t1, t2);
         DomainTerm = fun (_, D) -> DomainTerm C D;
     } t
@@ -760,7 +765,7 @@ and expand_term t (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND
                     // static functions that are not primitive functions (i.e. not in the 'background') are expanded like macros
                     if Signature.fct_kind fct_name sign = Signature.Static && not (Map.containsKey fct_name Background.state) then
                         let (formals, body) =
-                            try Map.find fct_name (macros_of C)     // !!! should not use global TopLevel.macros
+                            try Map.find fct_name (macros_of C)
                             with _ -> failwith (sprintf "DAG.expand_term: definition of static function '%s' not found in macros database" fct_name)
                         let ts = ts >>| fun t -> t (UM, env, pc)
                         let env' =
@@ -1150,7 +1155,7 @@ and s_eval_rule (R : RULE) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : 
 
     and eval_macro_rule_call (r, args) (UM, env, pc) =
         let (formals, body) =
-            try Map.find r (rules_of C)     // !!! should not use global TopLevel.rules
+            try Map.find r (rules_of C)
             with _ -> failwith (sprintf "SymbEval.s_eval_rule: macro rule %s not found" r)
         let env' =
             List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (UM, env, pc), get_type arg)) env formals args

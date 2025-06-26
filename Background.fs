@@ -33,7 +33,7 @@ let rec type_of_value (sign : SIGNATURE) (x : VALUE) =
     |   BOOL b   -> Boolean
     |   INT i    -> Integer
     |   STRING s -> String
-    |   SET xs    -> if Set.isEmpty xs then failwith "type_of_value: SET: empty_set" else type_of_value sign (Set.minElement xs)
+    |   SET xs    -> if Set.isEmpty xs then failwith "type_of_value: SET: empty_set" else Powerset (type_of_value sign (Set.minElement xs))
     |   CELL (tag, _) -> let (_, ran) = fct_type tag sign in ran
 
 //--------------------------------------------------------------------
