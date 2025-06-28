@@ -4,9 +4,9 @@ import ../STDL/StandardLibrary
 
 
 signature:
-    static m : Integer
-    static n : Integer
-    static p : Integer
+    controlled m : Integer              // 'm' must be static for option '-turbo2basic'; this works for '-steps 1' though
+    controlled n : Integer              // 'n' must be static for option '-turbo2basic'; this works for '-steps 1' though
+    controlled p : Integer              // 'p' must be static for option '-turbo2basic'; this works for '-steps 1' though
     controlled a : Prod(Integer, Integer) -> Integer
     controlled b : Prod(Integer, Integer) -> Integer
     controlled c : Prod(Integer, Integer) -> Integer
@@ -16,10 +16,10 @@ signature:
     
 
 definitions:
-    function m = 2
-    function n = 3
-    function p = 4
-    
+    // function m = 2                   // if 'm' were to be static, it would have to be defined here
+    // function n = 3                   // if 'n' were to be static, it would have to be defined here
+    // function p = 4                   // if 'p' were to be static, it would have to be defined here
+
     main rule r_Main =
         seq
             ii := 1
@@ -39,6 +39,28 @@ definitions:
                 ii := ii + 1
             endseq
         endseq
+
+
+default init mnp_2_3_4:
+    function m = 2
+    function n = 3
+    function p = 4
+
+init mnp_2_2_2:
+    function m = 2
+    function n = 2
+    function p = 2
+
+init mnp_3_3_3:
+    function m = 3
+    function n = 3
+    function p = 3
+
+init mnp_4_4_4:
+    function m = 4
+    function n = 4
+    function p = 4
+
 
 
 /*
