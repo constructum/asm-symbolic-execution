@@ -4,7 +4,7 @@ import ../STDL/StandardLibrary
 
 
 signature:
-    static n : Integer
+    controlled n : Integer              // 'n' must be static for option '-turbo2basic'; this works for '-steps 1' though
     controlled ii : Integer
     controlled j : Integer
     controlled a : Integer -> Integer
@@ -12,7 +12,7 @@ signature:
 
 
 definitions:
-    function n = 6
+    // function n = 3                   // if 'n' were to be static, it would have to be defined here
 
     main rule r_Main = seq
         //--- sorting algorithm
@@ -38,6 +38,25 @@ definitions:
         endpar
     endseq
 
+
+default init n3:
+    function n = 3
+
+
+// other initial state options for testing
+
+init n1: function n = 1
+init n2: function n = 2
+
+init n4: function n = 4
+init n5: function n = 5
+init n6: function n = 6
+init n7: function n = 7
+init n8: function n = 8
+init n9: function n = 9
+init n10: function n = 10
+
+
 /*
 // some initialization for the simulator, to be commented out for symbolic execution
 
@@ -49,5 +68,10 @@ default init s0:
             case 2 : 2
             case 3 : 7
             case 4 : 4
+            case 5 : 1
+            case 6 : 9
+            case 7 : 8
+            case 8 : 0
+            case 9 : 6
         endswitch
 */

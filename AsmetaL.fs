@@ -76,6 +76,7 @@ type ASM_Content = {
     signature : SIGNATURE;
     invariants : Map<string, TYPED_TERM>;      // all invariants have a name (if no name was explicitly given, a name is generated)
     definitions : ASM_Definitions;
+    initial_states : (string * Map<string, STATE>) option;   // "default init" name and mapping from "init" names to corresponding definitions
 }
 
 and ASM = ASM of ASM_Content   // "asm" or "module" content
@@ -87,7 +88,8 @@ let asm_content (asyncr_module_name as (asyncr : bool, modul : bool, name : stri
                 (exports : string list option)
                 (signature : SIGNATURE)
                 (invariants : Map<string, TYPED_TERM>)
-                (definitions : ASM_Definitions) : ASM_Content =
+                (definitions : ASM_Definitions)
+                (initial_states : (string * Map<string, STATE>) option)  : ASM_Content =
     {
         name = name;
         is_module = modul;
@@ -97,15 +99,16 @@ let asm_content (asyncr_module_name as (asyncr : bool, modul : bool, name : stri
         signature = signature;
         invariants = invariants;
         definitions = {
-            state = definitions.state;
-            rules     = definitions.rules;
-            macros    = definitions.macros;
+            state  = definitions.state;
+            rules  = definitions.rules;
+            macros = definitions.macros;
         };
+        initial_states = initial_states;
     }
 
 let mkAsm   (asyncr : bool, modul : bool, name : string) (imports : (string * ASM * string list option) list) (exports : string list option)
-            (signature : SIGNATURE) (invariants : Map<string, TYPED_TERM>) (definitions : ASM_Definitions) : ASM =
-    ASM (asm_content (asyncr, modul, name) imports exports signature invariants definitions)
+            (signature : SIGNATURE) (invariants : Map<string, TYPED_TERM>) (definitions : ASM_Definitions) initial_states : ASM =
+    ASM (asm_content (asyncr, modul, name) imports exports signature invariants definitions initial_states)
 
 //--------------------------------------------------------------------
 
@@ -506,19 +509,25 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                                     (pmany DomainInitialization)
                                     (pmany FunctionInitialization)
                                     (pmany AgentInitialization)
-                                        |>> fun (_, domain_init, function_init, agent_init) -> domain_init @ function_init @ agent_init
+                                        |>> fun (initial_state_name, domain_init, function_init, agent_init) -> (initial_state_name, domain_init @ function_init @ agent_init)
             let parse_asm_rest s = 
                 let parse =
                     ( R3
                         Body
                         (poption (kw "main" << MacroDeclaration))
                         // !!! only the default initial state is considered for the moment, the other are ignored
-                        (poption ((pmany Initialization) << (kw "default" << Initialization) >> (pmany Initialization)))   
+                        (poption (R3 (pmany Initialization) (kw "default" << Initialization) (pmany Initialization)))   
                     >>  skip_to_eos )
-                        |>> fun (body, opt_main_rule, default_init) ->
-                                (   body,
+                        |>> fun (body, opt_main_rule, initial_states) ->
+                                    body,
                                     opt_main_rule,
-                                    match default_init with None -> [] | Some default_init -> default_init  )
+                                    match initial_states with
+                                    |   None -> None
+                                    |   Some (nondefault_init_1, default_init, nondefault_init_2) ->
+                                            let default_init_name, _ = default_init
+                                            let initial_states_map = Map.ofList (nondefault_init_1 @ [default_init] @ nondefault_init_2)
+                                            Some (default_init_name, initial_states_map)
+                                    //match default_init with None -> [] | Some default_init -> default_init  )
                 (   let (s, (rules_db, macro_db)) = reduce_state s
                     (parse ||>> fun (sign, state) _ -> ((sign, state), (rules_db, macro_db)) ) s )
 
@@ -532,7 +541,7 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                             _,
                             properties  ),
                         opt_main_rule_decl,
-                        default_init
+                        initial_states
                     ), s'')
                     ->
                     let state' : STATE = List.fold (fun state f -> f state) state domain_definitions
@@ -542,7 +551,17 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                         List.fold
                             (fun (state, mdb) (fct_def, macro_fct_def) -> (fct_def state, macro_fct_def mdb))
                             (state', empty_macro_db)
-                            (function_definitions @ default_init)
+                            (function_definitions (*@ initial_states*) )
+                    let initial_states' : (string * Map<string, STATE>) option =
+                        let extend_state_with_fct_def state (fct_def, _) = fct_def state
+                        match initial_states with
+                        |   None -> None
+                        |   Some (default_init_name, initial_states_map) ->
+                                let initial_states_map' =
+                                    Map.map
+                                        (fun state_name transf_list -> List.fold extend_state_with_fct_def state'' transf_list)
+                                        initial_states_map
+                                Some (default_init_name, initial_states_map')
                     if !trace > 0 then fprintf stderr "static function definitions found for: %s\n" (Map.keys state''._static |> String.concat ", ")
                     if !trace > 0 then fprintf stderr "dynamic function definitions found for: %s\n" (Map.keys state''._dynamic |> String.concat ", ")
                     if !trace > 0 then fprintf stderr "dynamic function initializations found for: %s\n" (Map.keys (fst state''._dynamic_initial) |> String.concat ", ")
@@ -559,10 +578,11 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                             rules  = rules_db_override rules_db rdb';
                             macros = macro_db_override macro_db mdb';
                         };
+                        initial_states = initial_states';
                     }
                     ParserSuccess ( result, s'')
 
-let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB * MACRO_DB * Map<string, TYPED_TERM> =
+let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB * MACRO_DB * Map<string, TYPED_TERM> * (string * Map<string, STATE>) option =
     match asm with
     |   ASM (asm_content) ->
             let sign  = asm_content.signature
@@ -570,7 +590,8 @@ let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB *
             let rdb   = asm_content.definitions.rules
             let mdb   = asm_content.definitions.macros
             let invariants = asm_content.invariants
-            (sign, state, rdb, mdb, invariants)
+            let initial_states = asm_content.initial_states
+            (sign, state, rdb, mdb, invariants, initial_states)
 
 let parse_definitions initial_location ((sign, S), (rules_db, macro_db)) s =
     imported_modules := Map.empty

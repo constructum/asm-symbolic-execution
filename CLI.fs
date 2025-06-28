@@ -18,6 +18,7 @@ let usage () =
             "                   into top-level environment"
             ""
             "  -asmeta        use AsmetaL as input language"
+            "  -init <state>  (AsmetaL only) start from initial state named <state>"
             "  -invcheck <n>  (AsmetaL only) check invariants during symbolic execution"
             "                   for at most <n> steps or indefinitely, if <n> not specified"
             ""
@@ -116,13 +117,13 @@ let exec_nonsymbolic main_rule_name =
     writeln $"{R_pretty}\n\n  -->\n"
     Updates.show_update_set sign (Eval.eval_rule R (TopLevel.initial_state (), Map.empty)) |> writeln
 
-let loadfile (asmeta_flag : bool) relative_path_of_file =
+let loadfile (asmeta_flag : bool) initial_state_name relative_path_of_file =
     let base_path = System.IO.Directory.GetCurrentDirectory ()
     let full_path = System.IO.Path.GetFullPath (relative_path_of_file, base_path)
     // move to directory where the loaded file is located
     // in order to correctly resolve the relative paths of the imported modules
     System.IO.Directory.SetCurrentDirectory (System.IO.Path.GetDirectoryName full_path)
-    let result = TopLevel.loadfile asmeta_flag full_path
+    let result = TopLevel.loadfile asmeta_flag initial_state_name full_path
     // move to original directory (where the CLI was called)
     System.IO.Directory.SetCurrentDirectory base_path
     result
@@ -146,12 +147,16 @@ let CLI_with_ex(args) =
         let invcheck_steps = ref None
         let objects_to_load = ref []
         let main_rule_name = ref "Main"
+        let initial_state_name = ref None
         let rec parse_arguments i = 
             if i < n then 
                 match args[i] with
                 |   "-license"     -> license (); exit 0
                 |   "-asmeta"      -> asmeta_flag := true; main_rule_name := "r_Main"; parse_arguments (i+1)
                 |   "-asmeta-dag"  -> asmeta_dag_flag := true; main_rule_name := "r_Main"; parse_arguments (i+1)
+                |   "-init"        -> if i+1 < n
+                                      then  initial_state_name := Some args[i+1]; parse_arguments (i+2)
+                                      else writeln_err "-init requires an argument"; exit 1
                 |   "-invcheck"    -> invcheck := true
                                       if i+1 < n
                                       then  try         invcheck_steps := Some (int (args[i+1]))
@@ -170,8 +175,8 @@ let CLI_with_ex(args) =
             TopLevel.init (!asmeta_flag || !asmeta_dag_flag)  // use AsmetaL parser
             let rec loadfiles = function
             |   [] -> () 
-            |   (Str s) :: rest  -> TopLevel.loadstr !asmeta_flag s; loadfiles rest
-            |   (File f) :: rest -> loadfile !asmeta_flag f; loadfiles rest
+            |   (Str s) :: rest  -> TopLevel.loadstr !asmeta_flag !initial_state_name s; loadfiles rest
+            |   (File f) :: rest -> loadfile !asmeta_flag !initial_state_name f; loadfiles rest
             loadfiles L
         try parse_arguments 0 with _ -> usage (); exit 1
         if !asmeta_dag_flag  // experimental AsmetaL DAG mode
