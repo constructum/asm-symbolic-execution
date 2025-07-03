@@ -20,18 +20,39 @@ let rec indent level ppt = if level = 0 then ppt else blo4 [ indent (level-1) pp
 
 //--------------------------------------------------------------------
 
-type TERM_ATTRS = {
+type FUNCTION_INTERPRETATION =
+|   Constructor of (VALUE list -> VALUE)
+|   StaticSymbolic of (TERM list -> TERM)       // rewriting rules for term simplification, e.g. for boolean functions 
+|   Static of (VALUE list -> VALUE)
+|   ControlledInitial of (VALUE list -> VALUE)
+|   ControlledUninitialized
+|   Derived of (string list * TERM)             // string list is the list of arguments, TERM is the body of the derived function
+
+and FUNCTION' = {
+    fct_id : int;
+    fct_name : string;
+    fct_kind : Signature.FCT_KIND;
+    // fct_type : (Signature.TYPE list * Signature.TYPE);   // !!! to be implemented together with monomorphization
+    fct_interpretation : FUNCTION_INTERPRETATION
+}
+and FUNCTION =
+|   IntConst of int
+|   Function of int
+
+and TERM_ATTRS = {
     term_id   : int
     term_type : Signature.TYPE
     smt_expr  : SmtInterface.SMT_EXPR option ref  // for SMT solver
 }
 
-type GLOBAL_CTX' = {
+and GLOBAL_CTX' = {
     signature     : Signature.SIGNATURE
     initial_state : State.STATE         // use only for initial state in this module, never use '_dynamic' field - also the second elem. of _dynamic_initial seems not to be used !
     macros        : MACRO_DB
     rules         : RULES_DB
     invariants    : Map<string, TERM>   // Added invariants field
+    fctIdxTable   : Dictionary<string, int>
+    fctTable      : ResizeArray<FUNCTION'>
     termIdxTable  : Dictionary<TERM', TERM>
     termTable     : ResizeArray<TERM' * TERM_ATTRS>
 }
@@ -194,10 +215,49 @@ and new_global_ctx (sign : Signature.SIGNATURE, initial_state : State.STATE, mac
         macros        = Map.empty
         rules         = Map.empty
         invariants    = Map.empty
+        fctIdxTable   = new Dictionary<string, int>(HashIdentity.Structural)
+        fctTable      = new ResizeArray<FUNCTION'>()
         termIdxTable  = new Dictionary<TERM', TERM>(HashIdentity.Structural)
         termTable     = new ResizeArray<TERM' * TERM_ATTRS>()
     }
     global_ctxs.Add new_ctx
+    let extract_fct_interpretation_if_possible name =
+        match Signature.fct_kind name sign with
+        |   Signature.Constructor ->
+                Some (Constructor (fun xs -> CELL (name, xs)))
+        |   Signature.Static ->
+                match initial_state._static |> Map.tryFind name with
+                |   None -> fprintf stderr "Warning: static function '%s' is in signature, but is not defined - ignored\n" name; None
+                |   Some fct_def -> Some (Static fct_def)
+        |   Signature.Controlled ->
+                match initial_state._dynamic_initial |> fst |> Map.tryFind name with
+                |   Some fct_def -> Some (ControlledInitial fct_def)
+                |   None -> Some ControlledUninitialized
+        |   Signature.Derived ->
+                match macros |> Map.tryFind name with
+                |   Some (args, body) -> Some (Derived (args, convert_term (GlobalCtx ctx_id) body))
+                |   None -> failwith (sprintf "Warning: derived function '%s' is in signature, but is not defined - ignored\n" name)
+        |   Signature.Monitored -> failwith (sprintf "DAG.new_global_ctx: monitored function '%s' - not implemented" name)
+        |   Signature.Shared -> failwith (sprintf "DAG.new_global_ctx: shared function '%s' - not implemented" name)
+        |   Signature.Out -> failwith (sprintf "DAG.new_global_ctx: out function '%s' - not implemented" name)
+    sign |> Map.toList
+        |> List.filter (fun (fct_name, _) -> Signature.is_function_name fct_name sign)
+        |> List.map (fun (name, _) -> (name, extract_fct_interpretation_if_possible name))
+        |> List.filter (function (_, None) -> false | _ -> true)
+        |> Seq.iteri (fun i (name, opt_fct_interpretation) ->
+            match opt_fct_interpretation with
+            |   None -> ()
+            |   Some fct_interpretation ->
+                    let fct' : FUNCTION' = {
+                        fct_id   = i;
+                        fct_name = name;
+                        fct_kind = Signature.fct_kind name sign;
+                        // fct_type = Signature.fct_types name sign;   // !!! to be implemented together with monomorphization
+                        fct_interpretation = fct_interpretation;
+                    }
+                    new_ctx.fctIdxTable.[name] <- i
+                    new_ctx.fctTable.Add fct'
+        )
     let new_ctx = {
         new_ctx with
             macros = convert_macros (GlobalCtx ctx_id) macros
@@ -353,6 +413,40 @@ let name_to_string t    = t |> pp_name |> PrettyPrinting.toString 80
 
 let term_to_string sign t    = t |> pp_term sign |> PrettyPrinting.toString 80
 let rule_to_string sign t    = t |> pp_rule sign |> PrettyPrinting.toString 80
+
+//--------------------------------------------------------------------
+//
+//  function tables
+//
+//--------------------------------------------------------------------
+
+let show_fct_tables (C : GLOBAL_CTX) =
+    let ctx = get_global_ctx' C
+    let fct_idx_table = ctx.fctIdxTable
+    let show_fct_idx_table =
+        fct_idx_table
+        |> Seq.toList
+        |> List.map (fun key_value -> sprintf "%s -> %d" key_value.Key key_value.Value)
+        |> String.concat "\n"
+    let fct_table = ctx.fctTable
+    let fct_lines =
+        fct_table
+        |> Seq.toList
+        |> List.map (fun fct' ->
+            sprintf "%d: %s (%s) = [%s]"
+                fct'.fct_id
+                fct'.fct_name
+                (Signature.fct_kind_to_string fct'.fct_kind)
+                (match fct'.fct_interpretation with
+                 | Constructor _ -> "constructor"
+                 | StaticSymbolic _ -> "static symbolic"
+                 | Static _ -> "static"
+                 | ControlledInitial _ -> "controlled initial"
+                 | ControlledUninitialized -> "controlled uninitialized"
+                 | Derived (args, body) -> sprintf "derived (%s) = %s" (String.concat ", " args) (term_to_string C body) )
+        )
+    let show_fct_table = String.concat "\n" fct_lines
+    show_fct_idx_table + "\n" + show_fct_table + "\n"
 
 //--------------------------------------------------------------------
 //

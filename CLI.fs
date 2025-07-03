@@ -196,6 +196,7 @@ let CLI_with_ex(args) =
                 then simple_exec (DAG.symbolic_execution_for_invariant_checking C !invcheck_steps) R_in
                 else exec_symbolic sign (fun (R : DAG.RULE) -> DAG.symbolic_execution C R (!steps)) R_in (DAG.pp_rule C, DAG.rule_size C)
                 write $"\n--- number of generated terms (term table size): {(DAG.get_global_ctx' C).termTable.Count}\n" 
+                // fprintf stderr "%s" (DAG.show_fct_tables C)  // for debugging purposes   
                 ()
         else  // all other options
             // !!! tbd: for AsmetaL the main rule name it not always 'r_Main', but should be set according to the content of the ASM file
