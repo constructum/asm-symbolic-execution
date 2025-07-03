@@ -214,10 +214,10 @@ let CLI_with_ex(args) =
         0
 
 let CLI(args) =
-    try
+//    try
         CLI_with_ex(args)
-    with
-    |   ex as Parser.Error (fct, reg, err)  -> writeln_err ("\n" + Parser.error_msg (fct, reg, err)); raise ex
-    |   ex as AsmetaL.Error (fct, reg, err) -> writeln_err ("\n" + AsmetaL.error_msg (fct, reg, err)); raise ex
-    |   ex as SymbUpdates.Error (mdl, fct, err) -> writeln_err ("\n" + SymbUpdates.error_msg (mdl, fct, err)); raise ex
-    |   ex as Failure s -> writeln_err $"\nexception:\n{s}"; raise ex
+    // with
+    // |   ex as Parser.Error (fct, reg, err)  -> writeln_err ("\n" + Parser.error_msg (fct, reg, err)); raise ex
+    // |   ex as AsmetaL.Error (fct, reg, err) -> writeln_err ("\n" + AsmetaL.error_msg (fct, reg, err)); raise ex
+    // |   ex as SymbUpdates.Error (mdl, fct, err) -> writeln_err ("\n" + SymbUpdates.error_msg (mdl, fct, err)); raise ex
+    // |   ex as Failure s -> writeln_err $"\nexception:\n{s}"; raise ex
