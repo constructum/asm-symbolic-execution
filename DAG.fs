@@ -321,6 +321,9 @@ and new_global_ctx (sign : Signature.SIGNATURE, initial_state : State.STATE, mac
     global_ctxs.[ctx_id] <- new_ctx
     global_ctxs.[ctx_id].TRUE_  := Some (Value (GlobalCtx ctx_id) (BOOL true))
     global_ctxs.[ctx_id].FALSE_ := Some (Value (GlobalCtx ctx_id) (BOOL false))
+    global_ctxs.[ctx_id].AND_   := Some (get_fct_id (GlobalCtx ctx_id) "and")
+    global_ctxs.[ctx_id].OR_    := Some (get_fct_id (GlobalCtx ctx_id) "or")
+    global_ctxs.[ctx_id].NOT_   := Some (get_fct_id (GlobalCtx ctx_id) "not")
     GlobalCtx ctx_id
 
 and get_global_ctx' (GlobalCtx gctx_id : GLOBAL_CTX) : GLOBAL_CTX' =
@@ -752,7 +755,7 @@ and smt_map_term (gctx as GlobalCtx ctx_id : GLOBAL_CTX) (C : SmtInterface.SMT_C
 let s_not S t =
     match get_term' S t with
     |   Value' (BOOL b) -> Value S (BOOL (not b))
-    |   _ -> AppTerm S (get_fct_id S "not", [t])
+    |   _ -> AppTerm S (NOT S, [t])
 
 let s_equals S (t1, t2) =
     match (get_term' S t1, get_term' S t2) with
@@ -765,7 +768,7 @@ let s_and S (phi1, phi2)=
     |   (Value' (BOOL true), _) -> phi2
     |   (_, Value' (BOOL false)) -> FALSE S
     |   (_, Value' (BOOL true)) -> phi1
-    |   (phi1', phi2') -> if phi1 = phi2 then phi1 else AppTerm S (get_fct_id S "and", [phi1; phi2])
+    |   (phi1', phi2') -> if phi1 = phi2 then phi1 else AppTerm S (AND S, [phi1; phi2])
 
 let s_or S (phi1, phi2) =
     match (get_term' S phi1, get_term' S phi2) with
@@ -773,7 +776,7 @@ let s_or S (phi1, phi2) =
     |   (Value' (BOOL true), _) -> TRUE S
     |   (_, Value' (BOOL false)) -> phi1
     |   (_, Value' (BOOL true)) -> TRUE S
-    |   (_, _) -> if phi1 = phi2 then phi1 else AppTerm S (get_fct_id S "or", [phi1; phi2])
+    |   (_, _) -> if phi1 = phi2 then phi1 else AppTerm S (OR S, [phi1; phi2])
 
 let s_xor S (phi1, phi2) =
     match (get_term' S phi1, get_term' S phi2) with
@@ -872,9 +875,9 @@ and smt_eval_formula (phi : TERM) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env, pc :
     let phi = expand_term phi C (UM, env, pc)
     let result =
         if (!SymbEval.use_smt_solver && smt_formula_is_true C TopLevel.smt_ctx phi)
-        then Value C (BOOL true)
+        then TRUE C
         else if (!SymbEval.use_smt_solver && smt_formula_is_true C TopLevel.smt_ctx (s_not C phi))
-        then Value C (BOOL false)
+        then FALSE C
         else phi
     if !trace > 0 then fprintf stderr "%s\n" (term_to_string C result)
     result
@@ -914,8 +917,8 @@ and expand_quantifier (q_kind, v, t_set : S_UPDATE_MAP * ENV * PATH_COND -> TERM
             let eval_instance x = t_cond (UM, add_binding env (v, Value C x, elem_type), pc)
             let t_conds = List.map eval_instance (Set.toList xs)
             match q_kind with
-            |   AST.Forall -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_and C (t_accum, t1)) (Value C (BOOL true))  t_conds
-            |   AST.Exist  -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_or  C (t_accum, t1)) (Value C (BOOL false)) t_conds
+            |   AST.Forall -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_and C (t_accum, t1)) (TRUE C)  t_conds
+            |   AST.Exist  -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_or  C (t_accum, t1)) (FALSE C) t_conds
             |   AST.ExistUnique -> failwith "DAG.expand_quantifier: 'ExistUnique' not implemented"
     |   x -> failwith (sprintf "DAG.expand_quantifier: not a set (%A): %A v" t_set x)
 
@@ -1000,32 +1003,32 @@ and eval_app_term (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND
     |   "and", [ t1; t2 ] ->
             let t1 = t1 C (UM, env, pc)
             match get_term' C t1 with
-            |   Value' (BOOL false) -> Value C (BOOL false)
+            |   Value' (BOOL false) -> FALSE C
             |   Value' (BOOL true)  -> t2 C (UM, env, pc)        // alternative: with_extended_path_cond t1' (fun _ -> t2) (S, env, C)
             |   t1' ->
                 let t2 = t2 C (UM, env, pc)
                 match get_term' C t2 with
-                |   Value' (BOOL false) -> Value C (BOOL false)
+                |   Value' (BOOL false) -> FALSE C
                 |   Value' (BOOL true) -> t1    // with_extended_path_cond t2' (fun _ -> t1) (S, env, C)
                 |   t2' -> if t1' = t2' then t1 else F [] [(fun _ _ -> t1); (fun _ _ -> t2)]
     |   "or", [ t1; t2 ] ->
             match get_term' C (t1 C (UM, env, pc)) with
-            |   Value' (BOOL true) -> Value C (BOOL true)
+            |   Value' (BOOL true) -> TRUE C
             |   Value' (BOOL false) -> t2 C (UM, env, pc)
             |   t1' ->
                 match get_term' C (t2 C (UM, env, pc)) with
-                |   Value' (BOOL true) -> Value C (BOOL true)
+                |   Value' (BOOL true) -> TRUE C
                 |   Value' (BOOL false) -> make_term C t1'
                 |   t2' -> if t1' = t2' then make_term C t1' else F [] [( fun _ _ -> make_term C t1'); ( fun _ _ -> make_term C t2')]
     |   "implies", [ t1; t2 ] ->
             match get_term' C (t1 C (UM, env, pc)) with
-            |   Value' (BOOL false) -> Value C (BOOL true)
+            |   Value' (BOOL false) -> TRUE C
             |   t1' as Value' (BOOL true)  -> t2 C (UM, env, pc)       // with_extended_path_cond t1' ( fun _ _ -> t2) (S, env, C)
             |   t1' ->
                 match get_term' C (t2 C (UM, env, pc)) with
                 |   Value' (BOOL false) -> s_not C (make_term C t1')
-                |   Value' (BOOL true)  -> Value C (BOOL true)
-                |   t2' -> if t1' = t2' then Value C (BOOL true) else F [] [( fun _ _ -> make_term C t1'); ( fun _ _ -> make_term C t2')]
+                |   Value' (BOOL true)  -> TRUE C
+                |   t2' -> if t1' = t2' then TRUE C else F [] [( fun _ _ -> make_term C t1'); ( fun _ _ -> make_term C t2')]
     |   "iff", [ t1; t2 ] ->
         match get_term' C (t1 C (UM, env, pc)) with
         |   Value' (BOOL false) -> s_not C (t2 C (UM, env, pc))
@@ -1034,7 +1037,7 @@ and eval_app_term (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND
             match get_term' C (t2 C (UM, env, pc)) with
             |   Value' (BOOL false) -> s_not C (make_term C t1')
             |   Value' (BOOL true)  -> make_term C t1'
-            |   t2' -> if t1' = t2' then Value C (BOOL true) else F [] [( fun _ _ -> make_term C t1'); ( fun _ _ -> make_term C t2')]
+            |   t2' -> if t1' = t2' then TRUE C else F [] [( fun _ _ -> make_term C t1'); ( fun _ _ -> make_term C t2')]
     |   "=", [ t1; t2 ] ->
         match get_term' C (t1 C (UM, env, pc)) with
         |   t1' as Value' x1 ->
