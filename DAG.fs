@@ -138,8 +138,8 @@ and inline get_term'_attrs (gctx: GLOBAL_CTX) (Term term_id) =
 and inline get_term' (gctx: GLOBAL_CTX) (Term term_id) = get_term'_attrs gctx (Term term_id) |> fst
 and inline get_attrs (gctx: GLOBAL_CTX) (Term term_id) = get_term'_attrs gctx (Term term_id) |> snd
 
-and compute_type gctx (t' : TERM') : Signature.TYPE =
-    let (sign, get_type) = (signature_of gctx, get_type gctx)
+and compute_type (gctx as GlobalCtx gctx_id) (t' : TERM') : Signature.TYPE =
+    let (sign, get_type) = (global_ctxs.[gctx_id].signature, get_type gctx)
     match t' with
     |   Value' x -> Background.type_of_value sign x
     |   Initial' (f, xs) -> let f_name = (get_function' gctx f).fct_name in Signature.match_fct_type f_name (xs >>| Background.type_of_value sign) (Signature.fct_types f_name sign)
@@ -293,8 +293,8 @@ and get_global_ctx' (GlobalCtx gctx_id : GLOBAL_CTX) : GLOBAL_CTX' =
     else
         failwith (sprintf "get_global_ctx': context %d not found" gctx_id)
 
-and signature_of (GlobalCtx gctx_id) =
-    global_ctxs.[gctx_id].signature
+// and signature_of (GlobalCtx gctx_id) =
+//     global_ctxs.[gctx_id].signature
 
 and initial_state_of (GlobalCtx gctx_id) =
     global_ctxs.[gctx_id].initial_state
@@ -674,7 +674,6 @@ let interpretation (S : GLOBAL_CTX) (UM : S_UPDATE_MAP) (C : PATH_COND) (f as Fc
 // let smt_map_app_ctr = ref 0
 
 let rec smt_map_term_background_function gctx (C : SmtInterface.SMT_CONTEXT) (f : FCT_ID, ts : TERM list) : SmtInterface.SMT_EXPR =
-    let sign = signature_of gctx
     let ctx = !C.ctx
     let es = ts >>| smt_map_term gctx C
     let f' = get_function' gctx f
@@ -700,13 +699,14 @@ let rec smt_map_term_background_function gctx (C : SmtInterface.SMT_CONTEXT) (f 
     |   ("*",       [ SmtInterface.SMT_IntExpr e1;  SmtInterface.SMT_IntExpr e2 ])  -> SmtInterface.SMT_IntExpr (ctx.MkMul (e1, e2) :?> Microsoft.Z3.IntExpr)
     |   _ -> failwith (sprintf "smt_map_term_background_function: error (t = %s)" (term_to_string gctx (AppTerm gctx (f, ts))))
 
-and smt_map_term_user_defined_function gctx (C : SmtInterface.SMT_CONTEXT) (f_id : FCT_ID, ts : TERM list) : SmtInterface.SMT_EXPR =
-    let sign = signature_of gctx
+and smt_map_term_user_defined_function (gctx as GlobalCtx gctx_id) (C : SmtInterface.SMT_CONTEXT) (f_id : FCT_ID, ts : TERM list) : SmtInterface.SMT_EXPR =
+    let sign = global_ctxs.[gctx_id].signature
+    let { fct_kind = f_kind } = get_function' gctx f_id
     let (ctx, fct) = (!C.ctx, !C.fct)
     let fail (f, dom, ran) =
         failwith (sprintf "smt_map_term_user_defined_function: function '%s : %s -> %s' not found" f (Signature.type_list_to_string dom) (Signature.type_to_string ran))
     let f = (get_function' gctx f_id).fct_name     // !!!! change to new architecture
-    if Signature.fct_kind f sign = Signature.Controlled
+    if f_kind = Signature.Controlled
     then
         match (f, Signature.fct_type f sign, ts >>| fun t -> smt_map_term gctx C t) with
         |   (f, (dom, Signature.Boolean), es) ->
@@ -722,10 +722,9 @@ and smt_map_term_user_defined_function gctx (C : SmtInterface.SMT_CONTEXT) (f_id
                 if kind <> Signature.EnumType || ar <> 0 then failwith (sprintf "smt_map_term_user_defined_function: types in function '%s : %s -> %s' not supported" f (Signature.type_list_to_string dom) (Signature.type_to_string ran))
                 try SmtInterface.SMT_Expr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| SmtInterface.convert_to_expr))) with _ -> fail (f, dom, ran)
         |   (f, (_, ran), _) -> failwith (sprintf "smt_map_term_user_defined_function : error (t = %s)" (term_to_string gctx (AppTerm gctx (f_id, ts))))
-    else failwith (sprintf "smt_map_term_user_defined_function: unsupported function kind '%s' of function '%s'" (Signature.fct_kind f sign |> Signature.fct_kind_to_string) f)
+    else failwith (sprintf "smt_map_term_user_defined_function: unsupported function kind '%s' of function '%s'" (f_kind |> Signature.fct_kind_to_string) f)
 
 and smt_map_ITE gctx (C : SmtInterface.SMT_CONTEXT) (G_, t1_, t2_) : SmtInterface.SMT_EXPR =
-    let sign = signature_of gctx
     let ctx = !C.ctx
     let err_msg (G, T_G, t1, T_t1, t2, T_t2) =
         failwith (sprintf "smt_map_ITE: type error: for term %s the expected type is (Boolean, T, T), where T is Boolean, Integer or a user-defined type; type (%s, %s, %s) found instead"
@@ -742,18 +741,17 @@ and smt_map_ITE gctx (C : SmtInterface.SMT_CONTEXT) (G_, t1_, t2_) : SmtInterfac
     |   (_, T_G, _, T_t1, _, T_t2) -> err_msg (G_, T_G, t1_, T_t1, t2_, T_t2)
 
 and smt_map_app_term gctx (C : SmtInterface.SMT_CONTEXT) (f_id : FCT_ID, ts) : SmtInterface.SMT_EXPR =
-    let sign = signature_of gctx
-    let f = (get_function' gctx f_id).fct_name     // !!!! change to new architecture
+    let { fct_name = f; fct_kind = f_kind } = get_function' gctx f_id
     if Set.contains f (Signature.fct_names Background.signature)
     then smt_map_term_background_function gctx C (f_id, ts)
-    else if Signature.fct_kind f sign = Signature.Static
+    else if f_kind = Signature.Static
          then smt_map_term_user_defined_function gctx C (f_id, ts)
          else failwith (sprintf "smt_map_app_term: '%s' is not a static function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
 and smt_map_initial gctx (C : SmtInterface.SMT_CONTEXT) (f_id : FCT_ID, ts) : SmtInterface.SMT_EXPR =
-    let sign = signature_of gctx
+    let { fct_name = f; fct_kind = f_kind } = get_function' gctx f_id
     let f = (get_function' gctx f_id).fct_name     // !!!! change to new architecture
-    if Signature.fct_kind f sign = Signature.Controlled
+    if f_kind = Signature.Controlled
     then smt_map_term_user_defined_function gctx C (f_id, ts)
     else failwith (sprintf "smt_map_initial: '%s' is not a controlled function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
@@ -876,7 +874,6 @@ let smt_formula_is_false (S : GLOBAL_CTX) (C : SmtInterface.SMT_CONTEXT) (phi : 
 
 let rec smt_eval_formula (phi : TERM) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env, pc : PATH_COND) =
     // precondition: term_type sign phi = Boolean
-    let sign = signature_of C
     if !trace > 0 then fprintf stderr "smt_eval_formula(%s) -> " (term_to_string C phi)
     let phi = expand_term phi C (UM, env, pc)
     let result =
@@ -895,10 +892,10 @@ and expand_term t (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND
         Value   = fun x (UM, env, pc) -> Value C x;
         Initial = fun (f, xs) (UM, env, pc) -> Initial C (f, xs)
         AppTerm = fun (f, ts) (UM : S_UPDATE_MAP, env, pc) ->
-            let sign = signature_of C
             //!!! rewrite according new architecture (this is a just a temporary solution)
-            let fct_name = (get_function' C f).fct_name
-            if Signature.fct_kind fct_name sign = Signature.Static && not (Map.containsKey fct_name Background.state) then
+            let fct' = get_function' C f
+            let (fct_name, fct_kind) = (fct'.fct_name, fct'.fct_kind)
+            if fct_kind = Signature.Static && not (Map.containsKey fct_name Background.state) then
                 let (formals, body) =
                     try Map.find fct_name (macros_of C)
                     with _ -> failwith (sprintf "DAG.expand_term: definition of static function '%s' not found in macros database" fct_name)
@@ -971,7 +968,6 @@ and try_case_distinction_for_term_with_finite_range (C : GLOBAL_CTX) (UM : S_UPD
     result
 
 and eval_app_term (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) (fct_id : FCT_ID, ts : (GLOBAL_CTX -> S_UPDATE_MAP * ENV * PATH_COND -> TERM) list) : TERM = 
-    let sign = signature_of C
 //  let with_extended_path_cond = with_extended_path_cond C
     //if !trace > 0 then fprintfn stderr "|signature|=%d | eval_app_term %s%s\n" (Map.count sign) (spaces !level) (term_to_string sign (AppTerm (fct_name, [])))
     let rec F (ts_past : TERM list) ts =
@@ -988,7 +984,7 @@ and eval_app_term (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND
                 |   QuantTerm' _          -> failwith "DAG.eval_app_term: QuantTerm not implemented"
                 |   DomainTerm' _         -> failwith "DAG.eval_app_term: DomainTerm not implemented"
         |   [] ->
-                let f_name = (get_function' C fct_id).fct_name
+                let { fct_name = f_name; fct_kind = f_kind }  = get_function' C fct_id
                 match (f_name, List.rev ts_past) with
                 |   "and", [ t1; t2 ] -> s_and C (t1, t2)
                 |   "or", [ t1; t2 ]  -> s_or C (t1, t2)
@@ -1000,11 +996,11 @@ and eval_app_term (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND
                     match get_values C ts with
                     |   Some xs -> interpretation C UM pc fct_id xs
                     |   None ->
-                        match (Signature.fct_kind f sign) with
-                        |   Signature.Static -> 
-                                match Signature.fct_type f sign with
-                                |   (_, Signature.Boolean) ->
-                                        let t = AppTerm C (fct_id, ts)
+                        match f_kind with
+                        |   Signature.Static ->
+                                let t = AppTerm C (fct_id, ts)
+                                match get_type C t with
+                                |   Signature.Boolean ->
                                         if Set.contains t pc                  then Value C TRUE
                                         else if Set.contains (s_not C t) pc   then Value C FALSE
                                         else smt_eval_formula t C (UM, env, pc)
@@ -1062,7 +1058,7 @@ and eval_app_term (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND
     F [] ts
 
 and eval_cond_term (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) (G, t1 : GLOBAL_CTX -> S_UPDATE_MAP * ENV * PATH_COND -> TERM, t2) : TERM = 
-    let (sign, get_type) = (signature_of C, get_type C)
+    let get_type = get_type C
     let with_extended_path_cond = with_extended_path_cond C
     let term_to_string = term_to_string C
     let G = G C (UM, env, pc)
@@ -1091,8 +1087,7 @@ and eval_cond_term (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_CON
                     then t2 C (UM, env, pc)
                     else let (t1', t2') = (t1 C (UM, env, add_cond G pc), t2 C (UM, env, add_cond (s_not C G) pc))
                          if t1' = t2' then t1'
-                         else let sign = signature_of C
-                              if not !SymbEval.use_smt_solver
+                         else if not !SymbEval.use_smt_solver
                               then  let t1' = s_eval_term t1' C (UM, env, add_cond G pc)
                                     let t2' = s_eval_term t2' C (UM, env, add_cond (s_not C G) pc)
                                     if t1' = t2' then t1' else CondTerm C (G, t1', t2')
@@ -1116,7 +1111,6 @@ and s_eval_term_ (t : TERM) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc :
     } t C (UM, env, pc)
 
 and s_eval_term (t : TERM) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
-    let sign = signature_of C
     let t = s_eval_term_ t C (UM, env, pc)
     if get_type C t = Signature.Boolean
     then    match get_term' C t with
@@ -1317,7 +1311,6 @@ and s_eval_rule (R : RULE) (C : GLOBAL_CTX) (UM : S_UPDATE_MAP, env : ENV, pc : 
 // convert partially evaluated terms and rules to regular ones
 
 let rec reconvert_value (C : GLOBAL_CTX) x =
-    let sign = signature_of C
     match x with
     |   UNDEF    -> Value C x
     |   BOOL b   -> Value C x
@@ -1401,7 +1394,7 @@ let symbolic_execution (C : GLOBAL_CTX) (R_in : RULE) (steps : int) : int * RULE
     if (!trace > 2) then fprintf stderr "symbolic_execution\n"
     if (steps <= 0) then failwith "SymbEval.symbolic_execution: number of steps must be >= 1"
     let S0 = TopLevel.initial_state ()
-    if (!trace > 2) then fprintf stderr "---\n%s\n---\n" (Signature.signature_to_string (signature_of C))
+    //  if (!trace > 2) then fprintf stderr "---\n%s\n---\n" (Signature.signature_to_string (signature_of C))
     let R_in_n_times = [ for _ in 1..steps -> R_in ]
     let R_in' = SeqRule (R_in_n_times @ [ skipRule ])      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
     let R_out = s_eval_rule R_in' C (Map.empty, Map.empty, Set.empty)
