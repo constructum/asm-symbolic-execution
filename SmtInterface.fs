@@ -134,9 +134,7 @@ and smt_map_ITE sign C (G_, t1_, t2_) : SMT_EXPR =
 and smt_map_app_term sign C (f, ts) : SMT_EXPR =
     if (Set.contains f (fct_names Background.signature))
     then smt_map_term_background_function sign C (f, ts)
-    else if Signature.fct_kind f sign = Static
-         then smt_map_term_user_defined_function sign C (f, ts)
-         else failwith (sprintf "smt_map_app_term: '%s' is not a static function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
+    else failwith (sprintf "smt_map_app_term: '%s' is not a background function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
 and smt_map_initial sign C (f, ts) : SMT_EXPR =
     if Signature.fct_kind f sign = Controlled

@@ -706,16 +706,13 @@ and smt_map_ITE gctx (C : SmtInterface.SMT_CONTEXT) (G_, t1_, t2_) : SmtInterfac
     |   (_, T_G, _, T_t1, _, T_t2) -> err_msg (G_, T_G, t1_, T_t1, t2_, T_t2)
 
 and smt_map_app_term gctx (C : SmtInterface.SMT_CONTEXT) (f_id : FCT_ID, ts) : SmtInterface.SMT_EXPR =
-    let { fct_name = f; fct_kind = f_kind } = get_function' gctx f_id
-    if Set.contains f (Signature.fct_names Background.signature)
+    let { fct_name = f; fct_kind = f_kind; fct_interpretation = fct_intp } = get_function' gctx f_id
+    if match fct_intp with StaticBackground _ -> true | _ -> false
     then smt_map_term_background_function gctx C (f_id, ts)
-    else if f_kind = Signature.Static
-         then smt_map_term_user_defined_function gctx C (f_id, ts)
-         else failwith (sprintf "smt_map_app_term: '%s' is not a static function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
+    else failwith (sprintf "smt_map_app_term: '%s' is not a background function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
 and smt_map_initial gctx (C : SmtInterface.SMT_CONTEXT) (f_id : FCT_ID, ts) : SmtInterface.SMT_EXPR =
     let { fct_name = f; fct_kind = f_kind } = get_function' gctx f_id
-    let f = (get_function' gctx f_id).fct_name     // !!!! change to new architecture
     if f_kind = Signature.Controlled
     then smt_map_term_user_defined_function gctx C (f_id, ts)
     else failwith (sprintf "smt_map_initial: '%s' is not a controlled function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
