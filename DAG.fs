@@ -103,10 +103,10 @@ let global_ctxs = new ResizeArray<GLOBAL_CTX'>()
 
 let rec get_fct_id (GlobalCtx gctx_id) (fct_name : string) : FCT_ID =
     let ctx = global_ctxs.[gctx_id]
-    if ctx.fctIdxTable.ContainsKey fct_name then
-        FctId ctx.fctIdxTable.[fct_name]
-    else
-        failwith (sprintf "DAG.get_fct_id: function '%s' not found in global context #%d" fct_name gctx_id)
+    let mutable fct_id = -1
+    match ctx.fctIdxTable.TryGetValue(fct_name, &fct_id) with
+    | true -> FctId fct_id
+    | false -> failwith (sprintf "DAG.get_fct_id: function '%s' not found in global context #%d" fct_name gctx_id)
 
 and get_function' (GlobalCtx gctx_id) (FctId fct_id : FCT_ID) : FUNCTION' =
     let fctTable = global_ctxs.[gctx_id].fctTable
@@ -117,8 +117,9 @@ and get_function' (GlobalCtx gctx_id) (FctId fct_id : FCT_ID) : FUNCTION' =
 
 and inline make_term_with_opt_type (GlobalCtx gctx_id) (t' : TERM') (opt_ty : Signature.TYPE option) : TERM =
     let ctx = global_ctxs.[gctx_id]
-    if ctx.termIdxTable.ContainsKey t' then
-        ctx.termIdxTable.[t']
+    let mutable t = Term -1
+    if ctx.termIdxTable.TryGetValue (t', &t) then
+        t
     else
         let term_id = ctx.termIdxTable.Count
         let attrs = {
