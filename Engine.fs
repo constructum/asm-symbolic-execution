@@ -964,11 +964,6 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                 |   f, ts ->
                     match get_values eng ts with
                     |   Some xs ->
-                            let memoize t t' =
-                                let res = initial_state_eval_res eng t
-                                match !res with
-                                |   Some t' -> t'
-                                |   None -> let t' = t' () in res := Some t'; t'
                             match f_intp with
                             //   !!!!!!!!! memoization of static non-background functions, a bit ad-hoc, works for Fibonacci
                             |   StaticUserDefined _ ->
@@ -988,7 +983,7 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                                         else if Set.contains (s_not eng t) pc then FALSE eng
                                         else smt_eval_formula t eng (UM, env, pc)
                                 | _ -> AppTerm eng (fct_id, ts)
-                        |   Signature.Controlled ->  s_eval_term (try_case_distinction_for_term_with_finite_range eng (UM, env, pc) fct_id ts) eng (UM, env, pc)
+                        |   Signature.Controlled -> s_eval_term (try_case_distinction_for_term_with_finite_range eng (UM, env, pc) fct_id ts) eng (UM, env, pc)
                         |   other_kind -> failwith (sprintf "DAG.eval_app_term: kind '%s' of function '%s' not implemented" (Signature.fct_kind_to_string other_kind) f)
     let f_name = (get_function' eng fct_id).fct_name
     match (f_name, ts) with
@@ -1074,7 +1069,7 @@ and eval_cond_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (
                               then  let t1' = s_eval_term t1' eng (UM, env, add_cond G pc)
                                     let t2' = s_eval_term t2' eng (UM, env, add_cond (s_not eng G) pc)
                                     if t1' = t2' then t1' else CondTerm eng (G, t1', t2')
-                              else  let t1' = with_extended_path_cond G           ( fun _ -> s_eval_term t1') (UM, env, pc)  
+                              else  let t1' = with_extended_path_cond G             ( fun _ -> s_eval_term t1') (UM, env, pc)  
                                     let t2' = with_extended_path_cond (s_not eng G) ( fun _ -> s_eval_term t2') (UM, env, pc)  
                                     if t1' = t2' then t1' else CondTerm eng (G, t1', t2')
 and eval_let_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (v, t1, t2) : TERM =
