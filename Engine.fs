@@ -40,9 +40,10 @@ and FCT_ID =
 |   FctId of int
 
 and TERM_ATTRS = {
-    term_id   : int
-    term_type : Signature.TYPE
-    smt_expr  : SmtInterface.SMT_EXPR option ref  // for SMT solver
+    term_id       : int
+    term_type     : Signature.TYPE
+    smt_expr      : SmtInterface.SMT_EXPR option ref
+    initial_state_eval_res : TERM option ref     // (symbolic) value of the term in the initial state, used also for static functions
 }
 
 and ENGINE' = {
@@ -133,6 +134,7 @@ and inline make_term_with_opt_type (Engine eid) (t' : TERM') (opt_ty : Signature
             term_id   = term_id
             term_type = match opt_ty with None -> compute_type (Engine eid) t' | Some ty -> ty
             smt_expr  = ref None
+            initial_state_eval_res = ref None
         }
         e.termIdxTable.[t'] <- Term term_id
         e.termTable.Add (t', attrs)
@@ -165,6 +167,9 @@ and inline get_smt_expr (Engine eid) (t as Term tid : TERM) : SmtInterface.SMT_E
 
 and inline set_smt_expr (Engine eid) (t as Term tid : TERM) (smt_expr : SmtInterface.SMT_EXPR) =
     (snd engines.[eid].termTable.[tid]).smt_expr := Some smt_expr
+
+and inline initial_state_eval_res (Engine eid) (t as Term tid : TERM) : TERM option ref =
+    (engines.[eid].termTable.[tid] |> snd).initial_state_eval_res
 
 and inline Value gctx x = make_term gctx (Value' x)
 and inline Initial gctx (f, xs) = make_term gctx (Initial' (f, xs))
@@ -823,11 +828,13 @@ let rec interpretation (eng as Engine eid : ENGINE) (UM : UPDATE_MAP) (pc : PATH
             Value (fct_interpretation xs)
     |   StaticUserDefined (fct_interpretation : VALUE list -> VALUE, Some (fct_definition : string list * TERM)) ->
             eval_fct_definition_in_curr_state fct_definition xs
-            // !! alternative implementation !! Value (fct_interpretation xs)
     |   ControlledInitial (fct_interpretation : VALUE list -> VALUE, Some (fct_definition : string list * TERM)) -> 
             try Map.find xs (Map.find (get_function' eng f).fct_name UM)
-            with _ -> eval_fct_definition_in_initial_state fct_definition xs        // if no updates found, take value of f(xs) in initial state
-            // !! alternative implementation !! Value (fct_interpretation xs)
+            with _ ->
+                let res = initial_state_eval_res eng (AppTerm eng (f, xs >>| Value))
+                match !res with
+                |   Some t' -> t'
+                |   None -> let t' = eval_fct_definition_in_initial_state fct_definition xs in res := Some t'; t'
     |   ControlledUninitialized ->
             try Map.find xs (Map.find (get_function' eng f).fct_name UM)
             with _ -> Initial eng (f, xs)
@@ -946,7 +953,7 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                 |   QuantTerm' _          -> failwith "DAG.eval_app_term: QuantTerm not implemented"
                 |   DomainTerm' _         -> failwith "DAG.eval_app_term: DomainTerm not implemented"
         |   [] ->
-                let { fct_name = f_name; fct_kind = f_kind }  = get_function' eng fct_id
+                let { fct_name = f_name; fct_kind = f_kind; fct_interpretation = f_intp }  = get_function' eng fct_id
                 match (f_name, List.rev ts_past) with
                 |   "and", [ t1; t2 ] -> s_and eng (t1, t2)
                 |   "or", [ t1; t2 ]  -> s_or eng (t1, t2)
@@ -956,7 +963,21 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                 |   "=", [ t1; t2 ]   -> s_equals eng (t1, t2)
                 |   f, ts ->
                     match get_values eng ts with
-                    |   Some xs -> interpretation eng UM pc fct_id xs
+                    |   Some xs ->
+                            let memoize t t' =
+                                let res = initial_state_eval_res eng t
+                                match !res with
+                                |   Some t' -> t'
+                                |   None -> let t' = t' () in res := Some t'; t'
+                            match f_intp with
+                            //   !!!!!!!!! memoization of static non-background functions, a bit ad-hoc, works for Fibonacci
+                            |   StaticUserDefined _ ->
+                                    let res = initial_state_eval_res eng (AppTerm eng (fct_id, ts))
+                                    match !res with
+                                    |   Some t' -> t'
+                                    |   None -> let t' = interpretation eng UM pc fct_id xs in res := Some t'; t'
+                                    //memoize (AppTerm eng (fct_id, ts)) (fun () -> interpretation eng UM pc fct_id xs)
+                            |   _ -> interpretation eng UM pc fct_id xs
                     |   None ->
                         match f_kind with
                         |   Signature.Static ->
@@ -964,7 +985,7 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                                 match get_type eng t with
                                 |   Signature.Boolean ->
                                         if Set.contains t pc                  then TRUE eng
-                                        else if Set.contains (s_not eng t) pc   then FALSE eng
+                                        else if Set.contains (s_not eng t) pc then FALSE eng
                                         else smt_eval_formula t eng (UM, env, pc)
                                 | _ -> AppTerm eng (fct_id, ts)
                         |   Signature.Controlled ->  s_eval_term (try_case_distinction_for_term_with_finite_range eng (UM, env, pc) fct_id ts) eng (UM, env, pc)
