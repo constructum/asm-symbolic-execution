@@ -190,12 +190,12 @@ let CLI_with_ex(args) =
                 load_everything (List.rev !objects_to_load)
                 let sign = TopLevel.signature ()
                 let (_, R_in) = try AST.get_rule !main_rule_name (TopLevel.rules ()) with _ -> failwith ("rule '" + !main_rule_name + " not defined")
-                let C = DAG.new_global_ctx (TopLevel.signature (), TopLevel.initial_state (), TopLevel.macros (), TopLevel.rules (), TopLevel.invariants ())
-                let R_in = DAG.convert_rule C R_in
+                let C = Engine.new_engine (TopLevel.signature (), TopLevel.initial_state (), TopLevel.macros (), TopLevel.rules (), TopLevel.invariants ())
+                let R_in = Engine.convert_rule C R_in
                 if !invcheck
-                then simple_exec (DAG.symbolic_execution_for_invariant_checking C !invcheck_steps) R_in
-                else exec_symbolic sign (fun (R : DAG.RULE) -> DAG.symbolic_execution C R (!steps)) R_in (DAG.pp_rule C, DAG.rule_size C)
-                write $"\n--- number of generated terms (term table size): {(DAG.get_global_ctx' C).termTable.Count}\n" 
+                then simple_exec (Engine.symbolic_execution_for_invariant_checking C !invcheck_steps) R_in
+                else exec_symbolic sign (fun (R : Engine.RULE) -> Engine.symbolic_execution C R (!steps)) R_in (Engine.pp_rule C, Engine.rule_size C)
+                write $"\n--- number of generated terms (term table size): {(Engine.get_global_ctx' C).termTable.Count}\n" 
                 // fprintf stderr "%s" (DAG.show_fct_tables C)  // for debugging purposes   
                 ()
         else  // all other options

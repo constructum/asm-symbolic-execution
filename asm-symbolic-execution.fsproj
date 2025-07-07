@@ -25,7 +25,7 @@
     <Compile Include="SmtInterface.fs" />
     
     <Compile Include="TopLevel.fs" />
-    <Compile Include="SymbEval.fs" /><Compile Include="DAG.fs" />
+    <Compile Include="SymbEval.fs" /><Compile Include="Engine.fs" />
     
     <Compile Include="CLI.fs" /><Compile Include="Main.fs" />
   </ItemGroup>
