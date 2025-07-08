@@ -82,8 +82,8 @@ and TERM' =
 and TERM = Term of int
 
 and RULE =
-| S_Updates of Set<(Signature.FCT_NAME * VALUE list) * TERM>  //Map<FCT_NAME * VALUE list, TERM>   // used for special purposes (symbolic evaluation): "partially interpreted rules", not actual rules of the language
-| UpdateRule of (Signature.FCT_NAME * TERM list) * TERM
+| S_Updates of Set<(FCT_ID * VALUE list) * TERM>  //Map<FCT_NAME * VALUE list, TERM>   // used for special purposes (symbolic evaluation): "partially interpreted rules", not actual rules of the language
+| UpdateRule of (FCT_ID * TERM list) * TERM
 | CondRule of TERM * RULE * RULE
 | ParRule of RULE list
 | SeqRule of RULE list
@@ -95,11 +95,11 @@ and RULE =
 and MACRO_DB = Map<Signature.FCT_NAME, string list * TERM>     // for derived functions ("macros")
 and RULES_DB = Map<Signature.RULE_NAME, string list * RULE>   // for rule macros
 
-and LOCATION = string * VALUE list
+and LOCATION = FCT_ID * VALUE list
 
 and UPDATE = LOCATION * TERM
 and UPDATE_SET = Set<UPDATE>
-and UPDATE_MAP = Map<string, Map<VALUE list, TERM>>
+and UPDATE_MAP = Map<FCT_ID, Map<VALUE list, TERM>>
 
 and ENV = Map<string, TERM * Signature.TYPE>
 
@@ -212,7 +212,7 @@ and convert_term (eng : ENGINE) (t : AST.TYPED_TERM) : TERM =
 
 and convert_rule (eng : ENGINE) (R : AST.RULE) : RULE =
     AST.rule_induction (convert_term eng) {
-        UpdateRule = fun ((f, ts), t_rhs) -> UpdateRule ((f, ts), t_rhs);
+        UpdateRule = fun ((f, ts), t_rhs) -> UpdateRule ((get_fct_id eng f, ts), t_rhs);
         CondRule   = fun (G, R1, R2) -> CondRule (G, R1, R2);
         ParRule    = fun Rs -> ParRule Rs;
         SeqRule    = fun Rs -> SeqRule Rs;
@@ -220,7 +220,7 @@ and convert_rule (eng : ENGINE) (R : AST.RULE) : RULE =
         LetRule    = fun (v, t1, R') -> LetRule (v, t1, R');
         MacroRuleCall = fun (r, args) -> MacroRuleCall (r, args);
         ForallRule = fun (v, t_set, G, R') -> ForallRule (v, t_set, G, R');
-        S_Updates  = fun upds -> S_Updates (Set.map (fun ((f, xs), t_rhs) -> (f, xs), convert_term eng t_rhs) upds)
+        S_Updates  = fun upds -> S_Updates (Set.map (fun ((f, xs), t_rhs) -> (get_fct_id eng f, xs), convert_term eng t_rhs) upds)
     } R
 
 and convert_macros (eng : ENGINE) (rdb : AST.MACRO_DB) : MACRO_DB =
@@ -371,8 +371,8 @@ let skipRule = ParRule []
 //--------------------------------------------------------------------
 
 type RULE_INDUCTION<'term, 'rule> = {
-    S_Updates : Set<(Signature.FCT_NAME * VALUE list) * TERM> -> 'rule;     // what not ""... * 'term>" ?
-    UpdateRule : (Signature.FCT_NAME * 'term list) * 'term -> 'rule;
+    S_Updates : Set<(FCT_ID * VALUE list) * TERM> -> 'rule;     // what not ""... * 'term>" ?
+    UpdateRule : (FCT_ID * 'term list) * 'term -> 'rule;
     CondRule : 'term * 'rule * 'rule -> 'rule;
     ParRule : 'rule list -> 'rule;
     SeqRule : 'rule list -> 'rule;
@@ -386,7 +386,7 @@ let rec rule_induction (term : TERM -> 'term) (F : RULE_INDUCTION<'term, 'rule>)
     let rule_ind = rule_induction term
     match R with
     |   S_Updates U -> F.S_Updates U   // F.S_Updates (Map.map (fun loc -> fun t_rhs -> term t_rhs) U)
-    |   UpdateRule ((f: Signature.FCT_NAME, ts), t) -> F.UpdateRule ((f, List.map term ts), term t)
+    |   UpdateRule ((f, ts), t) -> F.UpdateRule ((f, List.map term ts), term t)
     |   CondRule (G, R1, R2: RULE) -> F.CondRule (term G, rule_ind F R1, rule_ind F R2)
     |   ParRule Rs -> F.ParRule (List.map (rule_ind F) Rs)
     |   SeqRule Rs -> F.SeqRule (List.map (rule_ind F) Rs)
@@ -446,10 +446,10 @@ let rec pp_rule (eng : ENGINE)  (R : RULE) =
     let (pp_app_term, pp_term) = (pp_app_term sign, pp_term eng)
     rule_induction pp_term {
         S_Updates = fun U ->
-                        let pp_elem ((f, xs), t) = blo0 [ str f; str " "; str "("; blo0 (pp_list [str",";brk 1] (xs >>| fun x -> str (value_to_string x))); str ") := "; (pp_term t) ]
+                        let pp_elem ((f, xs), t) = blo0 [ str (get_function' eng f).fct_name; str " "; str "("; blo0 (pp_list [str",";brk 1] (xs >>| fun x -> str (value_to_string x))); str ") := "; (pp_term t) ]
                         let L = Set.toList U >>| pp_elem
                         blo0 [ str "{"; line_brk; blo2 ( pp_list [line_brk] L); line_brk; str "}" ];
-        UpdateRule = fun ((f, ts), t) -> blo0 [ pp_app_term (Signature.FctName f, ts); str " := "; t ];
+        UpdateRule = fun ((f, ts), t) -> blo0 [ pp_app_term (Signature.FctName ((get_function' eng f).fct_name), ts); str " := "; t ];
         CondRule = fun (G, R1, R2) -> blo0 ( str "if " :: G:: str " then " :: line_brk :: blo2 [ R1 ] :: line_brk ::
                                              (if R2 <> str "skip" then [ str "else "; line_brk; blo2 [ R2 ]; line_brk; str "endif" ] else [ str "endif"]) );
         ParRule = fun Rs -> if Rs <> [] then blo0 [ str "par"; line_brk; blo2 ( pp_list [line_brk] Rs); line_brk; str "endpar" ] else str "skip";
@@ -506,9 +506,10 @@ let show_fct_tables (eng : ENGINE) =
 //
 //--------------------------------------------------------------------
 
-let location_to_string : LOCATION -> string = Updates.location_to_string
+let location_to_string eng ((f, xs) : LOCATION) : string = Updates.location_to_string ((get_function' eng f).fct_name, xs)
 
 let show_s_update eng ((f, xs), t) =
+    let f = (get_function' eng f).fct_name
     sprintf "%s := %s"
         (if List.isEmpty xs then f else sprintf "%s (%s)" f (String.concat ", " (List.map value_to_string xs)))
         (PrettyPrinting.toString 80 (pp_term eng t))
@@ -520,7 +521,7 @@ let show_s_update_set eng (U :UPDATE_SET) =
     " }"
 
 let show_s_update_map eng (U :UPDATE_MAP) =
-    let s_update_set = Set.ofSeq (Map.toSeq U |> Seq.collect (fun (f, table) -> table |> Map.toSeq |> Seq.map (fun (args, value) -> (f, args), value)))
+    let s_update_set = Set.ofSeq (Map.toSeq U |> Seq.collect (fun (f : FCT_ID, table) -> table |> Map.toSeq |> Seq.map (fun (args, value) -> (f, args), value)))
     show_s_update_set eng s_update_set
 
 //--------------------------------------------------------------------
@@ -829,14 +830,14 @@ let rec interpretation (eng as Engine eid : ENGINE) (UM : UPDATE_MAP) (pc : PATH
     |   StaticUserDefined (fct_interpretation : VALUE list -> VALUE, Some (fct_definition : string list * TERM)) ->
             eval_fct_definition_in_curr_state fct_definition xs
     |   ControlledInitial (fct_interpretation : VALUE list -> VALUE, Some (fct_definition : string list * TERM)) -> 
-            try Map.find xs (Map.find (get_function' eng f).fct_name UM)
+            try Map.find xs (Map.find (FctId (get_function' eng f).fct_id) UM)
             with _ ->
                 let res = initial_state_eval_res eng (AppTerm eng (f, xs >>| Value))
                 match !res with
                 |   Some t' -> t'
                 |   None -> let t' = eval_fct_definition_in_initial_state fct_definition xs in res := Some t'; t'
     |   ControlledUninitialized ->
-            try Map.find xs (Map.find (get_function' eng f).fct_name UM)
+            try Map.find xs (Map.find (FctId (get_function' eng f).fct_id) UM)
             with _ -> Initial eng (f, xs)
     |   Derived (macro_interpretation : string list * TERM) ->
             failwith (sprintf "DAG.interpretation: derived function '%s' - not implemented" f'.fct_name)
@@ -1100,7 +1101,7 @@ and s_eval_term (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
 
 let rec try_case_distinction_for_update_with_finite_domain
         (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND)
-        (f : Signature.FCT_NAME) (ts0 : TERM list) (t_rhs : TERM): RULE =
+        (f : FCT_ID) (ts0 : TERM list) (t_rhs : TERM): RULE =
     let mkEq (t1 : TERM) t2 = s_equals eng (t1, t2)  // AppTerm' (Boolean, (FctName "=", [t1; t2]))
     let generate_cond_rule (t, cases : (VALUE * RULE) list) =
         let t = s_eval_term t eng (UM, env, pc)
@@ -1131,7 +1132,7 @@ let rec try_case_distinction_for_update_with_finite_domain
                     match (try State.enum_finite_type (get_type eng t1) (initial_state_of eng) with _ -> None) with
                     |   None ->
                             failwith (sprintf "location (%s, (%s)) on the lhs of update cannot be fully evaluated"
-                                        f (String.concat ", " (ts0 >>| term_to_string eng)))
+                                        ((get_function' eng f).fct_name) (String.concat ", " (ts0 >>| term_to_string eng)))
                     |   Some elems ->
                             make_case_distinction t1 (List.map (fun elem -> (elem, F (Value eng elem :: past_args) ts')) (Set.toList elems))
     F [] ts0
@@ -1411,7 +1412,7 @@ let symbolic_execution_for_invariant_checking (eng : ENGINE) (opt_steps : int op
             String.concat "\n"
                 (Set.toList updates >>| fun ((f, xs), t) ->
                     sprintf "%s%s := %s"
-                        f (if List.isEmpty xs then "" else "("^(String.concat ", " (xs >>| value_to_string))^")")
+                        ((get_function' eng f).fct_name) (if List.isEmpty xs then "" else "("^(String.concat ", " (xs >>| value_to_string))^")")
                         (term_to_string sign t))
         let met inv_id =
             update_counters (function (m, v, u) -> (m + 1, v, u)) inv_id
