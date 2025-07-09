@@ -603,6 +603,18 @@ let get_env (env : ENV) (var : string) =
 let add_binding (env : ENV) (var : string, t : TERM, ty : Signature.TYPE) =
     Map.add var (t, ty) env
 
+let replace_vars (eng : ENGINE) (env : ENV) (t : TERM) : TERM =
+    term_induction eng (fun x -> x) {
+        Value      = Value eng
+        Initial    = Initial eng
+        AppTerm    = AppTerm eng
+        CondTerm   = CondTerm eng
+        VarTerm    = fun v -> get_env env v |> fst
+        QuantTerm  = QuantTerm eng
+        LetTerm    = LetTerm eng
+        DomainTerm = DomainTerm eng
+    } t
+
 //--------------------------------------------------------------------
 
 let get_values eng (ts : TERM list) : VALUE list option =    // only if all arguments are values
@@ -818,10 +830,14 @@ let rec interpretation (eng as Engine eid : ENGINE) (UM : UPDATE_MAP) (pc : PATH
     let f' = get_function' eng f
     let eval_fct_definition_in_curr_state (fct_definition as (args, body)) xs =
         let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x, type_of_value engines.[eid].signature x)) Map.empty args xs
-        s_eval_term body eng (UM, env, pc)
+        let body' = body
+//        let body' = replace_vars eng env body
+        s_eval_term body' eng (UM, env, pc)
     let eval_fct_definition_in_initial_state (fct_definition as (args, body)) xs =
         let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x, type_of_value engines.[eid].signature x)) Map.empty args xs
-        s_eval_term body eng (Map.empty, env, Set.empty)   //!!!! to be modified if at some point initial state constraints are implemented => path condition may then be non-empty
+        let body' = body
+//        let body' = replace_vars eng env body
+        s_eval_term body' eng (Map.empty, env, Set.empty)   //!!!! to be modified if at some point initial state constraints are implemented => path condition may then be non-empty
     match f'.fct_interpretation with
     |   Constructor (fct_interpretation : VALUE list -> VALUE) ->
             Value (fct_interpretation xs)
@@ -1076,6 +1092,10 @@ and eval_cond_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (
 and eval_let_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (v, t1, t2) : TERM =
     let t1 = t1 eng (UM, env, pc)
     t2 eng (UM, add_binding env (v, t1, get_type eng t1), pc)
+    // let env' = add_binding env (v, t1, get_type eng t1)
+    // let t2 = t2 eng (UM, env', pc)
+    // let t2 = replace_vars eng env' t2
+    // t2 eng (UM, env', pc)
 
 and s_eval_term_ (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
     term_induction eng (fun x -> x) {
