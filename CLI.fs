@@ -190,7 +190,7 @@ let CLI_with_ex(args) =
                 load_everything (List.rev !objects_to_load)
                 let sign = TopLevel.signature ()
                 let (_, R_in) = try AST.get_rule !main_rule_name (TopLevel.rules ()) with _ -> failwith ("rule '" + !main_rule_name + " not defined")
-                let C = Engine.new_engine (TopLevel.signature (), TopLevel.initial_state (), TopLevel.macros (), TopLevel.rules (), TopLevel.invariants ())
+                let C = Engine.new_engine (TopLevel.signature (), TopLevel.initial_state (), TopLevel.macros (), TopLevel.rules (), TopLevel.invariants (), TopLevel.smt_ctx)
                 let R_in = Engine.convert_rule C R_in
                 if !invcheck
                 then simple_exec (Engine.symbolic_execution_for_invariant_checking C !invcheck_steps) R_in

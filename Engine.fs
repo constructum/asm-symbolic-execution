@@ -70,6 +70,8 @@ and ENGINE' = {
     OR_             : FCT_ID option ref
     NOT_            : FCT_ID option ref
     EQUALS_         : FCT_ID option ref
+
+    smt_ctx         : SmtInterface.SMT_CONTEXT
 }
 
 and ENGINE = Engine of int
@@ -289,7 +291,7 @@ and convert_function_definitions (eng : ENGINE) (fdb : AST.MACRO_DB) : FCT_DEF_D
 and convert_rules (eng : ENGINE) (rdb : AST.RULES_DB) : RULE_DEF_DB =
     Map.map (fun _ (args, R) -> (args, convert_rule eng R)) rdb
 
-and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def_db : AST.MACRO_DB, rule_def_db : AST.RULES_DB, invariants : Map<string, AST.TYPED_TERM>) : ENGINE =
+and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def_db : AST.MACRO_DB, rule_def_db : AST.RULES_DB, invariants : Map<string, AST.TYPED_TERM>, smt_ctx : SmtInterface.SMT_CONTEXT) : ENGINE =
     let eid = engines.Count
     let new_engine = {
         signature       = sign
@@ -310,6 +312,7 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
         OR_             = ref None
         NOT_            = ref None
         EQUALS_         = ref None
+        smt_ctx         = smt_ctx
     }
     engines.Add new_engine
     let extract_fct_interpretation_if_possible f_name =
@@ -406,17 +409,17 @@ and get_engine' (Engine eid : ENGINE) : ENGINE' =
     else
         failwith (sprintf "get_engine': engine %d not found" eid)
 
-// and signature_of (GlobalCtx eid) =
-//     global_ctxs.[eid].signature
-
 and initial_state_of (Engine eid) =
     engines.[eid].initial_state
 
-and rules_of (Engine eid) =
-    engines.[eid].rules
-
 and invariants_of (Engine eid) =
     engines.[eid].invariants
+
+and smt_solver_push (Engine eid) =
+    SmtInterface.smt_solver_push engines.[eid].smt_ctx
+
+and smt_solver_pop (Engine eid) =
+    SmtInterface.smt_solver_pop engines.[eid].smt_ctx
 
 //--------------------------------------------------------------------
 
@@ -712,9 +715,10 @@ let add_cond (G : TERM) (C : PATH_COND) = (Set.add G C)
 
 // let smt_map_app_ctr = ref 0
 
-let rec smt_map_term_background_function eng (C : SmtInterface.SMT_CONTEXT) (f : FCT_ID, ts : TERM list) : SmtInterface.SMT_EXPR =
+let rec smt_map_term_background_function (eng as Engine eid) (f : FCT_ID, ts : TERM list) : SmtInterface.SMT_EXPR =
+    let C = engines[eid].smt_ctx
     let ctx = !C.ctx
-    let es = ts >>| smt_map_term eng C
+    let es = ts >>| smt_map_term eng
     let f' = get_function' eng f
     match (f'.fct_name, es) with
     |   ("=",       [ SmtInterface.SMT_BoolExpr e1; SmtInterface.SMT_BoolExpr e2 ]) -> SmtInterface.SMT_BoolExpr (ctx.MkEq (e1, e2))
@@ -738,16 +742,17 @@ let rec smt_map_term_background_function eng (C : SmtInterface.SMT_CONTEXT) (f :
     |   ("*",       [ SmtInterface.SMT_IntExpr e1;  SmtInterface.SMT_IntExpr e2 ])  -> SmtInterface.SMT_IntExpr (ctx.MkMul (e1, e2) :?> Microsoft.Z3.IntExpr)
     |   _ -> failwith (sprintf "smt_map_term_background_function: error (t = %s)" (term_to_string eng (AppTerm eng (f, ts))))
 
-and smt_map_term_user_defined_function (eng as Engine eid) (C : SmtInterface.SMT_CONTEXT) (f_id : FCT_ID, ts : TERM list) : SmtInterface.SMT_EXPR =
+and smt_map_term_user_defined_function (eng as Engine eid) (f_id : FCT_ID, ts : TERM list) : SmtInterface.SMT_EXPR =
+    let C = engines[eid].smt_ctx
     let sign = engines.[eid].signature
     let { fct_kind = f_kind } = get_function' eng f_id
-    let (ctx, fct) = (!C.ctx, !C.fct)
+    let ctx, fct = !C.ctx, !C.fct
     let fail (f, dom, ran) =
         failwith (sprintf "smt_map_term_user_defined_function: function '%s : %s -> %s' not found" f (Signature.type_list_to_string dom) (Signature.type_to_string ran))
     let f = (get_function' eng f_id).fct_name     // !!!! change to new architecture
     if f_kind = Signature.Controlled
     then
-        match (f, Signature.fct_type f sign, ts >>| fun t -> smt_map_term eng C t) with
+        match (f, Signature.fct_type f sign, ts >>| fun t -> smt_map_term eng t) with
         |   (f, (dom, Signature.Boolean), es) ->
                 try SmtInterface.SMT_BoolExpr (ctx.MkApp (Map.find f fct, Array.ofList (es >>| SmtInterface.convert_to_expr)) :?> Microsoft.Z3.BoolExpr) with _ -> fail (f, dom, Signature.Boolean)
         |   (f, (dom, Signature.Subset (_, Signature.Boolean)), es) ->       // !!! is it allowed in AsmetaL to have nested subset types? in that case this would fail
@@ -763,12 +768,12 @@ and smt_map_term_user_defined_function (eng as Engine eid) (C : SmtInterface.SMT
         |   (f, (_, ran), _) -> failwith (sprintf "smt_map_term_user_defined_function : error (t = %s)" (term_to_string eng (AppTerm eng (f_id, ts))))
     else failwith (sprintf "smt_map_term_user_defined_function: unsupported function kind '%s' of function '%s'" (f_kind |> Signature.fct_kind_to_string) f)
 
-and smt_map_ITE (eng : ENGINE) (C : SmtInterface.SMT_CONTEXT) (G_, t1_, t2_) : SmtInterface.SMT_EXPR =
-    let ctx = !C.ctx
+and smt_map_ITE (eng as Engine eid) (G_, t1_, t2_) : SmtInterface.SMT_EXPR =
+    let ctx = !engines[eid].smt_ctx.ctx
     let err_msg (G, T_G, t1, T_t1, t2, T_t2) =
         failwith (sprintf "smt_map_ITE: type error: for term %s the expected type is (Boolean, T, T), where T is Boolean, Integer or a user-defined type; type (%s, %s, %s) found instead"
             (term_to_string eng (CondTerm eng (G, t1, t2))) (Signature.type_to_string T_G) (Signature.type_to_string T_t1) (Signature.type_to_string T_t2) )
-    match (smt_map_term eng C G_, get_type eng G_, smt_map_term eng C t1_, get_type eng t1_, smt_map_term eng C t2_, get_type eng t2_) with
+    match (smt_map_term eng G_, get_type eng G_, smt_map_term eng t1_, get_type eng t1_, smt_map_term eng t2_, get_type eng t2_) with
     |   (SmtInterface.SMT_BoolExpr G, Signature.Boolean, SmtInterface.SMT_BoolExpr t1, Signature.Boolean, SmtInterface.SMT_BoolExpr t2, Boolean) ->
             SmtInterface.SMT_BoolExpr (ctx.MkITE (G, t1 :> Microsoft.Z3.Expr, t2 :> Microsoft.Z3.Expr) :?> Microsoft.Z3.BoolExpr)
     |   (SmtInterface.SMT_BoolExpr G, Signature.Boolean, SmtInterface.SMT_IntExpr t1, Signature.Integer, SmtInterface.SMT_IntExpr t2, Integer) ->
@@ -779,20 +784,21 @@ and smt_map_ITE (eng : ENGINE) (C : SmtInterface.SMT_CONTEXT) (G_, t1_, t2_) : S
             else err_msg (G_, Signature.Boolean, t1_, Signature.TypeCons (tyname1, []), t2_, Signature.TypeCons (tyname2, []))
     |   (_, T_G, _, T_t1, _, T_t2) -> err_msg (G_, T_G, t1_, T_t1, t2_, T_t2)
 
-and smt_map_app_term (eng : ENGINE) (C : SmtInterface.SMT_CONTEXT) (f_id : FCT_ID, ts) : SmtInterface.SMT_EXPR =
+and smt_map_app_term (eng : ENGINE) (f_id : FCT_ID, ts) : SmtInterface.SMT_EXPR =
     let { fct_name = f; fct_kind = f_kind; fct_interpretation = fct_intp } = get_function' eng f_id
     if match fct_intp with StaticBackground _ -> true | _ -> false
-    then smt_map_term_background_function eng C (f_id, ts)
+    then smt_map_term_background_function eng (f_id, ts)
     else failwith (sprintf "smt_map_app_term: '%s' is not a background function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
-and smt_map_initial (eng : ENGINE) (C : SmtInterface.SMT_CONTEXT) (f_id : FCT_ID, ts) : SmtInterface.SMT_EXPR =
+and smt_map_initial (eng : ENGINE) (f_id : FCT_ID, ts) : SmtInterface.SMT_EXPR =
     let { fct_name = f; fct_kind = f_kind } = get_function' eng f_id
     if f_kind = Signature.Controlled
-    then smt_map_term_user_defined_function eng C (f_id, ts)
+    then smt_map_term_user_defined_function eng (f_id, ts)
     else failwith (sprintf "smt_map_initial: '%s' is not a controlled function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
-and smt_map_term (eng : ENGINE) (C : SmtInterface.SMT_CONTEXT) (t : TERM) : SmtInterface.SMT_EXPR =
-    let ctx = !C.ctx
+and smt_map_term (eng as Engine eid) (t : TERM) : SmtInterface.SMT_EXPR =
+    let C = engines[eid].smt_ctx
+    let (ctx, con) = (!C.ctx, !C.con)
     match get_smt_expr eng t with
     |   Some e -> e
     |   None ->
@@ -801,9 +807,9 @@ and smt_map_term (eng : ENGINE) (C : SmtInterface.SMT_CONTEXT) (t : TERM) : SmtI
                 |   Value' (INT i)           -> SmtInterface.SMT_IntExpr (ctx.MkInt i)
                 |   Value' (BOOL b)          -> SmtInterface.SMT_BoolExpr (ctx.MkBool b)
                 |   Value' (CELL (cons, [])) -> SmtInterface.SMT_Expr (Map.find cons (!C.con))
-                |   Initial' (f, xs)         -> smt_map_initial eng C (f, xs >>| Value eng)
-                |   CondTerm' (G, t1, t2)    -> smt_map_ITE eng C (G, t1, t2)
-                |   AppTerm' (f, ts)         -> smt_map_app_term eng C (f, ts)
+                |   Initial' (f, xs)         -> smt_map_initial eng (f, xs >>| Value eng)
+                |   CondTerm' (G, t1, t2)    -> smt_map_ITE eng (G, t1, t2)
+                |   AppTerm' (f, ts)         -> smt_map_app_term eng (f, ts)
                 |   _ -> failwith (sprintf "smt_map_term: not supported (t = %s)" (term_to_string eng t))
             set_smt_expr eng t result
             result
@@ -872,32 +878,35 @@ let s_iff eng (phi1, phi2) =
 let ctx_condition eng C =
     List.fold (fun a -> fun b -> s_and eng (a, b)) (TRUE eng) (Set.toList C)
 
-let smt_assert (eng : ENGINE) C (phi : TERM) =
+let smt_assert (eng as Engine eid) (phi : TERM) =
+    let C = engines.[eid].smt_ctx
     if get_type eng phi = Signature.Boolean
-    then match smt_map_term eng C phi with
+    then match smt_map_term eng phi with
          | SmtInterface.SMT_BoolExpr be -> C.ctr := !C.ctr + 1; (!C.slv).Assert be
          | _ -> failwith (sprintf "smt_assert: error converting Boolean term (term = %s)" (term_to_string eng phi))
     else failwith (sprintf "'smt_assert' expects a Boolean term, %s found instead " (term_to_string eng phi))
 
 let with_extended_path_cond (eng : ENGINE) (G : TERM) eval_fct (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) =
-    SmtInterface.smt_solver_push TopLevel.smt_ctx
-    smt_assert eng TopLevel.smt_ctx G
+    smt_solver_push eng
+    smt_assert eng G
     let result = eval_fct () eng (UM, env, add_cond G pc)
-    SmtInterface.smt_solver_pop TopLevel.smt_ctx
+    smt_solver_pop eng
     result
 
 //--------------------------------------------------------------------
 
-let smt_formula_is_true (eng : ENGINE) (C : SmtInterface.SMT_CONTEXT) (phi : TERM) =
+let smt_formula_is_true (eng as Engine eid) (phi : TERM) =
+    let C = engines.[eid].smt_ctx
     if get_type eng phi = Signature.Boolean
-    then match smt_map_term eng C phi with
+    then match smt_map_term eng phi with
          | SmtInterface.SMT_BoolExpr be -> C.ctr := !C.ctr + 1; ((!C.slv).Check ((!C.ctx).MkNot be) = Microsoft.Z3.Status.UNSATISFIABLE)
          | _ -> failwith (sprintf "smt_formula_is_true: error converting Boolean term (term = %s)" (term_to_string eng phi))
     else failwith (sprintf "'smt_formula_is_true' expects a Boolean term, %s found instead " (term_to_string eng phi))
 
-let smt_formula_is_false (eng : ENGINE) (C : SmtInterface.SMT_CONTEXT) (phi : TERM) =
+let smt_formula_is_false (eng as Engine eid) (phi : TERM) =
+    let C = engines.[eid].smt_ctx
     if get_type eng phi = Signature.Boolean
-    then match smt_map_term eng C phi with
+    then match smt_map_term eng phi with
          | SmtInterface.SMT_BoolExpr be -> C.ctr := !C.ctr + 1; ((!C.slv).Check be = Microsoft.Z3.Status.UNSATISFIABLE)
          | _ -> failwith (sprintf "smt_formula_is_false: error converting Boolean term (term = %s)" (term_to_string eng phi))
     else failwith (sprintf "'smt_formula_is_false' expects a Boolean term, %s found instead " (term_to_string eng phi))
@@ -946,9 +955,9 @@ and smt_eval_formula (phi : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env, pc : PAT
     if !trace > 0 then fprintf stderr "smt_eval_formula(%s) -> " (term_to_string eng phi)
     let phi = expand_term phi eng (UM, env, pc)
     let result =
-        if (!SymbEval.use_smt_solver && smt_formula_is_true eng TopLevel.smt_ctx phi)
+        if (!SymbEval.use_smt_solver && smt_formula_is_true eng phi)
         then TRUE eng
-        else if (!SymbEval.use_smt_solver && smt_formula_is_true eng TopLevel.smt_ctx (s_not eng phi))
+        else if (!SymbEval.use_smt_solver && smt_formula_is_true eng (s_not eng phi))
         then FALSE eng
         else phi
     if !trace > 0 then fprintf stderr "%s\n" (term_to_string eng result)
@@ -1073,9 +1082,10 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                                 let t = AppTerm eng (fct_id, ts)
                                 match get_type eng t with
                                 |   Signature.Boolean ->
-                                        if Set.contains t pc                  then TRUE eng
-                                        else if Set.contains (s_not eng t) pc then FALSE eng
-                                        else smt_eval_formula t eng (UM, env, pc)
+                                        AppTerm eng (fct_id, ts)
+                                        // if Set.contains t pc                  then TRUE eng
+                                        // else if Set.contains (s_not eng t) pc then FALSE eng
+                                        // else smt_eval_formula t eng (UM, env, pc)
                                 | _ -> AppTerm eng (fct_id, ts)
                         |   Signature.Controlled -> s_eval_term (try_case_distinction_for_term_with_finite_range eng (UM, env, pc) fct_id ts) eng (UM, env, pc)
                         |   other_kind -> failwith (sprintf "Engine.eval_app_term: kind '%s' of function '%s' not implemented" (Signature.fct_kind_to_string other_kind) f)
@@ -1473,7 +1483,6 @@ let rule_size eng =
 let symbolic_execution (eng : ENGINE) (R_in : RULE) (steps : int) : int * RULE =
     if (!trace > 2) then fprintf stderr "symbolic_execution\n"
     if (steps <= 0) then failwith "SymbEval.symbolic_execution: number of steps must be >= 1"
-    let S0 = TopLevel.initial_state ()
     //  if (!trace > 2) then fprintf stderr "---\n%s\n---\n" (Signature.signature_to_string (signature_of C))
     let R_in_n_times = [ for _ in 1..steps -> R_in ]
     let R_in' = SeqRule eng (R_in_n_times @ [ skipRule eng ])      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
@@ -1535,9 +1544,9 @@ let symbolic_execution_for_invariant_checking (eng : ENGINE) (opt_steps : int op
         let check_invariants invs S0 conditions updates =
             let check_one (inv_id, t) =
                 let t' = s_eval_term t eng (apply_s_update_set eng S0 updates, Map.empty, Set.empty)
-                if smt_formula_is_true eng TopLevel.smt_ctx t'
+                if smt_formula_is_true eng t'
                 then met inv_id
-                else if smt_formula_is_false eng TopLevel.smt_ctx t' then definitely_violated inv_id conditions updates t t'
+                else if smt_formula_is_false eng t' then definitely_violated inv_id conditions updates t t'
                 else possibly_violated inv_id conditions updates t t'
             printf "%s" (String.concat "" (List.filter (fun s -> s <> "") (List.map check_one invs)))
         match get_rule' eng R with      // check invariants on all paths of state S' = S0 + R by traversing tree of R
