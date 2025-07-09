@@ -195,7 +195,7 @@ let CLI_with_ex(args) =
                 if !invcheck
                 then simple_exec (Engine.symbolic_execution_for_invariant_checking C !invcheck_steps) R_in
                 else exec_symbolic sign (fun (R : Engine.RULE) -> Engine.symbolic_execution C R (!steps)) R_in (Engine.pp_rule C, Engine.rule_size C)
-                write $"\n--- number of generated terms (term table size): {(Engine.get_global_ctx' C).termTable.Count}\n" 
+                write $"\n--- number of generated terms (term table size): {(Engine.get_engine' C).termTable.Count}\n" 
                 // fprintf stderr "%s" (DAG.show_fct_tables C)  // for debugging purposes   
                 ()
         else  // all other options

@@ -39,29 +39,37 @@ and FUNCTION' = {
 and FCT_ID =
 |   FctId of int
 
-and TERM_ATTRS = {
-    term_id       : int
-    term_type     : Signature.TYPE
-    smt_expr      : SmtInterface.SMT_EXPR option ref
-    initial_state_eval_res : TERM option ref     // (symbolic) value of the term in the initial state, used also for static functions
+and RULE_DEF' = {
+    rule_id   : int;
+    rule_name : string;
+    // rule_type : (Signature.TYPE list * Signature.TYPE);   // !!! to be implemented together with monomorphization
+    rule_def  : (string list * RULE) option
 }
+and RULE_DEF_ID =
+|   RuleDefId of int
 
 and ENGINE' = {
-    signature     : Signature.SIGNATURE
-    initial_state : State.STATE         // use only for initial state in this module, never use '_dynamic' field - also the second elem. of _dynamic_initial seems not to be used !
-    macros        : MACRO_DB
-    rules         : RULES_DB
-    invariants    : Map<string, TERM>   // Added invariants field
-    fctIdxTable   : Dictionary<string, int>
-    fctTable      : ResizeArray<FUNCTION'>
-    termIdxTable  : Dictionary<TERM', TERM>
-    termTable     : ResizeArray<TERM' * TERM_ATTRS>
-    TRUE_         : TERM option ref
-    FALSE_        : TERM option ref
-    AND_          : FCT_ID option ref
-    OR_           : FCT_ID option ref
-    NOT_          : FCT_ID option ref
-    EQUALS_       : FCT_ID option ref
+    signature       : Signature.SIGNATURE
+    initial_state   : State.STATE         // use only for initial state in this module, never use '_dynamic' field - also the second elem. of _dynamic_initial seems not to be used !
+    rules           : RULE_DEF_DB         //!!!!!!!!!!! to be removed
+    invariants      : Map<string, TERM>   // Added invariants field
+
+    fctIdxTable     : Dictionary<string, int>
+    fctTable        : ResizeArray<FUNCTION'>
+    ruleDefIdxTable : Dictionary<string, int>    // for rule macros
+    ruleDefTable    : ResizeArray<RULE_DEF'>
+
+    termIdxTable    : Dictionary<TERM', TERM>
+    termTable       : ResizeArray<TERM' * TERM_ATTRS>
+    ruleIdxTable    : Dictionary<RULE', RULE>
+    ruleTable       : ResizeArray<RULE' * RULE_ATTRS>
+
+    TRUE_           : TERM option ref
+    FALSE_          : TERM option ref
+    AND_            : FCT_ID option ref
+    OR_             : FCT_ID option ref
+    NOT_            : FCT_ID option ref
+    EQUALS_         : FCT_ID option ref
 }
 
 and ENGINE = Engine of int
@@ -81,19 +89,30 @@ and TERM' =
 
 and TERM = Term of int
 
-and RULE =
-| S_Updates of Set<(FCT_ID * VALUE list) * TERM>  //Map<FCT_NAME * VALUE list, TERM>   // used for special purposes (symbolic evaluation): "partially interpreted rules", not actual rules of the language
-| UpdateRule of (FCT_ID * TERM list) * TERM
-| CondRule of TERM * RULE * RULE
-| ParRule of RULE list
-| SeqRule of RULE list
-| IterRule of RULE
-| LetRule of string * TERM * RULE
-| ForallRule of string * TERM * TERM * RULE
-| MacroRuleCall of Signature.RULE_NAME * TERM list
+and TERM_ATTRS = {
+    term_id       : int
+    term_type     : Signature.TYPE
+    smt_expr      : SmtInterface.SMT_EXPR option ref
+    initial_state_eval_res : TERM option ref     // (symbolic) value of the term in the initial state, used also for static functions
+}
 
-and MACRO_DB = Map<Signature.FCT_NAME, string list * TERM>     // for derived functions ("macros")
-and RULES_DB = Map<Signature.RULE_NAME, string list * RULE>   // for rule macros
+and RULE' =
+| S_Updates' of Set<(FCT_ID * VALUE list) * TERM>  //Map<FCT_NAME * VALUE list, TERM>   // used for special purposes (symbolic evaluation): "partially interpreted rules", not actual rules of the language
+| UpdateRule' of (FCT_ID * TERM list) * TERM
+| CondRule' of TERM * RULE * RULE
+| ParRule' of RULE list
+| SeqRule' of RULE list
+| IterRule' of RULE
+| LetRule' of string * TERM * RULE
+| ForallRule' of string * TERM * TERM * RULE
+| MacroRuleCall' of RULE_DEF_ID * TERM list
+
+and RULE = Rule of int
+
+and RULE_ATTRS = unit
+
+and FCT_DEF_DB = Map<Signature.FCT_NAME, string list * TERM>    // for function definitions
+and RULE_DEF_DB = Map<Signature.RULE_NAME, string list * RULE>     // for rule macros
 
 and LOCATION = FCT_ID * VALUE list
 
@@ -114,14 +133,14 @@ let rec get_fct_id (Engine eid) (fct_name : string) : FCT_ID =
     let mutable fct_id = -1
     match eng.fctIdxTable.TryGetValue(fct_name, &fct_id) with
     | true -> FctId fct_id
-    | false -> failwith (sprintf "DAG.get_fct_id: function '%s' not found in global context #%d" fct_name eid)
+    | false -> failwith (sprintf "Engine.get_fct_id: function '%s' not found in global context #%d" fct_name eid)
 
 and get_function' (Engine eid) (FctId fct_id : FCT_ID) : FUNCTION' =
     let fctTable = engines.[eid].fctTable
     if fct_id < fctTable.Count then
         fctTable.[fct_id]
     else
-        failwith (sprintf "DAG.get_function': function with id #%d not found in global context #%d" fct_id eid)
+        failwith (sprintf "Engine.get_function': function with id #%d not found in global context #%d" fct_id eid)
 
 and inline make_term_with_opt_type (Engine eid) (t' : TERM') (opt_ty : Signature.TYPE option) : TERM =
     let e = engines.[eid]
@@ -171,14 +190,14 @@ and inline set_smt_expr (Engine eid) (t as Term tid : TERM) (smt_expr : SmtInter
 and inline initial_state_eval_res (Engine eid) (t as Term tid : TERM) : TERM option ref =
     (engines.[eid].termTable.[tid] |> snd).initial_state_eval_res
 
-and inline Value gctx x = make_term gctx (Value' x)
-and inline Initial gctx (f, xs) = make_term gctx (Initial' (f, xs))
-and inline AppTerm gctx (f, ts) = make_term gctx (AppTerm' (f, ts))
-and inline CondTerm gctx (G, t1, t2) = make_term gctx (CondTerm' (G, t1, t2))
-and inline VarTerm gctx v = make_term gctx (VarTerm' v)
-and inline QuantTerm gctx (q_kind, v, t_set, t_cond) = make_term gctx (QuantTerm' (q_kind, v, t_set, t_cond))
-and inline LetTerm gctx (x, t1, t2) = make_term gctx (LetTerm' (x, t1, t2))
-and inline DomainTerm gctx tyname = make_term gctx (DomainTerm' tyname)    
+and inline Value eng x = make_term eng (Value' x)
+and inline Initial eng (f, xs) = make_term eng (Initial' (f, xs))
+and inline AppTerm eng (f, ts) = make_term eng (AppTerm' (f, ts))
+and inline CondTerm eng (G, t1, t2) = make_term eng (CondTerm' (G, t1, t2))
+and inline VarTerm eng v = make_term eng (VarTerm' v)
+and inline QuantTerm eng (q_kind, v, t_set, t_cond) = make_term eng (QuantTerm' (q_kind, v, t_set, t_cond))
+and inline LetTerm eng (x, t1, t2) = make_term eng (LetTerm' (x, t1, t2))
+and inline DomainTerm eng tyname = make_term eng (DomainTerm' tyname)    
 and inline TRUE (Engine eid) = !engines.[eid].TRUE_ |> Option.get
 and inline FALSE (Engine eid) = !engines.[eid].FALSE_ |> Option.get
 and inline AND (Engine eid) = !engines.[eid].AND_ |> Option.get
@@ -210,45 +229,89 @@ and convert_term (eng : ENGINE) (t : AST.TYPED_TERM) : TERM =
         DomainTerm = fun (_, D) -> DomainTerm eng D;
     } t
 
+and get_named_rule_id (Engine eid) (rule_name : string) : RULE_DEF_ID =
+    let eng = engines.[eid]
+    let mutable named_rule_id = -1
+    match eng.ruleDefIdxTable.TryGetValue(rule_name, &named_rule_id) with
+    | true -> RuleDefId named_rule_id
+    | false -> failwith (sprintf "Engine.get_named_rule_id: function '%s' not found in global context #%d" rule_name eid)
+
+and get_named_rule_def' (Engine eid) (RuleDefId named_rule_id : RULE_DEF_ID) : RULE_DEF' =
+    let ruleDefTable = engines.[eid].ruleDefTable
+    if named_rule_id < ruleDefTable.Count then
+        ruleDefTable.[named_rule_id]
+    else
+        failwith (sprintf "Engine.get_named_rule_def': function with id #%A not found in global context #%d" ruleDefTable.[named_rule_id] eid)
+
+and get_rule_named_definition (eng as Engine eid) (rule_def_id : RULE_DEF_ID) : (string list * RULE) =
+    (get_named_rule_def' eng rule_def_id).rule_def |> Option.get
+
+and inline make_rule (Engine eid) (R' : RULE') : RULE =
+    let e = engines.[eid]
+    let mutable R = Rule -1
+    if e.ruleIdxTable.TryGetValue (R', &R) then
+        R
+    else
+        let rule_id = e.ruleIdxTable.Count
+        let attrs = ()
+        e.ruleIdxTable.[R'] <- Rule rule_id
+        e.ruleTable.Add (R', attrs)
+        Rule rule_id
+
+and inline get_rule' (Engine eid) (Rule rid) = engines.[eid].ruleTable.[rid] |> fst
+
+and inline UpdateRule eng ((f, ts), t_rhs) = make_rule eng (UpdateRule' ((f, ts), t_rhs))
+and inline CondRule eng (G, R1, R2) = make_rule eng (CondRule' (G, R1, R2))
+and inline ParRule eng Rs = make_rule eng (ParRule' Rs)
+and inline SeqRule eng Rs = make_rule eng (SeqRule' Rs)
+and inline IterRule eng R' = make_rule eng (IterRule' R')
+and inline LetRule eng (v, t1, R') = make_rule eng (LetRule' (v, t1, R'))
+and inline MacroRuleCall eng (r, args) = make_rule eng (MacroRuleCall' (r, args))
+and inline ForallRule eng (v, t_set, G, R') = make_rule eng (ForallRule' (v, t_set, G, R'))
+and inline S_Updates eng upds = make_rule eng (S_Updates' upds)   // Map.map (fun ((f, xs), t_rhs) -> ((get_fct_id eng f, xs), convert_term eng t_rhs)) upds
+
 and convert_rule (eng : ENGINE) (R : AST.RULE) : RULE =
     AST.rule_induction (convert_term eng) {
-        UpdateRule = fun ((f, ts), t_rhs) -> UpdateRule ((get_fct_id eng f, ts), t_rhs);
-        CondRule   = fun (G, R1, R2) -> CondRule (G, R1, R2);
-        ParRule    = fun Rs -> ParRule Rs;
-        SeqRule    = fun Rs -> SeqRule Rs;
-        IterRule   = fun R' -> IterRule R';
-        LetRule    = fun (v, t1, R') -> LetRule (v, t1, R');
-        MacroRuleCall = fun (r, args) -> MacroRuleCall (r, args);
-        ForallRule = fun (v, t_set, G, R') -> ForallRule (v, t_set, G, R');
-        S_Updates  = fun upds -> S_Updates (Set.map (fun ((f, xs), t_rhs) -> (get_fct_id eng f, xs), convert_term eng t_rhs) upds)
+        UpdateRule = fun ((f, ts), t_rhs) -> UpdateRule eng ((get_fct_id eng f, ts), t_rhs);
+        CondRule   = fun (G, R1, R2) -> CondRule eng (G, R1, R2);
+        ParRule    = fun Rs -> ParRule eng Rs;
+        SeqRule    = fun Rs -> SeqRule eng Rs;
+        IterRule   = fun R' -> IterRule eng R';
+        LetRule    = fun (v, t1, R') -> LetRule eng (v, t1, R');
+        MacroRuleCall = fun (r_name, args) -> MacroRuleCall eng (get_named_rule_id eng r_name, args);
+        ForallRule = fun (v, t_set, G, R') -> ForallRule eng (v, t_set, G, R');
+        S_Updates  = fun upds -> S_Updates eng (Set.map (fun ((f, xs), t_rhs) -> (get_fct_id eng f, xs), convert_term eng t_rhs) upds)
     } R
 
-and convert_macros (eng : ENGINE) (rdb : AST.MACRO_DB) : MACRO_DB =
-    Map.map (fun _ (args, t) -> (args, convert_term eng t)) rdb
+and convert_function_definitions (eng : ENGINE) (fdb : AST.MACRO_DB) : FCT_DEF_DB =
+    Map.map (fun _ (args, t) -> (args, convert_term eng t)) fdb
 
-and convert_rules (eng : ENGINE) (rdb : AST.RULES_DB) : RULES_DB =
+and convert_rules (eng : ENGINE) (rdb : AST.RULES_DB) : RULE_DEF_DB =
     Map.map (fun _ (args, R) -> (args, convert_rule eng R)) rdb
 
-and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, macros : AST.MACRO_DB, rules : AST.RULES_DB, invariants : Map<string, AST.TYPED_TERM>) : ENGINE =
-    let ctx_id = engines.Count
-    let new_ctx = {
-        signature     = sign
-        initial_state = initial_state
-        macros        = Map.empty
-        rules         = Map.empty
-        invariants    = Map.empty
-        fctIdxTable   = new Dictionary<string, int>(HashIdentity.Structural)
-        fctTable      = new ResizeArray<FUNCTION'>()
-        termIdxTable  = new Dictionary<TERM', TERM>(HashIdentity.Structural)
-        termTable     = new ResizeArray<TERM' * TERM_ATTRS>()
-        TRUE_         = ref None
-        FALSE_        = ref None
-        AND_          = ref None
-        OR_           = ref None
-        NOT_          = ref None
-        EQUALS_       = ref None
+and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def_db : AST.MACRO_DB, rule_def_db : AST.RULES_DB, invariants : Map<string, AST.TYPED_TERM>) : ENGINE =
+    let eid = engines.Count
+    let new_engine = {
+        signature       = sign
+        initial_state   = initial_state
+        rules           = Map.empty
+        invariants      = Map.empty
+        fctIdxTable     = new Dictionary<string, int>(HashIdentity.Structural)
+        fctTable        = new ResizeArray<FUNCTION'>()
+        ruleDefIdxTable = new Dictionary<string, int>(HashIdentity.Structural)
+        ruleDefTable    = new ResizeArray<RULE_DEF'>()
+        termIdxTable    = new Dictionary<TERM', TERM>(HashIdentity.Structural)
+        termTable       = new ResizeArray<TERM' * TERM_ATTRS>()
+        ruleIdxTable    = new Dictionary<RULE', RULE>(HashIdentity.Structural)
+        ruleTable       = new ResizeArray<RULE' * RULE_ATTRS>()
+        TRUE_           = ref None
+        FALSE_          = ref None
+        AND_            = ref None
+        OR_             = ref None
+        NOT_            = ref None
+        EQUALS_         = ref None
     }
-    engines.Add new_ctx
+    engines.Add new_engine
     let extract_fct_interpretation_if_possible f_name =
         let f_kind = Signature.fct_kind f_name sign
         match Signature.fct_kind f_name sign with
@@ -266,14 +329,18 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, macros 
                 |   Some fct_def -> Some (ControlledInitial (fct_def, None))
                 |   None -> Some ControlledUninitialized
         |   Signature.Derived ->
-                match macros |> Map.tryFind f_name with
-                |   Some (args, body) -> Some (Derived (args, convert_term (Engine ctx_id) body))
-                |   None -> failwith (sprintf "Warning: derived function '%s' is in signature, but is not defined - ignored\n" f_name)
-        |   Signature.Monitored -> failwith (sprintf "DAG.new_global_ctx: monitored function '%s' - not implemented" f_name)
-        |   Signature.Shared -> failwith (sprintf "DAG.new_global_ctx: shared function '%s' - not implemented" f_name)
-        |   Signature.Out -> failwith (sprintf "DAG.new_global_ctx: out function '%s' - not implemented" f_name)
+                match fct_def_db |> Map.tryFind f_name with
+                |   Some (args, body) -> Some (Derived (args, convert_term (Engine eid) body))   // !!! convert_term here is problematic, because functions are not yet in fctTable, see how it is done for the other kinds of functions
+                |   None -> failwith (sprintf "Engine.new_engine: derived function '%s' is in signature, but is not defined\n" f_name)
+        |   Signature.Monitored -> failwith (sprintf "Engine.new_engine: monitored function '%s' - not implemented" f_name)
+        |   Signature.Shared -> failwith (sprintf "Engine.new_engine: shared function '%s' - not implemented" f_name)
+        |   Signature.Out -> failwith (sprintf "Engine.new_engine: out function '%s' - not implemented" f_name)
+    let extract_rule_def_rhs r_name =
+        match rule_def_db |> Map.tryFind r_name with
+        |   Some (args, R) -> (args, R)
+        |   None -> failwith (sprintf "Engine.new_engine: no definition found for rule macro '%s'\n" r_name)
     sign |> Map.toList
-        |> List.filter (fun (fct_name, _) -> Signature.is_function_name fct_name sign)
+        |> List.filter (fun (name, _) -> Signature.is_function_name name sign)
         |> List.map (fun (name, _) -> (name, extract_fct_interpretation_if_possible name))
         |> List.filter (function (_, None) -> false | _ -> true)
         |> Seq.iteri (fun i (name, opt_fct_interpretation) ->
@@ -287,52 +354,63 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, macros 
                         // fct_type = Signature.fct_types name sign;   // !!! to be implemented together with monomorphization
                         fct_interpretation = fct_interpretation;
                     }
-                    new_ctx.fctIdxTable.[name] <- i
-                    new_ctx.fctTable.Add fct'
+                    new_engine.fctIdxTable.[name] <- i
+                    new_engine.fctTable.Add fct'
         )
-    for i in 0..new_ctx.fctTable.Count - 1 do
-        let fctInfo = new_ctx.fctTable.[i]
+    rule_def_db |> Map.toList
+        |> List.map (fun (name, _) -> (name, extract_rule_def_rhs name))
+        |> Seq.iteri (fun i (name, rule_def) ->
+            let rule_def' : RULE_DEF' = {
+                rule_id   = i;
+                rule_name = name;
+                // rule_type = Signature.rule_types name sign;   // !!! to be implemented together with monomorphization
+                rule_def  = None
+            }
+            new_engine.ruleDefIdxTable.[name] <- i
+            new_engine.ruleDefTable.Add rule_def'
+        )
+    for i in 0..new_engine.fctTable.Count - 1 do
+        let fctInfo = new_engine.fctTable.[i]
         match fctInfo.fct_interpretation with
         |   StaticUserDefined (fct_interp, None) ->
-                match macros |> Map.tryFind fctInfo.fct_name with
+                match fct_def_db |> Map.tryFind fctInfo.fct_name with
                 |   Some (args, body) ->
-                        new_ctx.fctTable.[i] <- { fctInfo with fct_interpretation = StaticUserDefined (fct_interp, Some (args, convert_term (Engine ctx_id) body)) }
+                        new_engine.fctTable.[i] <- { fctInfo with fct_interpretation = StaticUserDefined (fct_interp, Some (args, convert_term (Engine eid) body)) }
                 |   None -> failwith (sprintf "cannot find definition of static function '%s'\n" fctInfo.fct_name)
         |   ControlledInitial (fct_interp, None) ->
-                match macros |> Map.tryFind fctInfo.fct_name with
+                match fct_def_db |> Map.tryFind fctInfo.fct_name with
                 |   Some (args, body) ->
-                        new_ctx.fctTable.[i] <- { fctInfo with fct_interpretation = ControlledInitial (fct_interp, Some (args, convert_term (Engine ctx_id) body)) }
+                        new_engine.fctTable.[i] <- { fctInfo with fct_interpretation = ControlledInitial (fct_interp, Some (args, convert_term (Engine eid) body)) }
                 |   None -> failwith (sprintf "cannot find initial definition of controlled function '%s'\n" fctInfo.fct_name)
         |   _ -> ()     // if not any of the above cases, do nothing (the entry of fctTable was already completely initialized)
+    for i in 0..new_engine.ruleDefTable.Count - 1 do
+        let rule_def as { rule_id = id; rule_name = name; rule_def = _ } = new_engine.ruleDefTable.[i]
+        let (args, body) = extract_rule_def_rhs name
+        new_engine.ruleDefTable.[i] <- { rule_def with rule_def = Some (args, convert_rule (Engine eid) body) }
     let new_ctx = {
-        new_ctx with
-            macros = convert_macros (Engine ctx_id) macros
-            rules  = convert_rules (Engine ctx_id) rules
-            invariants = Map.map (fun _ t -> convert_term (Engine ctx_id) t) invariants
+        new_engine with
+            invariants = Map.map (fun _ t -> convert_term (Engine eid) t) invariants
         }
-    engines.[ctx_id] <- new_ctx
-    engines.[ctx_id].TRUE_   := Some (Value (Engine ctx_id) (BOOL true))
-    engines.[ctx_id].FALSE_  := Some (Value (Engine ctx_id) (BOOL false))
-    engines.[ctx_id].AND_    := Some (get_fct_id (Engine ctx_id) "and")
-    engines.[ctx_id].OR_     := Some (get_fct_id (Engine ctx_id) "or")
-    engines.[ctx_id].NOT_    := Some (get_fct_id (Engine ctx_id) "not")
-    engines.[ctx_id].EQUALS_ := Some (get_fct_id (Engine ctx_id) "=")
-    Engine ctx_id
+    engines.[eid] <- new_ctx
+    engines.[eid].TRUE_   := Some (Value (Engine eid) (BOOL true))
+    engines.[eid].FALSE_  := Some (Value (Engine eid) (BOOL false))
+    engines.[eid].AND_    := Some (get_fct_id (Engine eid) "and")
+    engines.[eid].OR_     := Some (get_fct_id (Engine eid) "or")
+    engines.[eid].NOT_    := Some (get_fct_id (Engine eid) "not")
+    engines.[eid].EQUALS_ := Some (get_fct_id (Engine eid) "=")
+    Engine eid
 
-and get_global_ctx' (Engine eid : ENGINE) : ENGINE' =
+and get_engine' (Engine eid : ENGINE) : ENGINE' =
     if eid < engines.Count then
         engines.[eid]
     else
-        failwith (sprintf "get_global_ctx': context %d not found" eid)
+        failwith (sprintf "get_engine': engine %d not found" eid)
 
 // and signature_of (GlobalCtx eid) =
 //     global_ctxs.[eid].signature
 
 and initial_state_of (Engine eid) =
     engines.[eid].initial_state
-
-and macros_of (Engine eid) =
-    engines.[eid].macros
 
 and rules_of (Engine eid) =
     engines.[eid].rules
@@ -352,9 +430,9 @@ type TERM_INDUCTION<'fct_id, 'term> = {
     LetTerm    : (string * 'term * 'term) -> 'term;
     DomainTerm : (Signature.TYPE) -> 'term;
 }
-let rec term_induction (gctx: ENGINE) (fct_id : FCT_ID -> 'fct_id) (F : TERM_INDUCTION<'fct_id, 'term>) (t : TERM) :'term =
-    let term_ind = term_induction gctx fct_id F
-    match get_term' gctx t with
+let rec term_induction (eng: ENGINE) (fct_id : FCT_ID -> 'fct_id) (F : TERM_INDUCTION<'fct_id, 'term>) (t : TERM) :'term =
+    let term_ind = term_induction eng fct_id F
+    match get_term' eng t with
     |   Value' x              -> F.Value x
     |   Initial' (f, xs)      -> F.Initial (fct_id f, xs)
     |   AppTerm' (f, ts)      -> F.AppTerm (fct_id f, List.map (fun t -> term_ind t) ts)
@@ -366,7 +444,7 @@ let rec term_induction (gctx: ENGINE) (fct_id : FCT_ID -> 'fct_id) (F : TERM_IND
 
 //--------------------------------------------------------------------
 
-let skipRule = ParRule []
+let skipRule eng = ParRule eng []
 
 //--------------------------------------------------------------------
 
@@ -379,21 +457,21 @@ type RULE_INDUCTION<'term, 'rule> = {
     IterRule : 'rule -> 'rule;
     LetRule : string * 'term * 'rule -> 'rule;
     ForallRule : string * 'term * 'term * 'rule -> 'rule;
-    MacroRuleCall : Signature.RULE_NAME * 'term list -> 'rule;     // Map<FCT_NAME * VALUE list, 'term> -> 'rule;
+    MacroRuleCall : RULE_DEF_ID * 'term list -> 'rule;     // Map<FCT_NAME * VALUE list, 'term> -> 'rule;
 }
 
-let rec rule_induction (term : TERM -> 'term) (F : RULE_INDUCTION<'term, 'rule>) (R : RULE) : 'rule =
-    let rule_ind = rule_induction term
-    match R with
-    |   S_Updates U -> F.S_Updates U   // F.S_Updates (Map.map (fun loc -> fun t_rhs -> term t_rhs) U)
-    |   UpdateRule ((f, ts), t) -> F.UpdateRule ((f, List.map term ts), term t)
-    |   CondRule (G, R1, R2: RULE) -> F.CondRule (term G, rule_ind F R1, rule_ind F R2)
-    |   ParRule Rs -> F.ParRule (List.map (rule_ind F) Rs)
-    |   SeqRule Rs -> F.SeqRule (List.map (rule_ind F) Rs)
-    |   IterRule R -> F.IterRule (rule_ind F R)
-    |   LetRule (v, t, R) -> F.LetRule (v, term t, (rule_ind F) R)
-    |   ForallRule (v, t_set, t_filter, R) -> F.ForallRule (v, term t_set, term t_filter, (rule_ind F) R)
-    |   MacroRuleCall (r, ts) -> F.MacroRuleCall (r, List.map term ts)
+let rec rule_induction (eng: ENGINE) (term : TERM -> 'term) (F : RULE_INDUCTION<'term, 'rule>) (R : RULE) : 'rule =
+    let rule_ind = rule_induction eng term
+    match get_rule' eng R with
+    |   S_Updates' U -> F.S_Updates U   // F.S_Updates (Map.map (fun loc -> fun t_rhs -> term t_rhs) U)
+    |   UpdateRule' ((f, ts), t) -> F.UpdateRule ((f, List.map term ts), term t)
+    |   CondRule' (G, R1, R2: RULE) -> F.CondRule (term G, rule_ind F R1, rule_ind F R2)
+    |   ParRule' Rs -> F.ParRule (List.map (rule_ind F) Rs)
+    |   SeqRule' Rs -> F.SeqRule (List.map (rule_ind F) Rs)
+    |   IterRule' R -> F.IterRule (rule_ind F R)
+    |   LetRule' (v, t, R) -> F.LetRule (v, term t, (rule_ind F) R)
+    |   ForallRule' (v, t_set, t_filter, R) -> F.ForallRule (v, term t_set, term t_filter, (rule_ind F) R)
+    |   MacroRuleCall' (r, ts) -> F.MacroRuleCall (r, List.map term ts)
 
 //--------------------------------------------------------------------
 //
@@ -427,7 +505,7 @@ let pp_location_term sign prefix = function
     |   (f, _) -> blo0 [ str $"{prefix}[{f}]" ]
 
 let rec pp_term (eng : ENGINE) (t : TERM) =
-    let sign = (get_global_ctx' eng).signature
+    let sign = (get_engine' eng).signature
     let (pp_app_term, pp_location_term) = (pp_app_term sign, pp_location_term sign)
     term_induction eng (fun x -> x) {
         AppTerm  = fun (f, ts) -> pp_app_term (Signature.FctName (get_function' eng f).fct_name, ts);
@@ -442,9 +520,9 @@ let rec pp_term (eng : ENGINE) (t : TERM) =
     } t
 
 let rec pp_rule (eng : ENGINE)  (R : RULE) =
-    let sign = (get_global_ctx' eng).signature
+    let sign = (get_engine' eng).signature
     let (pp_app_term, pp_term) = (pp_app_term sign, pp_term eng)
-    rule_induction pp_term {
+    rule_induction eng pp_term {
         S_Updates = fun U ->
                         let pp_elem ((f, xs), t) = blo0 [ str (get_function' eng f).fct_name; str " "; str "("; blo0 (pp_list [str",";brk 1] (xs >>| fun x -> str (value_to_string x))); str ") := "; (pp_term t) ]
                         let L = Set.toList U >>| pp_elem
@@ -457,7 +535,7 @@ let rec pp_rule (eng : ENGINE)  (R : RULE) =
         IterRule = fun R' -> blo0 [ str "iterate "; line_brk; blo2 [ R' ]; line_brk; str "enditerate" ];
         LetRule = fun (v, t, R) -> blo0 [ str "let "; str v; str " = "; t; line_brk; str "in "; R; line_brk; str "endlet" ];
         ForallRule = fun (v, t_set, t_filter, R) -> blo0 [ str "forall "; str v; str " in "; t_set; str " with "; t_filter; str " do"; line_brk; blo2 [ R ]; line_brk; str "endforall" ];
-        MacroRuleCall = fun (r, ts) -> blo0 [ str r; str "["; blo0 (pp_list [str",";brk 1] ts); str "]" ];
+        MacroRuleCall = fun (r, ts) -> blo0 [ str (get_named_rule_def' eng r).rule_name; str "["; blo0 (pp_list [str",";brk 1] ts); str "]" ];
     } R
 
 
@@ -472,7 +550,7 @@ let rule_to_string sign t = t |> pp_rule sign |> PrettyPrinting.toString 80
 //--------------------------------------------------------------------
 
 let show_fct_tables (eng : ENGINE) =
-    let e = get_global_ctx' eng
+    let e = get_engine' eng
     let fct_idx_table = e.fctIdxTable
     let show_fct_idx_table =
         fct_idx_table
@@ -735,9 +813,8 @@ and smt_map_term (eng : ENGINE) (C : SmtInterface.SMT_CONTEXT) (t : TERM) : SmtI
 //  symbolic evaluator
 //  
 //  through the symbolic evaluation functions:
-//  - S or gctx  stands for global context
+//  - S or eng   stands for engine
 //  - env        stands for variable environment
-//  - C or lctx  stands for local context
 //
 //--------------------------------------------------------------------
 
@@ -843,22 +920,22 @@ let rec interpretation (eng as Engine eid : ENGINE) (UM : UPDATE_MAP) (pc : PATH
             Value (fct_interpretation xs)
     |   StaticBackground (fct_interpretation : VALUE list -> VALUE) ->
             Value (fct_interpretation xs)
-    |   StaticUserDefined (fct_interpretation : VALUE list -> VALUE, Some (fct_definition : string list * TERM)) ->
-            eval_fct_definition_in_curr_state fct_definition xs
-    |   ControlledInitial (fct_interpretation : VALUE list -> VALUE, Some (fct_definition : string list * TERM)) -> 
+    |   StaticUserDefined (_ : VALUE list -> VALUE, Some (fct_def : string list * TERM)) ->
+            eval_fct_definition_in_curr_state fct_def xs
+    |   ControlledInitial (_ : VALUE list -> VALUE, Some (fct_def : string list * TERM)) -> 
             try Map.find xs (Map.find (FctId (get_function' eng f).fct_id) UM)
             with _ ->
                 let res = initial_state_eval_res eng (AppTerm eng (f, xs >>| Value))
                 match !res with
                 |   Some t' -> t'
-                |   None -> let t' = eval_fct_definition_in_initial_state fct_definition xs in res := Some t'; t'
+                |   None -> let t' = eval_fct_definition_in_initial_state fct_def xs in res := Some t'; t'
     |   ControlledUninitialized ->
             try Map.find xs (Map.find (FctId (get_function' eng f).fct_id) UM)
             with _ -> Initial eng (f, xs)
-    |   Derived (macro_interpretation : string list * TERM) ->
-            failwith (sprintf "DAG.interpretation: derived function '%s' - not implemented" f'.fct_name)
+    |   Derived (fct_def : string list * TERM) ->
+            failwith (sprintf "Engine.interpretation: derived function '%s' - not implemented" f'.fct_name)
     |   StaticSymbolic (s_fct_interpretation: TERM list -> TERM) ->
-            failwith (sprintf "DAG.interpretation: static symbolic function '%s' - not implemented" f'.fct_name)
+            failwith (sprintf "Engine.interpretation: static symbolic function '%s' - not implemented" f'.fct_name)
     |   StaticUserDefined (_, None) ->
             failwith (sprintf "definition of static function '%s' missing" f'.fct_name)
     |   ControlledInitial (_, None) -> 
@@ -896,7 +973,7 @@ and expand_term t (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : 
         LetTerm   = fun (v, t1, t2) (UM : UPDATE_MAP, env, pc) ->
                         let t1_val = t1 (UM, env, pc)
                         t2 (UM, add_binding env (v, t1_val, get_type t1_val), pc);
-        DomainTerm = fun dom (UM : UPDATE_MAP, env, pc) -> match State.enum_finite_type dom (initial_state_of eng) with Some xs -> Value eng (SET xs) | _ -> failwith (sprintf "DAG.expand_term: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
+        DomainTerm = fun dom (UM : UPDATE_MAP, env, pc) -> match State.enum_finite_type dom (initial_state_of eng) with Some xs -> Value eng (SET xs) | _ -> failwith (sprintf "Engine.expand_term: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
     } t ((UM : UPDATE_MAP), (env : ENV), (pc : PATH_COND))
 
 and expand_quantifier (q_kind, v, t_set : UPDATE_MAP * ENV * PATH_COND -> TERM, t_cond : UPDATE_MAP * ENV * PATH_COND -> TERM)
@@ -906,7 +983,7 @@ and expand_quantifier (q_kind, v, t_set : UPDATE_MAP * ENV * PATH_COND -> TERM, 
     let elem_type =
         match t_set_type with
         |   Signature.Powerset tyname -> tyname
-        |   _ -> failwith (sprintf "DAG.expand_quantifier: expected a set or domain type, %s found instead" (Signature.type_to_string t_set_type))
+        |   _ -> failwith (sprintf "Engine.expand_quantifier: expected a set or domain type, %s found instead" (Signature.type_to_string t_set_type))
     match get_term' eng t_set with
     |   Value' (Background.SET xs) ->
             let eval_instance x = t_cond (UM, add_binding env (v, Value eng x, elem_type), pc)
@@ -914,8 +991,8 @@ and expand_quantifier (q_kind, v, t_set : UPDATE_MAP * ENV * PATH_COND -> TERM, 
             match q_kind with
             |   AST.Forall -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_and eng (t_accum, t1)) (TRUE eng)  t_conds
             |   AST.Exist  -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_or  eng (t_accum, t1)) (FALSE eng) t_conds
-            |   AST.ExistUnique -> failwith "DAG.expand_quantifier: 'ExistUnique' not implemented"
-    |   x -> failwith (sprintf "DAG.expand_quantifier: not a set (%A): %A v" t_set x)
+            |   AST.ExistUnique -> failwith "Engine.expand_quantifier: 'ExistUnique' not implemented"
+    |   x -> failwith (sprintf "Engine.expand_quantifier: not a set (%A): %A v" t_set x)
 
 and try_case_distinction_for_term_with_finite_range (eng : ENGINE) (UM : UPDATE_MAP, env, pc : PATH_COND) (f : FCT_ID) (ts0 : TERM list) : TERM =
     let generate_cond_term (t, cases : (VALUE * TERM) list) =
@@ -934,7 +1011,7 @@ and try_case_distinction_for_term_with_finite_range (eng : ENGINE) (UM : UPDATE_
         mk_cond_term cases
     let make_case_distinction (t : TERM) (elem_term_pairs : (VALUE * TERM) list) =
         if List.isEmpty elem_term_pairs
-        then failwith (sprintf "DAG.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string eng t))
+        then failwith (sprintf "Engine.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string eng t))
         generate_cond_term (t, elem_term_pairs)
     let rec F past_args = function
     |   [] -> AppTerm eng (f, List.rev past_args)
@@ -967,8 +1044,8 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                 |   LetTerm'  (v, t1, t2) -> F (t :: ts_past) ts_fut
                 |   VarTerm'  v           -> F (t :: ts_past) ts_fut
                 |   AppTerm'  _           -> F (t :: ts_past) ts_fut
-                |   QuantTerm' _          -> failwith "DAG.eval_app_term: QuantTerm not implemented"
-                |   DomainTerm' _         -> failwith "DAG.eval_app_term: DomainTerm not implemented"
+                |   QuantTerm' _          -> failwith "Engine.eval_app_term: QuantTerm not implemented"
+                |   DomainTerm' _         -> failwith "Engine.eval_app_term: DomainTerm not implemented"
         |   [] ->
                 let { fct_name = f_name; fct_kind = f_kind; fct_interpretation = f_intp }  = get_function' eng fct_id
                 match (f_name, List.rev ts_past) with
@@ -1001,7 +1078,7 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                                         else smt_eval_formula t eng (UM, env, pc)
                                 | _ -> AppTerm eng (fct_id, ts)
                         |   Signature.Controlled -> s_eval_term (try_case_distinction_for_term_with_finite_range eng (UM, env, pc) fct_id ts) eng (UM, env, pc)
-                        |   other_kind -> failwith (sprintf "DAG.eval_app_term: kind '%s' of function '%s' not implemented" (Signature.fct_kind_to_string other_kind) f)
+                        |   other_kind -> failwith (sprintf "Engine.eval_app_term: kind '%s' of function '%s' not implemented" (Signature.fct_kind_to_string other_kind) f)
     let f_name = (get_function' eng fct_id).fct_name
     match (f_name, ts) with
     |   "and", [ t1; t2 ] ->
@@ -1106,7 +1183,7 @@ and s_eval_term_ (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PAT
         VarTerm    = fun v -> fun C (_, env, _) -> fst (get_env env v);
         QuantTerm  = fun (q_kind, v, t_set, t_cond) C (UM, env, pc) -> expand_quantifier (q_kind, v, t_set C, t_cond C) C (UM, env, pc);
         LetTerm    = fun (v, t1, t2) C (_, env, _) -> eval_let_term C (UM, env, pc) (v, t1, t2) 
-        DomainTerm = fun dom C (_, _, _) -> match State.enum_finite_type dom (initial_state_of C) with Some xs -> Value C (SET xs) | None -> failwith (sprintf "DAG.s_eval_term_: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
+        DomainTerm = fun dom C (_, _, _) -> match State.enum_finite_type dom (initial_state_of C) with Some xs -> Value C (SET xs) | None -> failwith (sprintf "Engine.s_eval_term_: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
     } t eng (UM, env, pc)
 
 and s_eval_term (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
@@ -1122,8 +1199,9 @@ and s_eval_term (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
 let rec try_case_distinction_for_update_with_finite_domain
         (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND)
         (f : FCT_ID) (ts0 : TERM list) (t_rhs : TERM): RULE =
+    let (CondRule, UpdateRule) = (CondRule eng, UpdateRule eng)
     let mkEq (t1 : TERM) t2 = s_equals eng (t1, t2)  // AppTerm' (Boolean, (FctName "=", [t1; t2]))
-    let generate_cond_rule (t, cases : (VALUE * RULE) list) =
+    let generate_cond_rule (t, cases : (VALUE * RULE) list) : RULE =
         let t = s_eval_term t eng (UM, env, pc)
         let ty = get_type eng t
         let rec mk_cond_rule cases =
@@ -1158,6 +1236,8 @@ let rec try_case_distinction_for_update_with_finite_domain
     F [] ts0
 
 and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : RULE =
+    let (CondRule, UpdateRule, S_Updates) = (CondRule eng, UpdateRule eng, S_Updates eng)
+    let (ParRule, SeqRule, IterRule, skipRule) = (ParRule eng, SeqRule eng, IterRule eng, skipRule eng)
     let s_eval_term t = s_eval_term t eng
     let s_eval_rule R = s_eval_rule R eng
     let get_type, with_extended_path_cond = get_type eng, with_extended_path_cond eng
@@ -1217,15 +1297,15 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
         |   R1 :: Rs    -> List.fold (fun R1 R2 -> eval_binary_par R1 R2 (UM, env, pc)) R1 Rs
 
     and eval_binary_par R1 R2 (UM, env, pc) : RULE =
-        match s_eval_rule R1 (UM, env, pc) with
-        |   S_Updates U1 ->
-                match s_eval_rule R2 (UM, env, pc) with
-                |   S_Updates U2 ->
+        match get_rule' eng (s_eval_rule R1 (UM, env, pc)) with
+        |   S_Updates' U1 ->
+                match get_rule' eng (s_eval_rule R2 (UM, env, pc)) with
+                |   S_Updates' U2 ->
                         S_Updates (Set.union U1 U2)
-                |   CondRule (G2, R21, R22) ->
+                |   CondRule' (G2, R21, R22) ->
                         s_eval_rule (CondRule (G2, ParRule [ S_Updates U1; R21 ], ParRule [ S_Updates U1; R22 ])) (UM, env, pc)
                 |   _ -> failwith (sprintf "eval_binary_par: %s" (rule_to_string R2))
-        |   CondRule (G1, R11, R12) ->
+        |   CondRule' (G1, R11, R12) ->
                 s_eval_rule (CondRule (G1, ParRule [ R11; R2 ], ParRule [ R12; R2 ])) (UM, env, pc)
         |   _ -> failwith (sprintf "eval_binary_par: %s" (rule_to_string R1))
 
@@ -1236,33 +1316,33 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
         |   R1 :: Rs    -> List.fold (fun R1 R2 -> eval_binary_seq R1 R2 (UM, env, pc)) R1 Rs
 
     and eval_binary_seq R1 R2 (UM, env, pc): RULE = 
-        match s_eval_rule R1 (UM, env, pc) with
-        |   S_Updates U1 ->
+        match get_rule' eng (s_eval_rule R1 (UM, env, pc)) with
+        |   S_Updates' U1 ->
                 let S' =
                     try sequel_s_state eng UM U1
                     with Error (_, _, _, InconsistentUpdates (C, _, u1, u2, _)) ->
                             raise (Error (C, module_name, "s_eval_rule.eval_binary_seq",
                                 InconsistentUpdates (C, Some (List.ofSeq pc), u1, u2, Some U1)))
-                match s_eval_rule R2 (S', env, pc) with
-                |   S_Updates U2 ->
+                match get_rule' eng (s_eval_rule R2 (S', env, pc)) with
+                |   S_Updates' U2 ->
                         S_Updates (seq_merge_2 eng U1 U2)
-                |   CondRule (G2, R21, R22) ->
+                |   CondRule' (G2, R21, R22) ->
                         s_eval_rule (CondRule (G2, SeqRule [ S_Updates U1; R21 ], SeqRule [ S_Updates U1; R22 ])) (UM, env, pc)
                 |   _ -> failwith (sprintf "eval_binary_seq: %s" (rule_to_string R2))
-        |   CondRule (G1, R11, R12) ->
+        |   CondRule' (G1, R11, R12) ->
                 s_eval_rule (CondRule (G1, SeqRule [ R11; R2 ], SeqRule [ R12; R2 ])) (UM, env, pc)
         |   _ -> failwith (sprintf "eval_binary_seq: %s" (rule_to_string R1))
 
     and eval_iter R (UM, env, pc) =
-        match s_eval_rule R (UM, env, pc) with
-        |   S_Updates U ->
+        match get_rule' eng (s_eval_rule R (UM, env, pc)) with
+        |   S_Updates' U ->
                 if Set.isEmpty U
                 then S_Updates Set.empty
                 else s_eval_rule (SeqRule [ S_Updates U; IterRule R ]) (UM, env, pc)
-        |   (CondRule (G, R1, R2)) ->
+        |   CondRule' (G, R1, R2) ->
                 //s_eval_rule (SeqRule [ CondRule (G, R1, R2); IterRule R ]) (UM, env, pc)
                 s_eval_rule (CondRule (G, SeqRule [R1; IterRule R], SeqRule [R2; IterRule R])) (UM, env, pc)
-        |   R' -> failwith (sprintf "SymEvalRules.s_eval_rule: eval_iter_rule - R'' = %s" (rule_to_string R'))
+        |   R' -> failwith (sprintf "SymEvalRules.s_eval_rule: eval_iter_rule - R'' = %s" (rule_to_string (make_rule eng R')))
     
     and eval_let (v, t, R) (UM, env, pc) =
         let t' = s_eval_term t (UM, env, pc)
@@ -1281,23 +1361,24 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
 
     and eval_macro_rule_call (r, args) (UM, env, pc) =
         let (formals, body) =
-            try Map.find r (rules_of eng)
-            with _ -> failwith (sprintf "SymbEval.s_eval_rule: macro rule %s not found" r)
+            match (get_named_rule_def' eng r).rule_def with
+            |   Some (formals, body) -> (formals, body)
+            |   NOne -> failwith (sprintf "Engine.eval_macro_rule_call: macro rule '%s' not defined" (get_named_rule_def' eng r).rule_name)
         let env' =
             List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (UM, env, pc), get_type arg)) env formals args
         s_eval_rule body (UM, env', pc)
  
     let R =
-        match R with
-        |   UpdateRule ((f, ts), t) -> eval_update ((f, ts), t) (UM, env, pc)
-        |   CondRule (G, R1, R2)    -> eval_cond (G, R1, R2) (UM, env, pc)
-        |   ParRule Rs              -> eval_par Rs (UM, env, pc)
-        |   SeqRule Rs              -> eval_seq Rs (UM, env, pc)
-        |   IterRule R              -> eval_iter R (UM, env, pc)
-        |   LetRule (v, t, R)       -> eval_let (v, t, R) (UM, env, pc) 
-        |   ForallRule (v, t, G, R) -> eval_forall (v, t, G, R) (UM, env, pc) 
-        |   MacroRuleCall (r, args) -> eval_macro_rule_call (r, args) (UM, env, pc)
-        |   S_Updates S             -> S_Updates S
+        match get_rule' eng R with
+        |   UpdateRule' ((f, ts), t) -> eval_update ((f, ts), t) (UM, env, pc)
+        |   CondRule' (G, R1, R2)    -> eval_cond (G, R1, R2) (UM, env, pc)
+        |   ParRule' Rs              -> eval_par Rs (UM, env, pc)
+        |   SeqRule' Rs              -> eval_seq Rs (UM, env, pc)
+        |   IterRule' R              -> eval_iter R (UM, env, pc)
+        |   LetRule' (v, t, R)       -> eval_let (v, t, R) (UM, env, pc) 
+        |   ForallRule' (v, t, G, R) -> eval_forall (v, t, G, R) (UM, env, pc) 
+        |   MacroRuleCall' (r, args) -> eval_macro_rule_call (r, args) (UM, env, pc)
+        |   S_Updates' S             -> S_Updates S
 
     level := !level - 1
     if (!trace > 1)
@@ -1332,21 +1413,21 @@ let reconvert_term (eng : ENGINE) t =
     } t
 
 let reconvert_rule (eng : ENGINE) R = 
-    rule_induction (reconvert_term eng) {
-        UpdateRule = UpdateRule;
-        CondRule   = CondRule;
-        ParRule    = ParRule;
-        SeqRule    = SeqRule;
-        IterRule   = IterRule;
-        LetRule    = LetRule;
-        MacroRuleCall = MacroRuleCall;
-        ForallRule = ForallRule;
-        S_Updates  = fun upds -> ParRule (List.map (fun ((f, xs), t_rhs) -> UpdateRule ((f, xs >>| Value eng), reconvert_term eng t_rhs)) (Set.toList upds))
+    rule_induction eng (reconvert_term eng) {
+        UpdateRule = UpdateRule eng;
+        CondRule   = CondRule eng;
+        ParRule    = ParRule eng;
+        SeqRule    = SeqRule eng;
+        IterRule   = IterRule eng;
+        LetRule    = LetRule eng;
+        MacroRuleCall = MacroRuleCall eng;
+        ForallRule = ForallRule eng;
+        S_Updates  = fun upds -> ParRule eng (List.map (fun ((f, xs), t_rhs) -> UpdateRule eng ((f, xs >>| Value eng), reconvert_term eng t_rhs)) (Set.toList upds))
     } R
 
 //--------------------------------------------------------------------
 
-let count_s_updates = rule_induction (fun _ -> ()) {
+let count_s_updates eng = rule_induction eng (fun _ -> ()) {
     UpdateRule = fun _ -> failwith "there should be no UpdateRule here";
     CondRule  = fun (_, R1, R2) -> R1 + R2;
     ParRule   = fun _ -> failwith "there should be no ParRule here";
@@ -1375,7 +1456,7 @@ let term_size eng =
     }
 
 let rule_size eng =
-    rule_induction (term_size eng) {
+    rule_induction eng (term_size eng) {
         S_Updates = fun U -> Set.count U;   // not relevant, but define somehow to allow printing for debugging
         UpdateRule = fun ((f, ts), t) -> 1 + 1 + List.sum ts + t;
         CondRule = fun (G, R1, R2) -> 1 + G + R1 + R2;
@@ -1395,11 +1476,13 @@ let symbolic_execution (eng : ENGINE) (R_in : RULE) (steps : int) : int * RULE =
     let S0 = TopLevel.initial_state ()
     //  if (!trace > 2) then fprintf stderr "---\n%s\n---\n" (Signature.signature_to_string (signature_of C))
     let R_in_n_times = [ for _ in 1..steps -> R_in ]
-    let R_in' = SeqRule (R_in_n_times @ [ skipRule ])      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
+    let R_in' = SeqRule eng (R_in_n_times @ [ skipRule eng ])      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
     let R_out = s_eval_rule R_in' eng (Map.empty, Map.empty, Set.empty)
-    (count_s_updates R_out, reconvert_rule eng R_out)
+    (count_s_updates eng R_out, reconvert_rule eng R_out)
 
 let symbolic_execution_for_invariant_checking (eng : ENGINE) (opt_steps : int option) (R_in : RULE) : unit =
+    let (CondRule, UpdateRule, S_Updates) = (CondRule eng, UpdateRule eng, S_Updates eng)
+    let (ParRule, SeqRule, IterRule, skipRule) = (ParRule eng, SeqRule eng, IterRule eng, skipRule eng)
     let proc = Process.GetCurrentProcess()
     let capture_cpu_time (proc : Process) =
         (proc.TotalProcessorTime, proc.UserProcessorTime, proc.PrivilegedProcessorTime)
@@ -1457,13 +1540,13 @@ let symbolic_execution_for_invariant_checking (eng : ENGINE) (opt_steps : int op
                 else if smt_formula_is_false eng TopLevel.smt_ctx t' then definitely_violated inv_id conditions updates t t'
                 else possibly_violated inv_id conditions updates t t'
             printf "%s" (String.concat "" (List.filter (fun s -> s <> "") (List.map check_one invs)))
-        match R with      // check invariants on all paths of state S' = S0 + R by traversing tree of R
-        |   CondRule (G, R1, R2) ->
+        match get_rule' eng R with      // check invariants on all paths of state S' = S0 + R by traversing tree of R
+        |   CondRule' (G, R1, R2) ->
                 with_extended_path_cond G           (fun _ _ -> traverse i (G::conditions) R1) (UM, env, pc)
                 with_extended_path_cond (s_not eng G) (fun _ _ -> traverse i ((s_not eng G)::conditions) R2) (UM, env, pc)
-        |   S_Updates updates    ->
+        |   S_Updates' updates    ->
                 check_invariants invs UM0 conditions updates
-        |   R -> failwith (sprintf "symbolic_execution_for_invariant_checking: there should be no such rule here: %s\n" (rule_to_string eng R))
+        |   R -> failwith (sprintf "symbolic_execution_for_invariant_checking: there should be no such rule here: %s\n" (rule_to_string eng (make_rule eng R)))
     let state_header i = printf "\n=== state S_%d =====================================\n" i
     let rec F R_acc R_in i =
         reset_counters ()
