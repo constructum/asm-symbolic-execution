@@ -44,9 +44,11 @@ and FUNCTION_ATTRS = {
 and FCT_ID =
 |   FctId of int
 
-and RULE_DEF' = {
+and RULE_DEF' =
+    RuleName of string
+
+and RULE_DEF_ATTRS = {
     rule_id   : int;
-    rule_name : string;
     // rule_type : (Signature.TYPE list * Signature.TYPE);   // !!! to be implemented together with monomorphization
     rule_def  : (string list * RULE) option
 }
@@ -59,13 +61,8 @@ and ENGINE' = {
     rules           : RULE_DEF_DB         //!!!!!!!!!!! to be removed
     invariants      : Map<string, TERM>   // Added invariants field
 
-    // fctIdxTable     : Dictionary<string, int>
-    // fctTable        : ResizeArray<FUNCTION'>
-
     functions       : IndMap<FUNCTION', FUNCTION_ATTRS>  // MapInd for functions, used for fast lookup by function name
-
-    ruleDefIdxTable : Dictionary<string, int>    // for rule macros
-    ruleDefTable    : ResizeArray<RULE_DEF'>
+    rule_defs       : IndMap<RULE_DEF', RULE_DEF_ATTRS>  // MapInd for rule macros, used for fast lookup by rule name
 
     termIdxTable    : Dictionary<TERM', TERM>
     termTable       : ResizeArray<TERM' * TERM_ATTRS>
@@ -107,15 +104,15 @@ and TERM_ATTRS = {
 }
 
 and RULE' =
-| S_Updates' of Set<(FCT_ID * VALUE list) * TERM>  //Map<FCT_NAME * VALUE list, TERM>   // used for special purposes (symbolic evaluation): "partially interpreted rules", not actual rules of the language
-| UpdateRule' of (FCT_ID * TERM list) * TERM
-| CondRule' of TERM * RULE * RULE
-| ParRule' of RULE list
-| SeqRule' of RULE list
-| IterRule' of RULE
-| LetRule' of string * TERM * RULE
-| ForallRule' of string * TERM * TERM * RULE
-| MacroRuleCall' of RULE_DEF_ID * TERM list
+|   S_Updates' of Set<(FCT_ID * VALUE list) * TERM>  //Map<FCT_NAME * VALUE list, TERM>   // used for special purposes (symbolic evaluation): "partially interpreted rules", not actual rules of the language
+|   UpdateRule' of (FCT_ID * TERM list) * TERM
+|   CondRule' of TERM * RULE * RULE
+|   ParRule' of RULE list
+|   SeqRule' of RULE list
+|   IterRule' of RULE
+|   LetRule' of string * TERM * RULE
+|   ForallRule' of string * TERM * TERM * RULE
+|   MacroRuleCall' of RULE_DEF_ID * TERM list
 
 and RULE = Rule of int
 
@@ -236,22 +233,20 @@ and convert_term (eng : ENGINE) (t : AST.TYPED_TERM) : TERM =
         DomainTerm = fun (_, D) -> DomainTerm eng D;
     } t
 
-and get_named_rule_id (Engine eid) (rule_name : string) : RULE_DEF_ID =
-    let eng = engines.[eid]
-    let mutable named_rule_id = -1
-    match eng.ruleDefIdxTable.TryGetValue(rule_name, &named_rule_id) with
-    | true -> RuleDefId named_rule_id
-    | false -> failwith (sprintf "Engine.get_named_rule_id: function '%s' not found in global context #%d" rule_name eid)
+and inline get_rule_def_id (Engine eid) (name : string) : RULE_DEF_ID =
+    match engines.[eid].rule_defs.try_get_index(RuleName name) with
+    | Some rule_def_id -> RuleDefId rule_def_id
+    | None -> failwith (sprintf "Engine.get_named_rule_id: function '%s' not found in global context #%d" name eid)
 
-and get_named_rule_def' (Engine eid) (RuleDefId named_rule_id : RULE_DEF_ID) : RULE_DEF' =
-    let ruleDefTable = engines.[eid].ruleDefTable
-    if named_rule_id < ruleDefTable.Count then
-        ruleDefTable.[named_rule_id]
-    else
-        failwith (sprintf "Engine.get_named_rule_def': function with id #%A not found in global context #%d" ruleDefTable.[named_rule_id] eid)
+and inline get_rule_def' (Engine eid) (RuleDefId id : RULE_DEF_ID) : RULE_DEF' * RULE_DEF_ATTRS =
+    engines.[eid].rule_defs.get(id)
 
-and get_rule_named_definition (eng as Engine eid) (rule_def_id : RULE_DEF_ID) : (string list * RULE) =
-    (get_named_rule_def' eng rule_def_id).rule_def |> Option.get
+and inline get_rule_name (Engine eid) (RuleDefId id : RULE_DEF_ID) = let RuleName r_name, _ =engines.[eid].rule_defs.get(id) in r_name
+and inline get_rule_id (eng : ENGINE) (id : RULE_DEF_ID) = (snd (get_rule_def' eng id)).rule_id
+and inline get_rule_def (eng as Engine eid) (id : RULE_DEF_ID) = (snd (get_rule_def' eng id)).rule_def
+
+// and get_rule_named_definition (eng as Engine eid) (rule_def_id : RULE_DEF_ID) : (string list * RULE) =
+//     (get_rule_def' eng rule_def_id).rule_def |> Option.get
 
 and inline make_rule (Engine eid) (R' : RULE') : RULE =
     let e = engines.[eid]
@@ -285,7 +280,7 @@ and convert_rule (eng : ENGINE) (R : AST.RULE) : RULE =
         SeqRule    = fun Rs -> SeqRule eng Rs;
         IterRule   = fun R' -> IterRule eng R';
         LetRule    = fun (v, t1, R') -> LetRule eng (v, t1, R');
-        MacroRuleCall = fun (r_name, args) -> MacroRuleCall eng (get_named_rule_id eng r_name, args);
+        MacroRuleCall = fun (r_name, args) -> MacroRuleCall eng (get_rule_def_id eng r_name, args);
         ForallRule = fun (v, t_set, G, R') -> ForallRule eng (v, t_set, G, R');
         S_Updates  = fun upds -> S_Updates eng (Set.map (fun ((f, xs), t_rhs) -> (get_fct_id eng f, xs), convert_term eng t_rhs) upds)
     } R
@@ -300,8 +295,9 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
         // fctIdxTable     = new Dictionary<string, int>(HashIdentity.Structural)
         // fctTable        = new ResizeArray<FUNCTION'>()
         functions       = newIndMap<FUNCTION', FUNCTION_ATTRS>()
-        ruleDefIdxTable = new Dictionary<string, int>(HashIdentity.Structural)
-        ruleDefTable    = new ResizeArray<RULE_DEF'>()
+        // ruleDefIdxTable = new Dictionary<string, int>(HashIdentity.Structural)
+        // ruleDefTable    = new ResizeArray<RULE_DEF'>()
+        rule_defs       = newIndMap<RULE_DEF', RULE_DEF_ATTRS>()
         termIdxTable    = new Dictionary<TERM', TERM>(HashIdentity.Structural)
         termTable       = new ResizeArray<TERM' * TERM_ATTRS>()
         ruleIdxTable    = new Dictionary<RULE', RULE>(HashIdentity.Structural)
@@ -350,24 +346,22 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
             match opt_fct_interpretation with
             |   None -> ()
             |   Some fct_interpretation ->
-                    new_engine.functions.add (FctName name, {
-                        fct_id   = i;
-                        fct_kind = Signature.fct_kind name sign;
-                        // fct_type = Signature.fct_types name sign;   // !!! to be implemented together with monomorphization
-                        fct_interpretation = fct_interpretation
-                    }) |> ignore )
+                    new_engine.functions.add (
+                        FctName name, {
+                            fct_id   = i;
+                            fct_kind = Signature.fct_kind name sign;
+                            // fct_type = Signature.fct_types name sign;   // !!! to be implemented together with monomorphization
+                            fct_interpretation = fct_interpretation
+                        }) |> ignore )
     rule_def_db |> Map.toList
         |> List.map (fun (name, _) -> (name, extract_rule_def_rhs name))
         |> Seq.iteri (fun i (name, rule_def) ->
-            let rule_def' : RULE_DEF' = {
-                rule_id   = i;
-                rule_name = name;
-                // rule_type = Signature.rule_types name sign;   // !!! to be implemented together with monomorphization
-                rule_def  = None
-            }
-            new_engine.ruleDefIdxTable.[name] <- i
-            new_engine.ruleDefTable.Add rule_def'
-        )
+            new_engine.rule_defs.add (
+                RuleName name, {
+                    rule_id   = i;
+                    // rule_type = Signature.rule_types name sign;   // !!! to be implemented together with monomorphization
+                    rule_def  = None
+                }) |> ignore )
     for i in 0..new_engine.functions.Count - 1 do
         let FctName f_name, (f_attrs as { fct_interpretation = fct_intp }) = new_engine.functions.get(i)
         match fct_intp with
@@ -382,10 +376,10 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
                         new_engine.functions.set i (FctName f_name, { f_attrs with fct_interpretation = ControlledInitial (fct_interp, Some (args, convert_term (Engine eid) body)) })
                 |   None -> failwith (sprintf "cannot find initial definition of controlled function '%s'\n" f_name)
         |   _ -> ()     // if not any of the above cases, do nothing (the entry of fctTable was already completely initialized)
-    for i in 0..new_engine.ruleDefTable.Count - 1 do
-        let rule_def as { rule_id = id; rule_name = name; rule_def = _ } = new_engine.ruleDefTable.[i]
-        let (args, body) = extract_rule_def_rhs name
-        new_engine.ruleDefTable.[i] <- { rule_def with rule_def = Some (args, convert_rule (Engine eid) body) }
+    for i in 0..new_engine.rule_defs.Count - 1 do
+        let RuleName rd_name, (rd_attrs as { rule_id = id; rule_def = _ }) = new_engine.rule_defs.get i
+        let (args, body) = extract_rule_def_rhs rd_name
+        new_engine.rule_defs.set i (RuleName rd_name, { rd_attrs with rule_def = Some (args, convert_rule (Engine eid) body) })
     let new_ctx = {
         new_engine with
             invariants = Map.map (fun _ t -> convert_term (Engine eid) t) invariants
@@ -534,7 +528,7 @@ let rec pp_rule (eng : ENGINE)  (R : RULE) =
         IterRule = fun R' -> blo0 [ str "iterate "; line_brk; blo2 [ R' ]; line_brk; str "enditerate" ];
         LetRule = fun (v, t, R) -> blo0 [ str "let "; str v; str " = "; t; line_brk; str "in "; R; line_brk; str "endlet" ];
         ForallRule = fun (v, t_set, t_filter, R) -> blo0 [ str "forall "; str v; str " in "; t_set; str " with "; t_filter; str " do"; line_brk; blo2 [ R ]; line_brk; str "endforall" ];
-        MacroRuleCall = fun (r, ts) -> blo0 [ str (get_named_rule_def' eng r).rule_name; str "["; blo0 (pp_list [str",";brk 1] ts); str "]" ];
+        MacroRuleCall = fun (r, ts) -> blo0 [ str (get_rule_name eng r); str "["; blo0 (pp_list [str",";brk 1] ts); str "]" ];
     } R
 
 
@@ -1340,9 +1334,9 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
 
     and eval_macro_rule_call (r, args) (UM, env, pc) =
         let (formals, body) =
-            match (get_named_rule_def' eng r).rule_def with
+            match get_rule_def eng r with
             |   Some (formals, body) -> (formals, body)
-            |   NOne -> failwith (sprintf "Engine.eval_macro_rule_call: macro rule '%s' not defined" (get_named_rule_def' eng r).rule_name)
+            |   None -> failwith (sprintf "Engine.eval_macro_rule_call: macro rule '%s' not defined" (get_rule_name eng r))
         let env' =
             List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (UM, env, pc), get_type arg)) env formals args
         s_eval_rule body (UM, env', pc)
