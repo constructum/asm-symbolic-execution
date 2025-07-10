@@ -58,7 +58,6 @@ and RULE_DEF_ID =
 and ENGINE' = {
     signature       : Signature.SIGNATURE
     initial_state   : State.STATE         // use only for initial state in this module, never use '_dynamic' field - also the second elem. of _dynamic_initial seems not to be used !
-    rules           : RULE_DEF_DB         //!!!!!!!!!!! to be removed
     invariants      : Map<string, TERM>   // Added invariants field
 
     functions       : IndMap<FUNCTION', FUNCTION_ATTRS>  // MapInd for functions, used for fast lookup by function name
@@ -290,13 +289,8 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
     let new_engine = {
         signature       = sign
         initial_state   = initial_state
-        rules           = Map.empty
         invariants      = Map.empty
-        // fctIdxTable     = new Dictionary<string, int>(HashIdentity.Structural)
-        // fctTable        = new ResizeArray<FUNCTION'>()
         functions       = newIndMap<FUNCTION', FUNCTION_ATTRS>()
-        // ruleDefIdxTable = new Dictionary<string, int>(HashIdentity.Structural)
-        // ruleDefTable    = new ResizeArray<RULE_DEF'>()
         rule_defs       = newIndMap<RULE_DEF', RULE_DEF_ATTRS>()
         termIdxTable    = new Dictionary<TERM', TERM>(HashIdentity.Structural)
         termTable       = new ResizeArray<TERM' * TERM_ATTRS>()
