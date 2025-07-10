@@ -9,6 +9,8 @@ open Common
 open PrettyPrinting
 open Background
 
+open IndMap
+
 //--------------------------------------------------------------------
 
 let trace = ref 0
@@ -29,13 +31,16 @@ type FUNCTION_INTERPRETATION =
 |   ControlledUninitialized
 |   Derived of (string list * TERM)             // string list is the list of arguments, TERM is the body of the derived function
 
-and FUNCTION' = {
+and FUNCTION' =
+    FctName of string
+
+and FUNCTION_ATTRS = {
     fct_id   : int;
-    fct_name : string;
     fct_kind : Signature.FCT_KIND;
     // fct_type : (Signature.TYPE list * Signature.TYPE);   // !!! to be implemented together with monomorphization
     fct_interpretation : FUNCTION_INTERPRETATION
 }
+
 and FCT_ID =
 |   FctId of int
 
@@ -54,8 +59,11 @@ and ENGINE' = {
     rules           : RULE_DEF_DB         //!!!!!!!!!!! to be removed
     invariants      : Map<string, TERM>   // Added invariants field
 
-    fctIdxTable     : Dictionary<string, int>
-    fctTable        : ResizeArray<FUNCTION'>
+    // fctIdxTable     : Dictionary<string, int>
+    // fctTable        : ResizeArray<FUNCTION'>
+
+    functions       : IndMap<FUNCTION', FUNCTION_ATTRS>  // MapInd for functions, used for fast lookup by function name
+
     ruleDefIdxTable : Dictionary<string, int>    // for rule macros
     ruleDefTable    : ResizeArray<RULE_DEF'>
 
@@ -126,23 +134,20 @@ and ENV = Map<string, TERM * Signature.TYPE>
 
 and PATH_COND = Set<TERM> // * S_UPDATE_MAP
 
-
 let engines = new ENGINES()
 
 
-let rec get_fct_id (Engine eid) (fct_name : string) : FCT_ID =
-    let eng = engines.[eid]
-    let mutable fct_id = -1
-    match eng.fctIdxTable.TryGetValue(fct_name, &fct_id) with
-    | true -> FctId fct_id
-    | false -> failwith (sprintf "Engine.get_fct_id: function '%s' not found in global context #%d" fct_name eid)
+let rec inline get_fct_id (Engine eid) (name : string) : FCT_ID =
+    match engines.[eid].functions.try_get_index(FctName name) with
+    | Some fct_id -> FctId fct_id
+    | None -> failwith (sprintf "Engine.get_fct_id: function '%s' not found in global context #%d" name eid)
 
-and get_function' (Engine eid) (FctId fct_id : FCT_ID) : FUNCTION' =
-    let fctTable = engines.[eid].fctTable
-    if fct_id < fctTable.Count then
-        fctTable.[fct_id]
-    else
-        failwith (sprintf "Engine.get_function': function with id #%d not found in global context #%d" fct_id eid)
+and inline get_function' (Engine eid) (FctId id) : FUNCTION' * FUNCTION_ATTRS =
+    engines.[eid].functions.get(id)
+
+and inline fct_name eng fct_id = let (FctName name) = fst (get_function' eng fct_id) in name
+and inline fct_kind eng fct_id = (snd (get_function' eng fct_id)).fct_kind
+and inline fct_interpretation eng fct_id = (snd (get_function' eng fct_id)).fct_interpretation
 
 and inline make_term_with_opt_type (Engine eid) (t' : TERM') (opt_ty : Signature.TYPE option) : TERM =
     let e = engines.[eid]
@@ -172,8 +177,8 @@ and compute_type (eng as Engine eid) (t' : TERM') : Signature.TYPE =
     let (sign, get_type) = (engines.[eid].signature, get_type eng)
     match t' with
     |   Value' x -> Background.type_of_value sign x
-    |   Initial' (f, xs) -> let f_name = (get_function' eng f).fct_name in Signature.match_fct_type f_name (xs >>| Background.type_of_value sign) (Signature.fct_types f_name sign)
-    |   AppTerm' (f, ts)    -> let f_name = (get_function' eng f).fct_name in Signature.match_fct_type f_name (ts >>| get_type) (Signature.fct_types f_name sign)
+    |   Initial' (f, xs) -> let f_name = fct_name eng f in Signature.match_fct_type f_name (xs >>| Background.type_of_value sign) (Signature.fct_types f_name sign)
+    |   AppTerm' (f, ts) -> let f_name = fct_name eng f in Signature.match_fct_type f_name (ts >>| get_type) (Signature.fct_types f_name sign)
     |   CondTerm' (G, t1, t2) -> if get_type t1 = get_type t2 then get_type t1 else failwith "compute_type: types of branches of conditional term do not match"
     |   VarTerm' v -> failwith (sprintf "compute_type: variable '%s' does not have a type" v)
     |   QuantTerm' (_, _, t_set, _) -> Signature.Boolean
@@ -285,12 +290,6 @@ and convert_rule (eng : ENGINE) (R : AST.RULE) : RULE =
         S_Updates  = fun upds -> S_Updates eng (Set.map (fun ((f, xs), t_rhs) -> (get_fct_id eng f, xs), convert_term eng t_rhs) upds)
     } R
 
-and convert_function_definitions (eng : ENGINE) (fdb : AST.MACRO_DB) : FCT_DEF_DB =
-    Map.map (fun _ (args, t) -> (args, convert_term eng t)) fdb
-
-and convert_rules (eng : ENGINE) (rdb : AST.RULES_DB) : RULE_DEF_DB =
-    Map.map (fun _ (args, R) -> (args, convert_rule eng R)) rdb
-
 and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def_db : AST.MACRO_DB, rule_def_db : AST.RULES_DB, invariants : Map<string, AST.TYPED_TERM>, smt_ctx : SmtInterface.SMT_CONTEXT) : ENGINE =
     let eid = engines.Count
     let new_engine = {
@@ -298,8 +297,9 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
         initial_state   = initial_state
         rules           = Map.empty
         invariants      = Map.empty
-        fctIdxTable     = new Dictionary<string, int>(HashIdentity.Structural)
-        fctTable        = new ResizeArray<FUNCTION'>()
+        // fctIdxTable     = new Dictionary<string, int>(HashIdentity.Structural)
+        // fctTable        = new ResizeArray<FUNCTION'>()
+        functions       = newIndMap<FUNCTION', FUNCTION_ATTRS>()
         ruleDefIdxTable = new Dictionary<string, int>(HashIdentity.Structural)
         ruleDefTable    = new ResizeArray<RULE_DEF'>()
         termIdxTable    = new Dictionary<TERM', TERM>(HashIdentity.Structural)
@@ -346,20 +346,16 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
         |> List.filter (fun (name, _) -> Signature.is_function_name name sign)
         |> List.map (fun (name, _) -> (name, extract_fct_interpretation_if_possible name))
         |> List.filter (function (_, None) -> false | _ -> true)
-        |> Seq.iteri (fun i (name, opt_fct_interpretation) ->
+        |> Seq.iteri ( fun i (name, opt_fct_interpretation) ->
             match opt_fct_interpretation with
             |   None -> ()
             |   Some fct_interpretation ->
-                    let fct' : FUNCTION' = {
+                    new_engine.functions.add (FctName name, {
                         fct_id   = i;
-                        fct_name = name;
                         fct_kind = Signature.fct_kind name sign;
                         // fct_type = Signature.fct_types name sign;   // !!! to be implemented together with monomorphization
-                        fct_interpretation = fct_interpretation;
-                    }
-                    new_engine.fctIdxTable.[name] <- i
-                    new_engine.fctTable.Add fct'
-        )
+                        fct_interpretation = fct_interpretation
+                    }) |> ignore )
     rule_def_db |> Map.toList
         |> List.map (fun (name, _) -> (name, extract_rule_def_rhs name))
         |> Seq.iteri (fun i (name, rule_def) ->
@@ -372,19 +368,19 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
             new_engine.ruleDefIdxTable.[name] <- i
             new_engine.ruleDefTable.Add rule_def'
         )
-    for i in 0..new_engine.fctTable.Count - 1 do
-        let fctInfo = new_engine.fctTable.[i]
-        match fctInfo.fct_interpretation with
+    for i in 0..new_engine.functions.Count - 1 do
+        let FctName f_name, (f_attrs as { fct_interpretation = fct_intp }) = new_engine.functions.get(i)
+        match fct_intp with
         |   StaticUserDefined (fct_interp, None) ->
-                match fct_def_db |> Map.tryFind fctInfo.fct_name with
+                match fct_def_db |> Map.tryFind f_name with
                 |   Some (args, body) ->
-                        new_engine.fctTable.[i] <- { fctInfo with fct_interpretation = StaticUserDefined (fct_interp, Some (args, convert_term (Engine eid) body)) }
-                |   None -> failwith (sprintf "cannot find definition of static function '%s'\n" fctInfo.fct_name)
+                        new_engine.functions.set i (FctName f_name, { f_attrs with fct_interpretation = StaticUserDefined (fct_interp, Some (args, convert_term (Engine eid) body)) })
+                |   None -> failwith (sprintf "cannot find definition of static function '%s'\n" f_name)
         |   ControlledInitial (fct_interp, None) ->
-                match fct_def_db |> Map.tryFind fctInfo.fct_name with
+                match fct_def_db |> Map.tryFind f_name with
                 |   Some (args, body) ->
-                        new_engine.fctTable.[i] <- { fctInfo with fct_interpretation = ControlledInitial (fct_interp, Some (args, convert_term (Engine eid) body)) }
-                |   None -> failwith (sprintf "cannot find initial definition of controlled function '%s'\n" fctInfo.fct_name)
+                        new_engine.functions.set i (FctName f_name, { f_attrs with fct_interpretation = ControlledInitial (fct_interp, Some (args, convert_term (Engine eid) body)) })
+                |   None -> failwith (sprintf "cannot find initial definition of controlled function '%s'\n" f_name)
         |   _ -> ()     // if not any of the above cases, do nothing (the entry of fctTable was already completely initialized)
     for i in 0..new_engine.ruleDefTable.Count - 1 do
         let rule_def as { rule_id = id; rule_name = name; rule_def = _ } = new_engine.ruleDefTable.[i]
@@ -511,10 +507,10 @@ let rec pp_term (eng : ENGINE) (t : TERM) =
     let sign = (get_engine' eng).signature
     let (pp_app_term, pp_location_term) = (pp_app_term sign, pp_location_term sign)
     term_induction eng (fun x -> x) {
-        AppTerm  = fun (f, ts) -> pp_app_term (Signature.FctName (get_function' eng f).fct_name, ts);
+        AppTerm  = fun (f, ts) -> pp_app_term (Signature.FctName (fct_name eng f), ts);
         CondTerm = fun (G, t1, t2) -> blo0 [ str "if "; G; line_brk; str "then "; t1; line_brk; str "else "; t2; line_brk; str "endif" ];
         Value    = fun x -> str (value_to_string x);
-        Initial  = fun (f, xs) -> pp_location_term "initial" ((get_function' eng f).fct_name, xs);
+        Initial  = fun (f, xs) -> pp_location_term "initial" (fct_name eng f, xs);
         VarTerm = fun x -> str x;
         QuantTerm = fun (q_kind, v, t_set, t_cond) ->
             blo0 [ str ("("^(AST.quant_kind_to_str q_kind)^" "); str v; str " in "; t_set; str " with "; t_cond; str ")" ];
@@ -527,10 +523,10 @@ let rec pp_rule (eng : ENGINE)  (R : RULE) =
     let (pp_app_term, pp_term) = (pp_app_term sign, pp_term eng)
     rule_induction eng pp_term {
         S_Updates = fun U ->
-                        let pp_elem ((f, xs), t) = blo0 [ str (get_function' eng f).fct_name; str " "; str "("; blo0 (pp_list [str",";brk 1] (xs >>| fun x -> str (value_to_string x))); str ") := "; (pp_term t) ]
+                        let pp_elem ((f, xs), t) = blo0 [ str (fct_name eng f); str " "; str "("; blo0 (pp_list [str",";brk 1] (xs >>| fun x -> str (value_to_string x))); str ") := "; (pp_term t) ]
                         let L = Set.toList U >>| pp_elem
                         blo0 [ str "{"; line_brk; blo2 ( pp_list [line_brk] L); line_brk; str "}" ];
-        UpdateRule = fun ((f, ts), t) -> blo0 [ pp_app_term (Signature.FctName ((get_function' eng f).fct_name), ts); str " := "; t ];
+        UpdateRule = fun ((f, ts), t) -> blo0 [ pp_app_term (Signature.FctName (fct_name eng f), ts); str " := "; t ];
         CondRule = fun (G, R1, R2) -> blo0 ( str "if " :: G:: str " then " :: line_brk :: blo2 [ R1 ] :: line_brk ::
                                              (if R2 <> str "skip" then [ str "else "; line_brk; blo2 [ R2 ]; line_brk; str "endif" ] else [ str "endif"]) );
         ParRule = fun Rs -> if Rs <> [] then blo0 [ str "par"; line_brk; blo2 ( pp_list [line_brk] Rs); line_brk; str "endpar" ] else str "skip";
@@ -552,34 +548,25 @@ let rule_to_string sign t = t |> pp_rule sign |> PrettyPrinting.toString 80
 //
 //--------------------------------------------------------------------
 
-let show_fct_tables (eng : ENGINE) =
+let show_fct_tables (eng as Engine eid: ENGINE) =
     let e = get_engine' eng
-    let fct_idx_table = e.fctIdxTable
-    let show_fct_idx_table =
-        fct_idx_table
-        |> Seq.toList
-        |> List.map (fun key_value -> sprintf "%s -> %d" key_value.Key key_value.Value)
-        |> String.concat "\n"
-    let fct_table = e.fctTable
-    let fct_lines =
-        fct_table
-        |> Seq.toList
-        |> List.map (fun fct' ->
+    let index_s = e.functions.show_index (fun (FctName f_name) -> f_name)
+    let show_table_entry (i, FctName f_name, { fct_kind = f_kind; fct_id = f_id; fct_interpretation = f_intp }) =
+        if i <> f_id then
+            failwith (sprintf "show_fct_tables: function id %d does not match index %d" f_id i)
+        else
             sprintf "%d: %s (%s) = [%s]"
-                fct'.fct_id
-                fct'.fct_name
-                (Signature.fct_kind_to_string fct'.fct_kind)
-                (match fct'.fct_interpretation with
-                 | Constructor _ -> "constructor"
-                 | StaticSymbolic _ -> "static (symbolic)"
-                 | StaticBackground _ -> "static (background)"
-                 | StaticUserDefined _ -> "static (user-defined)"
-                 | ControlledInitial _ -> "controlled (initial)"
-                 | ControlledUninitialized -> "controlled (uninitialized)"
-                 | Derived (args, body) -> sprintf "derived (%s) = %s" (String.concat ", " args) (term_to_string eng body) )
-        )
-    let show_fct_table = String.concat "\n" fct_lines
-    show_fct_idx_table + "\n" + show_fct_table + "\n"
+                f_id f_name (Signature.fct_kind_to_string f_kind)
+                (match f_intp with
+                    | Constructor _ -> "constructor"
+                    | StaticSymbolic _ -> "static (symbolic)"
+                    | StaticBackground _ -> "static (background)"
+                    | StaticUserDefined _ -> "static (user-defined)"
+                    | ControlledInitial _ -> "controlled (initial)"
+                    | ControlledUninitialized -> "controlled (uninitialized)"
+                    | Derived (args, body) -> sprintf "derived (%s) = %s" (String.concat ", " args) (term_to_string eng body) )
+    let table_s = e.functions.show_table show_table_entry
+    index_s + table_s
 
 //--------------------------------------------------------------------
 //
@@ -587,10 +574,10 @@ let show_fct_tables (eng : ENGINE) =
 //
 //--------------------------------------------------------------------
 
-let location_to_string eng ((f, xs) : LOCATION) : string = Updates.location_to_string ((get_function' eng f).fct_name, xs)
+let location_to_string eng ((f, xs) : LOCATION) : string = Updates.location_to_string (fct_name eng f, xs)
 
 let show_s_update eng ((f, xs), t) =
-    let f = (get_function' eng f).fct_name
+    let f = fct_name eng f
     sprintf "%s := %s"
         (if List.isEmpty xs then f else sprintf "%s (%s)" f (String.concat ", " (List.map value_to_string xs)))
         (PrettyPrinting.toString 80 (pp_term eng t))
@@ -733,7 +720,7 @@ let rec smt_map_term (eng as Engine eid) (t : TERM) : SmtInterface.SMT_EXPR =
         |   (_, T_G, _, T_t1, _, T_t2) -> err_msg (G_, T_G, t1_, T_t1, t2_, T_t2)
 
     let smt_map_app_term (eng : ENGINE) (f_id : FCT_ID, ts) : SmtInterface.SMT_EXPR =
-        let { fct_name = f; fct_id = fct_id; fct_kind = f_kind; fct_interpretation = fct_intp } = get_function' eng f_id
+        let FctName f, { fct_id = fct_id; fct_kind = f_kind; fct_interpretation = fct_intp } = get_function' eng f_id
         if (match fct_intp with StaticBackground _ -> true | _ -> false) then 
             let es = ts >>| smt_map_term eng
             //let f' = get_function' eng f
@@ -761,10 +748,9 @@ let rec smt_map_term (eng as Engine eid) (t : TERM) : SmtInterface.SMT_EXPR =
         else failwith (sprintf "smt_map_app_term: '%s' is not a background function" f)   // smt_map_term_user_defined_function initial_flag sign C (f, ts)
 
     let smt_map_initial (eng : ENGINE) (f_id : FCT_ID, ts) : SmtInterface.SMT_EXPR =
-        let { fct_name = f; fct_kind = f_kind } = get_function' eng f_id
+        let FctName f, { fct_kind = f_kind } = get_function' eng f_id
         if f_kind = Signature.Controlled then
             let sign = engines.[eid].signature
-            let { fct_kind = f_kind } = get_function' eng f_id
             let fail (f, dom, ran) =
                 failwith (sprintf "smt_map_term_user_defined_function: function '%s : %s -> %s' not found" f (Signature.type_list_to_string dom) (Signature.type_to_string ran))
             match (f, Signature.fct_type f sign, ts >>| fun t -> smt_map_term eng t) with
@@ -897,7 +883,6 @@ let smt_formula_is_false (eng as Engine eid) (phi : TERM) =
 
 let rec interpretation (eng as Engine eid : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as FctId f_id) (xs : VALUE list) =
     let Value = Value eng
-    let f' = get_function' eng f
     let eval_fct_definition_in_curr_state (fct_definition as (args, body)) xs =
         let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x, type_of_value engines.[eid].signature x)) Map.empty args xs
         let body' = body
@@ -908,7 +893,8 @@ let rec interpretation (eng as Engine eid : ENGINE) (UM : UPDATE_MAP) (pc : PATH
         let body' = body
 //        let body' = replace_vars eng env body
         s_eval_term body' eng (Map.empty, env, Set.empty)   //!!!! to be modified if at some point initial state constraints are implemented => path condition may then be non-empty
-    match f'.fct_interpretation with
+    let FctName f_name, { fct_interpretation = f_intp; fct_id = f_id } = get_function' eng f
+    match f_intp with
     |   Constructor (fct_interpretation : VALUE list -> VALUE) ->
             Value (fct_interpretation xs)
     |   StaticBackground (fct_interpretation : VALUE list -> VALUE) ->
@@ -916,23 +902,23 @@ let rec interpretation (eng as Engine eid : ENGINE) (UM : UPDATE_MAP) (pc : PATH
     |   StaticUserDefined (_ : VALUE list -> VALUE, Some (fct_def : string list * TERM)) ->
             eval_fct_definition_in_curr_state fct_def xs
     |   ControlledInitial (_ : VALUE list -> VALUE, Some (fct_def : string list * TERM)) -> 
-            try Map.find xs (Map.find (FctId (get_function' eng f).fct_id) UM)
+            try Map.find xs (Map.find (FctId f_id) UM)
             with _ ->
                 let res = initial_state_eval_res eng (AppTerm eng (f, xs >>| Value))
                 match !res with
                 |   Some t' -> t'
                 |   None -> let t' = eval_fct_definition_in_initial_state fct_def xs in res := Some t'; t'
     |   ControlledUninitialized ->
-            try Map.find xs (Map.find (FctId (get_function' eng f).fct_id) UM)
+            try Map.find xs (Map.find (FctId f_id) UM)
             with _ -> Initial eng (f, xs)
     |   Derived (fct_def : string list * TERM) ->
-            failwith (sprintf "Engine.interpretation: derived function '%s' - not implemented" f'.fct_name)
+            failwith (sprintf "Engine.interpretation: derived function '%s' - not implemented" f_name)
     |   StaticSymbolic (s_fct_interpretation: TERM list -> TERM) ->
-            failwith (sprintf "Engine.interpretation: static symbolic function '%s' - not implemented" f'.fct_name)
+            failwith (sprintf "Engine.interpretation: static symbolic function '%s' - not implemented" f_name)
     |   StaticUserDefined (_, None) ->
-            failwith (sprintf "definition of static function '%s' missing" f'.fct_name)
+            failwith (sprintf "definition of static function '%s' missing" f_name)
     |   ControlledInitial (_, None) -> 
-            failwith (sprintf "initial state definition of controlled function '%s' missing" f'.fct_name)
+            failwith (sprintf "initial state definition of controlled function '%s' missing" f_name)
 
 and smt_eval_formula (phi : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env, pc : PATH_COND) =
     // precondition: term_type sign phi = Boolean
@@ -953,7 +939,7 @@ and expand_term t (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : 
         Value   = fun x (UM, env, pc) -> Value eng x;
         Initial = fun (f, xs) (UM, env, pc) -> Initial eng (f, xs)
         AppTerm = fun (f, ts) (UM : UPDATE_MAP, env, pc) ->
-            let { fct_name = f_name; fct_kind = f_kind; fct_interpretation = f_intp } = get_function' eng f
+            let FctName name, { fct_kind = f_kind; fct_interpretation = f_intp } = get_function' eng f
             match f_intp with
             |   StaticUserDefined (_, Some (args, body)) ->
                     let ts = ts >>| fun t -> t (UM, env, pc)
@@ -1015,9 +1001,8 @@ and try_case_distinction_for_term_with_finite_range (eng : ENGINE) (UM : UPDATE_
             |   _ ->
                     match (try State.enum_finite_type (get_type eng t1) (initial_state_of eng) with _ -> None) with
                     |   None ->
-                            let f_name = (get_function' eng f).fct_name
                             failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
-                                        f_name (term_to_string eng (AppTerm eng (f, ts0))))
+                                        (fct_name eng f) (term_to_string eng (AppTerm eng (f, ts0))))
                     |   Some elems ->
                             make_case_distinction t1 (List.map (fun elem -> (elem, F (Value eng elem :: past_args) ts')) (Set.toList elems))
     let result = F [] ts0
@@ -1040,7 +1025,7 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                 |   QuantTerm' _          -> failwith "Engine.eval_app_term: QuantTerm not implemented"
                 |   DomainTerm' _         -> failwith "Engine.eval_app_term: DomainTerm not implemented"
         |   [] ->
-                let { fct_name = f_name; fct_kind = f_kind; fct_interpretation = f_intp }  = get_function' eng fct_id
+                let FctName f_name, { fct_kind = f_kind; fct_interpretation = f_intp }  = get_function' eng fct_id
                 match (f_name, List.rev ts_past) with
                 |   "and", [ t1; t2 ] -> s_and eng (t1, t2)
                 |   "or", [ t1; t2 ]  -> s_or eng (t1, t2)
@@ -1073,7 +1058,7 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                                 | _ -> AppTerm eng (fct_id, ts)
                         |   Signature.Controlled -> s_eval_term (try_case_distinction_for_term_with_finite_range eng (UM, env, pc) fct_id ts) eng (UM, env, pc)
                         |   other_kind -> failwith (sprintf "Engine.eval_app_term: kind '%s' of function '%s' not implemented" (Signature.fct_kind_to_string other_kind) f)
-    let f_name = (get_function' eng fct_id).fct_name
+    let f_name = fct_name eng fct_id           //!!!!!!!!!!!!! this can replaced by fct_id
     match (f_name, ts) with
     |   "and", [ t1; t2 ] ->
             let t1 = t1 eng (UM, env, pc)
@@ -1224,7 +1209,7 @@ let rec try_case_distinction_for_update_with_finite_domain
                     match (try State.enum_finite_type (get_type eng t1) (initial_state_of eng) with _ -> None) with
                     |   None ->
                             failwith (sprintf "location (%s, (%s)) on the lhs of update cannot be fully evaluated"
-                                        ((get_function' eng f).fct_name) (String.concat ", " (ts0 >>| term_to_string eng)))
+                                        (fct_name eng f) (String.concat ", " (ts0 >>| term_to_string eng)))
                     |   Some elems ->
                             make_case_distinction t1 (List.map (fun elem -> (elem, F (Value eng elem :: past_args) ts')) (Set.toList elems))
     F [] ts0
@@ -1508,7 +1493,7 @@ let symbolic_execution_for_invariant_checking (eng : ENGINE) (opt_steps : int op
             String.concat "\n"
                 (Set.toList updates >>| fun ((f, xs), t) ->
                     sprintf "%s%s := %s"
-                        ((get_function' eng f).fct_name) (if List.isEmpty xs then "" else "("^(String.concat ", " (xs >>| value_to_string))^")")
+                        (fct_name eng f) (if List.isEmpty xs then "" else "("^(String.concat ", " (xs >>| value_to_string))^")")
                         (term_to_string sign t))
         let met inv_id =
             update_counters (function (m, v, u) -> (m + 1, v, u)) inv_id

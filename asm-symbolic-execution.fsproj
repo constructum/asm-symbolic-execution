@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Common.fs" />
+    <Compile Include="IndMap.fs" />
     <Compile Include="ParserCombinators.fs" />
     <Compile Include="PrettyPrinting.fs" />
     <Compile Include="Signature.fsi" />
