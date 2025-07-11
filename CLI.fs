@@ -1,6 +1,7 @@
 module CLI
 
 open Common
+open IndMap
 
 let usage () =
     write
@@ -195,8 +196,8 @@ let CLI_with_ex(args) =
                 if !invcheck
                 then simple_exec (Engine.symbolic_execution_for_invariant_checking C !invcheck_steps) R_in
                 else exec_symbolic sign (fun (R : Engine.RULE) -> Engine.symbolic_execution C R (!steps)) R_in (Engine.pp_rule C, Engine.rule_size C)
-                write $"\n--- number of generated terms (term table size): {(Engine.get_engine' C).termTable.Count}\n" 
-                // fprintf stderr "%s" (DAG.show_fct_tables C)  // for debugging purposes   
+                write $"\n--- number of generated terms (term table size): {(Engine.get_engine' C).terms |> IndMap.count}\n" 
+                // fprintf stderr "%s" (DAG.show_fct_tables C)  // for debugging purposes   Count
                 ()
         else  // all other options
             // !!! tbd: for AsmetaL the main rule name it not always 'r_Main', but should be set according to the content of the ASM file

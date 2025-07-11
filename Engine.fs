@@ -6,10 +6,9 @@ open System.Diagnostics
 open System.Collections.Generic
 
 open Common
+open IndMap
 open PrettyPrinting
 open Background
-
-open IndMap
 
 //--------------------------------------------------------------------
 
@@ -60,13 +59,10 @@ and ENGINE' = {
     initial_state   : State.STATE         // use only for initial state in this module, never use '_dynamic' field - also the second elem. of _dynamic_initial seems not to be used !
     invariants      : Map<string, TERM>   // Added invariants field
 
-    functions       : IndMap<FUNCTION', FUNCTION_ATTRS>  // MapInd for functions, used for fast lookup by function name
-    rule_defs       : IndMap<RULE_DEF', RULE_DEF_ATTRS>  // MapInd for rule macros, used for fast lookup by rule name
-
-    termIdxTable    : Dictionary<TERM', TERM>
-    termTable       : ResizeArray<TERM' * TERM_ATTRS>
-    ruleIdxTable    : Dictionary<RULE', RULE>
-    ruleTable       : ResizeArray<RULE' * RULE_ATTRS>
+    functions       : IndMap<FUNCTION', FUNCTION_ATTRS>
+    rule_defs       : IndMap<RULE_DEF', RULE_DEF_ATTRS>
+    terms           : IndMap<TERM', TERM_ATTRS>
+    rules           : IndMap<RULE', RULE_ATTRS>
 
     TRUE_           : TERM option ref
     FALSE_          : TERM option ref
@@ -134,12 +130,12 @@ let engines = new ENGINES()
 
 
 let rec inline get_fct_id (Engine eid) (name : string) : FCT_ID =
-    match engines.[eid].functions.try_get_index(FctName name) with
+    match engines.[eid].functions |> try_get_index (FctName name) with
     | Some fct_id -> FctId fct_id
     | None -> failwith (sprintf "Engine.get_fct_id: function '%s' not found in global context #%d" name eid)
 
 and inline get_function' (Engine eid) (FctId id) : FUNCTION' * FUNCTION_ATTRS =
-    engines.[eid].functions.get(id)
+    engines.[eid].functions |> get id
 
 and inline fct_name eng fct_id = let (FctName name) = fst (get_function' eng fct_id) in name
 and inline fct_kind eng fct_id = (snd (get_function' eng fct_id)).fct_kind
@@ -147,27 +143,21 @@ and inline fct_interpretation eng fct_id = (snd (get_function' eng fct_id)).fct_
 
 and inline make_term_with_opt_type (Engine eid) (t' : TERM') (opt_ty : Signature.TYPE option) : TERM =
     let e = engines.[eid]
-    let mutable t = Term -1
-    if e.termIdxTable.TryGetValue (t', &t) then
-        t
-    else
-        let term_id = e.termIdxTable.Count
-        let attrs = {
-            term_id   = term_id
-            term_type = match opt_ty with None -> compute_type (Engine eid) t' | Some ty -> ty
-            smt_expr  = ref None
+    let term_id = e.terms |> count
+    e.terms |> add (
+        t', {
+            term_id = term_id;
+            term_type = match opt_ty with None -> compute_type (Engine eid) t' | Some ty -> ty;
+            smt_expr = ref None;
             initial_state_eval_res = ref None
-        }
-        e.termIdxTable.[t'] <- Term term_id
-        e.termTable.Add (t', attrs)
-        Term term_id
+        }) |> Term
 
 and inline make_term_with_type C (t' : TERM') ty : TERM = make_term_with_opt_type C t' (Some ty)
 and inline make_term C (t' : TERM') : TERM              = make_term_with_opt_type C t' None
 
-and inline get_term'_attrs (Engine eid) (Term tid) = engines.[eid].termTable.[tid]
-and inline get_term' (Engine eid) (Term tid) = engines.[eid].termTable.[tid] |> fst
-and inline get_attrs (Engine eid) (Term tid) = engines.[eid].termTable.[tid] |> snd
+and inline get_term'_attrs (Engine eid) (Term tid) = engines.[eid].terms |> get tid
+and inline get_term' (Engine eid) (Term tid) = engines.[eid].terms |> get_obj tid
+and inline get_term_attrs (Engine eid) (Term tid) = engines.[eid].terms |> get_attrs tid
 
 and compute_type (eng as Engine eid) (t' : TERM') : Signature.TYPE =
     let (sign, get_type) = (engines.[eid].signature, get_type eng)
@@ -182,16 +172,16 @@ and compute_type (eng as Engine eid) (t' : TERM') : Signature.TYPE =
     |   DomainTerm' tyname -> Signature.Powerset tyname
 
 and get_type (Engine eid) (t as Term tid : TERM) : Signature.TYPE =
-    (engines.[eid].termTable.[tid] |> snd).term_type
+    (engines.[eid].terms |> get_attrs tid).term_type
 
 and inline get_smt_expr (Engine eid) (t as Term tid : TERM) : SmtInterface.SMT_EXPR option =
-    !(engines.[eid].termTable.[tid] |> snd).smt_expr
+    !(engines.[eid].terms |> get_attrs tid).smt_expr
 
 and inline set_smt_expr (Engine eid) (t as Term tid : TERM) (smt_expr : SmtInterface.SMT_EXPR) =
-    (snd engines.[eid].termTable.[tid]).smt_expr := Some smt_expr
+    (engines.[eid].terms |> get_attrs tid).smt_expr := Some smt_expr
 
 and inline initial_state_eval_res (Engine eid) (t as Term tid : TERM) : TERM option ref =
-    (engines.[eid].termTable.[tid] |> snd).initial_state_eval_res
+    (engines.[eid].terms |> get_attrs tid).initial_state_eval_res
 
 and inline Value eng x = make_term eng (Value' x)
 and inline Initial eng (f, xs) = make_term eng (Initial' (f, xs))
@@ -233,33 +223,22 @@ and convert_term (eng : ENGINE) (t : AST.TYPED_TERM) : TERM =
     } t
 
 and inline get_rule_def_id (Engine eid) (name : string) : RULE_DEF_ID =
-    match engines.[eid].rule_defs.try_get_index(RuleName name) with
+    match engines.[eid].rule_defs |> try_get_index (RuleName name) with
     | Some rule_def_id -> RuleDefId rule_def_id
     | None -> failwith (sprintf "Engine.get_named_rule_id: function '%s' not found in global context #%d" name eid)
 
 and inline get_rule_def' (Engine eid) (RuleDefId id : RULE_DEF_ID) : RULE_DEF' * RULE_DEF_ATTRS =
-    engines.[eid].rule_defs.get(id)
+    engines.[eid].rule_defs |> get id
 
-and inline get_rule_name (Engine eid) (RuleDefId id : RULE_DEF_ID) = let RuleName r_name, _ =engines.[eid].rule_defs.get(id) in r_name
+and inline get_rule_name (Engine eid) (RuleDefId id : RULE_DEF_ID) = let RuleName r_name, _ =engines.[eid].rule_defs |> get id in r_name
 and inline get_rule_id (eng : ENGINE) (id : RULE_DEF_ID) = (snd (get_rule_def' eng id)).rule_id
 and inline get_rule_def (eng as Engine eid) (id : RULE_DEF_ID) = (snd (get_rule_def' eng id)).rule_def
 
-// and get_rule_named_definition (eng as Engine eid) (rule_def_id : RULE_DEF_ID) : (string list * RULE) =
-//     (get_rule_def' eng rule_def_id).rule_def |> Option.get
-
 and inline make_rule (Engine eid) (R' : RULE') : RULE =
     let e = engines.[eid]
-    let mutable R = Rule -1
-    if e.ruleIdxTable.TryGetValue (R', &R) then
-        R
-    else
-        let rule_id = e.ruleIdxTable.Count
-        let attrs = ()
-        e.ruleIdxTable.[R'] <- Rule rule_id
-        e.ruleTable.Add (R', attrs)
-        Rule rule_id
+    e.rules |> add (R', ()) |> Rule
 
-and inline get_rule' (Engine eid) (Rule rid) = engines.[eid].ruleTable.[rid] |> fst
+and inline get_rule' (Engine eid) (Rule rid) = engines.[eid].rules |> get rid |> fst
 
 and inline UpdateRule eng ((f, ts), t_rhs) = make_rule eng (UpdateRule' ((f, ts), t_rhs))
 and inline CondRule eng (G, R1, R2) = make_rule eng (CondRule' (G, R1, R2))
@@ -292,10 +271,8 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
         invariants      = Map.empty
         functions       = newIndMap<FUNCTION', FUNCTION_ATTRS>()
         rule_defs       = newIndMap<RULE_DEF', RULE_DEF_ATTRS>()
-        termIdxTable    = new Dictionary<TERM', TERM>(HashIdentity.Structural)
-        termTable       = new ResizeArray<TERM' * TERM_ATTRS>()
-        ruleIdxTable    = new Dictionary<RULE', RULE>(HashIdentity.Structural)
-        ruleTable       = new ResizeArray<RULE' * RULE_ATTRS>()
+        terms           = newIndMap<TERM', TERM_ATTRS>()
+        rules           = newIndMap<RULE', RULE_ATTRS>()
         TRUE_           = ref None
         FALSE_          = ref None
         AND_            = ref None
@@ -340,7 +317,7 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
             match opt_fct_interpretation with
             |   None -> ()
             |   Some fct_interpretation ->
-                    new_engine.functions.add (
+                    new_engine.functions |> add (
                         FctName name, {
                             fct_id   = i;
                             fct_kind = Signature.fct_kind name sign;
@@ -350,30 +327,30 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
     rule_def_db |> Map.toList
         |> List.map (fun (name, _) -> (name, extract_rule_def_rhs name))
         |> Seq.iteri (fun i (name, rule_def) ->
-            new_engine.rule_defs.add (
+            new_engine.rule_defs |> add (
                 RuleName name, {
                     rule_id   = i;
                     // rule_type = Signature.rule_types name sign;   // !!! to be implemented together with monomorphization
                     rule_def  = None
                 }) |> ignore )
-    for i in 0..new_engine.functions.Count - 1 do
-        let FctName f_name, (f_attrs as { fct_interpretation = fct_intp }) = new_engine.functions.get(i)
+    for i in 0..(new_engine.functions |> count) - 1 do
+        let FctName f_name, (f_attrs as { fct_interpretation = fct_intp }) = new_engine.functions |> get i
         match fct_intp with
         |   StaticUserDefined (fct_interp, None) ->
                 match fct_def_db |> Map.tryFind f_name with
                 |   Some (args, body) ->
-                        new_engine.functions.set i (FctName f_name, { f_attrs with fct_interpretation = StaticUserDefined (fct_interp, Some (args, convert_term (Engine eid) body)) })
+                        new_engine.functions |> set i (FctName f_name, { f_attrs with fct_interpretation = StaticUserDefined (fct_interp, Some (args, convert_term (Engine eid) body)) })
                 |   None -> failwith (sprintf "cannot find definition of static function '%s'\n" f_name)
         |   ControlledInitial (fct_interp, None) ->
                 match fct_def_db |> Map.tryFind f_name with
                 |   Some (args, body) ->
-                        new_engine.functions.set i (FctName f_name, { f_attrs with fct_interpretation = ControlledInitial (fct_interp, Some (args, convert_term (Engine eid) body)) })
+                        new_engine.functions |> set i (FctName f_name, { f_attrs with fct_interpretation = ControlledInitial (fct_interp, Some (args, convert_term (Engine eid) body)) })
                 |   None -> failwith (sprintf "cannot find initial definition of controlled function '%s'\n" f_name)
         |   _ -> ()     // if not any of the above cases, do nothing (the entry of fctTable was already completely initialized)
-    for i in 0..new_engine.rule_defs.Count - 1 do
-        let RuleName rd_name, (rd_attrs as { rule_id = id; rule_def = _ }) = new_engine.rule_defs.get i
+    for i in 0..(new_engine.rule_defs |> count) - 1 do
+        let RuleName rd_name, (rd_attrs as { rule_id = id; rule_def = _ }) = new_engine.rule_defs |> get i
         let (args, body) = extract_rule_def_rhs rd_name
-        new_engine.rule_defs.set i (RuleName rd_name, { rd_attrs with rule_def = Some (args, convert_rule (Engine eid) body) })
+        new_engine.rule_defs |> set i (RuleName rd_name, { rd_attrs with rule_def = Some (args, convert_rule (Engine eid) body) })
     let new_ctx = {
         new_engine with
             invariants = Map.map (fun _ t -> convert_term (Engine eid) t) invariants
@@ -538,7 +515,7 @@ let rule_to_string sign t = t |> pp_rule sign |> PrettyPrinting.toString 80
 
 let show_fct_tables (eng as Engine eid: ENGINE) =
     let e = get_engine' eng
-    let index_s = e.functions.show_index (fun (FctName f_name) -> f_name)
+    let index_s = e.functions |> show_index (fun (FctName f_name) -> f_name)
     let show_table_entry (i, FctName f_name, { fct_kind = f_kind; fct_id = f_id; fct_interpretation = f_intp }) =
         if i <> f_id then
             failwith (sprintf "show_fct_tables: function id %d does not match index %d" f_id i)
@@ -553,7 +530,7 @@ let show_fct_tables (eng as Engine eid: ENGINE) =
                     | ControlledInitial _ -> "controlled (initial)"
                     | ControlledUninitialized -> "controlled (uninitialized)"
                     | Derived (args, body) -> sprintf "derived (%s) = %s" (String.concat ", " args) (term_to_string eng body) )
-    let table_s = e.functions.show_table show_table_entry
+    let table_s = e.functions |> show_table show_table_entry
     index_s + table_s
 
 //--------------------------------------------------------------------
