@@ -8,7 +8,7 @@ The principles on which the symbolic execution engine is based are described in 
 
 The tool is based on a transformation of ASM transition rules, which eliminates `seq` and `iterate` rules to obtain a transition rule that condenses a whole sequential computation into one single step.
 
-An application of this tool to the detection of vulnerabilities in Ethereum smart contracts, modelled in AsmetaL, will be presented at the [ABZ 2025](https://abz-conf.org/site/2025/). For this purpose, the tool has been extended to support invariant checking in runs of regular single-agent ASMs (specified in the AsmetaL language). The [smart contract models](https://github.com/smart-contract-verification/ABZ2025) can be found in this [GitHub repository](https://github.com/smart-contract-verification/ABZ2025).
+An application of this tool to the detection of vulnerabilities in Ethereum smart contracts, modelled in AsmetaL, will be presented at the [ABZ 2025](https://abz-conf.org/site/2025/) conference and published in the ABZ 2025 proceedings (Springer Nature), see [PDF preprint](https://github.com/constructum/asm-symbolic-execution/blob/main/doc/2025--Braghin--Del-Castillo--Riccobene--Valentini--Symbolic-Model-Execution-Smart-Contract--ABZ2025-preprint.pdf) of the conference paper. For this purpose, the tool has been extended to support invariant checking in runs of regular single-agent ASMs (specified in the AsmetaL language). The [smart contract models](https://github.com/smart-contract-verification/ABZ2025) can be found in this [GitHub repository](https://github.com/smart-contract-verification/ABZ2025).
 
 Note: the 'ABZ2025' branch identifies the version of the tool used for the ABZ 2025 experiments.
 
