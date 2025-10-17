@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Common.fs" />
+    <Compile Include="IndMap.fs" />
     <Compile Include="ParserCombinators.fs" />
     <Compile Include="PrettyPrinting.fs" />
     <Compile Include="Signature.fsi" />
@@ -23,10 +24,11 @@
     <Compile Include="Parser.fs" />
     <Compile Include="AsmetaL.fs" />
     <Compile Include="SmtInterface.fs" />
+    
     <Compile Include="TopLevel.fs" />
-    <Compile Include="SymbEval.fs" />
-    <Compile Include="CLI.fs" />
-    <Compile Include="Main.fs" />
+    <Compile Include="SymbEval.fs" /><Compile Include="Engine.fs" />
+    
+    <Compile Include="CLI.fs" /><Compile Include="Main.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Z3" Version="4.12.2" />

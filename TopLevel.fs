@@ -70,7 +70,7 @@ let reset asmeta_flag =
 //--------------------------------------------------------------------
 
 let load (asmeta_flag : bool) (asmeta_initial_state : string option) initial_location contents =
-    let parse_definitions (sign : SIGNATURE, S : STATE) s : SIGNATURE * STATE * RULES_DB * MACRO_DB * Map<string, TYPED_TERM> * (string * Map<string, STATE>) option =
+    let parse_definitions (sign : SIGNATURE, S : STATE) s : SIGNATURE * STATE * RULES_DB * MACRO_DB * Map<string, TYPED_TERM> * (string * Map<string, STATE * MACRO_DB>) option =
         if not asmeta_flag
         then (fun (sign, S, rules_db) -> (sign, S, rules_db, Map.empty, Map.empty, None)) (Parser.parse_definitions initial_location (sign, S) s)
         else AsmetaL.parse_definitions initial_location ((sign, S), ((Map.empty : RULES_DB), (Map.empty : MACRO_DB))) s |> AsmetaL.extract_definitions_from_asmeta
@@ -84,13 +84,15 @@ let load (asmeta_flag : bool) (asmeta_initial_state : string option) initial_loc
             |   Some (default_init_name, initial_states_map) ->
                     let initial_state_name = asmeta_initial_state |> Option.defaultValue default_init_name
                     let initial_state_map = match initial_states with None -> Map.empty | Some (_, m) -> m
-                    let selected_initial_state =
+                    let (selected_initial_state, selected_macro_db) =
                         match Map.tryFind initial_state_name initial_state_map with
                         |   Some state -> state
                         |   None -> failwithf "No initial state with name '%s' has been defined (using AsmetaL \"init\").\nAvailable initial states: %s.\n"
                                         initial_state_name (Map.keys initial_state_map |> List.ofSeq >>| (fun s -> sprintf "'%s'" s) |> String.concat ", ")
                     let new_state_extended_with_selected_initial_state = state_override (state_override (initial_state ()) new_state) selected_initial_state
+                    let new_macro_db_extended_with_selected_macro_db = macro_db_override (macro_db_override (macros ()) new_macro_db) selected_macro_db
                     initial_state_ := Some (state_with_signature new_state_extended_with_selected_initial_state (signature ()))
+                    macros_        := Some new_macro_db_extended_with_selected_macro_db
     // note: the rules and macros are overridden, not merged
     rules_         := Some (rules_db_override (rules ()) new_rules_db)
     macros_        := Some (macro_db_override (macros ()) new_macro_db)

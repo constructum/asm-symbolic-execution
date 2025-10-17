@@ -12,7 +12,7 @@ signature:
 
 
 definitions:
-    // function n = 3                   // if 'n' were to be static, it would have to be defined here
+//    function n = 3                   // if 'n' were to be static, it would have to be defined here
 
     main rule r_Main = seq
         //--- sorting algorithm
@@ -44,6 +44,7 @@ default init n3:
 
 
 // other initial state options for testing
+
 
 init n1: function n = 1
 init n2: function n = 2

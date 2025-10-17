@@ -1,6 +1,7 @@
 module CLI
 
 open Common
+open IndMap
 
 let usage () =
     write
@@ -18,6 +19,7 @@ let usage () =
             "                   into top-level environment"
             ""
             "  -asmeta        use AsmetaL as input language"
+            "  -asmeta-dag    use AsmetaL with experimental DAG-based symbolic execution"
             "  -init <state>  (AsmetaL only) start from initial state named <state>"
             "  -invcheck <n>  (AsmetaL only) check invariants during symbolic execution"
             "                   for at most <n> steps or indefinitely, if <n> not specified"
@@ -80,15 +82,15 @@ let license () =
             ""
             "" ]  |> String.concat "\n" )
 
-let exec_symbolic (symb_exec_fct : AST.RULE -> 'a * AST.RULE) (main_rule_name : string) : unit =
-    let (_, R_in) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
+let exec_symbolic (sign : Signature.SIGNATURE) (symb_exec_fct : 'rule -> 'a * 'rule) (R_in : 'rule) (rule_to_string, rule_size) : unit =
+//    let (_, R_in) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
     match Common.time symb_exec_fct R_in with
     |   (Some (no_of_leaves, R_out), _, _, cpu, usr, sys) ->
             write "\n\n--- generated rule:\n"
-            PrettyPrinting.pr stdout 80 (AST.pp_rule (TopLevel.signature ()) R_out)
-            write $"\n\n--- size of generated rule: {(AST.rule_size R_out)}\n"
+            PrettyPrinting.pr stdout 80 (rule_to_string R_out)
+            write $"\n\n--- size of generated rule: {(rule_size R_out)}\n"
             write $"\n--- number of leaves in decision tree: {no_of_leaves}\n"
-            write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n" 
+            write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n"     //!!! in DAG version, Toplevel should not be used
             print_time (cpu, usr, sys)
     |   (_, Some ex, _, cpu, usr, sys) ->
             print_time (cpu, usr, sys)
@@ -96,11 +98,11 @@ let exec_symbolic (symb_exec_fct : AST.RULE -> 'a * AST.RULE) (main_rule_name : 
             raise ex
     |   _ -> failwith "failure: no result and no exception\n"
 
-let simple_exec exec_fct main_rule_name =
-    let (_, R_in) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
+let simple_exec exec_fct (R_in : 'rule) =
+    //let (_, R_in) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
     match Common.time exec_fct R_in with
     |   (Some _, _, _, cpu, usr, sys) ->
-            write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n" 
+            write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n"     //!!! in DAG version, Toplevel should not be used
             print_time (cpu, usr, sys)
     |   (_, Some ex, _, cpu, usr, sys) ->
             write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n" 
@@ -142,6 +144,7 @@ let CLI_with_ex(args) =
         let steps = ref 1
         let turbo2basic = ref false
         let asmeta_flag = ref false
+        let asmeta_dag_flag = ref false
         let invcheck = ref false
         let invcheck_steps = ref None
         let objects_to_load = ref []
@@ -152,6 +155,7 @@ let CLI_with_ex(args) =
                 match args[i] with
                 |   "-license"     -> license (); exit 0
                 |   "-asmeta"      -> asmeta_flag := true; main_rule_name := "r_Main"; parse_arguments (i+1)
+                |   "-asmeta-dag"  -> asmeta_dag_flag := true; main_rule_name := "r_Main"; parse_arguments (i+1)
                 |   "-init"        -> if i+1 < n
                                       then  initial_state_name := Some args[i+1]; parse_arguments (i+2)
                                       else writeln_err "-init requires an argument"; exit 1
@@ -169,29 +173,61 @@ let CLI_with_ex(args) =
                 |   "-str"         -> fprintf stderr "-str %s " args[i+1]; objects_to_load := Str args[i+1] :: !objects_to_load; parse_arguments (i+2)
                 |   "-file"        -> fprintf stderr "-file %s " args[i+1]; objects_to_load := File args[i+1] :: !objects_to_load; parse_arguments (i+2)
                 |   s -> writeln_err $"unknown option: {s}"; exit 1
-        let rec load_everything L =
-            match L with
+        let load_everything L =
+            TopLevel.init (!asmeta_flag || !asmeta_dag_flag)  // use AsmetaL parser
+            let rec loadfiles = function
             |   [] -> () 
-            |   (Str s) :: rest  -> TopLevel.loadstr !asmeta_flag !initial_state_name s; load_everything rest
-            |   (File f) :: rest -> loadfile !asmeta_flag !initial_state_name f; load_everything rest
+            |   (Str s) :: rest  -> TopLevel.loadstr !asmeta_flag !initial_state_name s; loadfiles rest
+            |   (File f) :: rest -> loadfile !asmeta_flag !initial_state_name f; loadfiles rest
+            loadfiles L
         try parse_arguments 0 with _ -> usage (); exit 1
-        let _ = TopLevel.init !asmeta_flag
-        load_everything (List.rev !objects_to_load)
-        // !!! tbd: for AsmetaL the main rule name it not always 'r_Main', but should be set according to the content of the ASM file
-        if !invcheck
-        then simple_exec (SymbEval.symbolic_execution_for_invariant_checking (!invcheck_steps)) (!main_rule_name)
-        else if !turbo2basic
-        then exec_symbolic SymbEval.symbolic_execution_for_turbo_asm_to_basic_asm_transformation (!main_rule_name)
-        else if !symbolic
-        then exec_symbolic (fun R -> SymbEval.symbolic_execution R (!steps)) (!main_rule_name)
-        else exec_nonsymbolic (!main_rule_name)
+        if !asmeta_dag_flag  // experimental AsmetaL DAG mode
+        then
+            if !asmeta_flag
+            then writeln_err "AsmetaL DAG mode is not compatible with regular AsmetaL mode"; exit 1
+            else if !turbo2basic
+            then writeln_err "'-turbo2basic' option not yet supported with '-asmeta-dag"; exit 1
+            else
+                asmeta_flag := true
+                load_everything (List.rev !objects_to_load)
+                let sign = TopLevel.signature ()
+                let (_, R_in) = try AST.get_rule !main_rule_name (TopLevel.rules ()) with _ -> failwith ("rule '" + !main_rule_name + " not defined")
+                let C = Engine.new_engine (TopLevel.signature (), TopLevel.initial_state (), TopLevel.macros (), TopLevel.rules (), TopLevel.invariants (), TopLevel.smt_ctx)
+                let R_in = Engine.convert_rule C R_in
+                if !invcheck
+                then simple_exec (Engine.symbolic_execution_for_invariant_checking C !invcheck_steps) R_in
+                else exec_symbolic sign (fun (R : Engine.RULE) -> Engine.symbolic_execution C R (!steps)) R_in (Engine.pp_rule C, Engine.rule_size C)
+                write $"\n--- number of generated terms (term table size): {(Engine.get_engine' C).terms |> IndMap.count}\n" 
+                // fprintf stderr "%s" (DAG.show_fct_tables C)  // for debugging purposes   Count
+                ()
+        else  // all other options
+            // !!! tbd: for AsmetaL the main rule name it not always 'r_Main', but should be set according to the content of the ASM file
+            load_everything (List.rev !objects_to_load)
+            let sign = TopLevel.signature ()
+            let exec_symbolic = exec_symbolic sign
+            let (_, R_in) = try AST.get_rule (!main_rule_name) (TopLevel.rules ()) with _ -> failwith ("rule '" + !main_rule_name + "' not defined")
+            if !invcheck
+            then simple_exec (SymbEval.symbolic_execution_for_invariant_checking !invcheck_steps) R_in
+            else if !turbo2basic
+            then exec_symbolic SymbEval.symbolic_execution_for_turbo_asm_to_basic_asm_transformation R_in (AST.pp_rule sign, AST.rule_size)
+            else if !symbolic
+            then exec_symbolic (fun R -> SymbEval.symbolic_execution R (!steps)) R_in (AST.pp_rule sign, AST.rule_size)
+            else exec_nonsymbolic (!main_rule_name)
         0
 
+let raw_exceptions = false
+
 let CLI(args) =
-    try
-        CLI_with_ex(args)
-    with
-    |   Parser.Error (fct, reg, err)  -> writeln_err ("\n" + Parser.error_msg (fct, reg, err)); 1
-    |   AsmetaL.Error (fct, reg, err) -> writeln_err ("\n" + AsmetaL.error_msg (fct, reg, err)); 1
-    |   SymbUpdates.Error (mdl, fct, err) -> writeln_err ("\n" + SymbUpdates.error_msg (mdl, fct, err)); 1
-    |   Failure s -> writeln_err $"\nexception:\n{s}"; 1
+    if raw_exceptions then
+        CLI_with_ex args
+    else
+        try
+            CLI_with_ex(args)
+        with
+        |   ex as Parser.Error (fct, reg, err)  -> writeln_err ("\n" + Parser.error_msg (fct, reg, err)); -1
+        |   ex as AsmetaL.Error (fct, reg, err) -> writeln_err ("\n" + AsmetaL.error_msg (fct, reg, err)); -1
+        |   ex as SymbUpdates.Error (mdl, fct, err) -> writeln_err ("\n" + SymbUpdates.error_msg (mdl, fct, err)); -1
+        |   ex as Failure s -> writeln_err $"\nexception:\n{s}"; -1
+
+
+

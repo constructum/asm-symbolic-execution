@@ -76,7 +76,7 @@ type ASM_Content = {
     signature : SIGNATURE;
     invariants : Map<string, TYPED_TERM>;      // all invariants have a name (if no name was explicitly given, a name is generated)
     definitions : ASM_Definitions;
-    initial_states : (string * Map<string, STATE>) option;   // "default init" name and mapping from "init" names to corresponding definitions
+    initial_states : (string * Map<string, STATE * MACRO_DB>) option;   // "default init" name and mapping from "init" names to corresponding definitions
 }
 
 and ASM = ASM of ASM_Content   // "asm" or "module" content
@@ -89,7 +89,7 @@ let asm_content (asyncr_module_name as (asyncr : bool, modul : bool, name : stri
                 (signature : SIGNATURE)
                 (invariants : Map<string, TYPED_TERM>)
                 (definitions : ASM_Definitions)
-                (initial_states : (string * Map<string, STATE>) option)  : ASM_Content =
+                (initial_states : (string * Map<string, STATE * MACRO_DB>) option)  : ASM_Content =
     {
         name = name;
         is_module = modul;
@@ -498,10 +498,12 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                         if fct_kind f sign = Controlled then 
                             let parameters = List.map (fun (v, t) -> v) param_list
                             let fct = function (xs : VALUE list) -> Eval.eval_term t ((state_with_signature state sign), Map.ofList (List.zip parameters xs))
-                            ((fun (state : STATE) -> state_override_dynamic_initial state (Map.add f fct Map.empty, add_macro f (parameters, t) Map.empty)), fun x -> x)
+                            fun (state : STATE, mdb : MACRO_DB) ->
+                                  state_override_dynamic_initial state (Map.add f fct Map.empty, add_macro f (parameters, t) Map.empty),
+                                  macro_db_override mdb (Map.add f (parameters, t) Map.empty)
+
                         else 
                             raise (Error ("Asm", Some reg, FunctionNotDeclaredAsControlled f))
-                        
 
             let AgentInitialization = (kw "agent" << ID_DOMAIN) ++ (lit ":" << (MacroCallRule env0))
                                             |>> fun (id, _) -> failwith (sprintf "not implemented: initialization of agent ('%s')" id)
@@ -552,14 +554,14 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                             (fun (state, mdb) (fct_def, macro_fct_def) -> (fct_def state, macro_fct_def mdb))
                             (state', empty_macro_db)
                             (function_definitions (*@ initial_states*) )
-                    let initial_states' : (string * Map<string, STATE>) option =
-                        let extend_state_with_fct_def state (fct_def, _) = fct_def state
+                    let initial_states' : (string * Map<string, STATE * MACRO_DB>) option =
+                        let extend_state_with_fct_def (state : STATE, mdb : MACRO_DB) add_def : STATE * MACRO_DB = add_def (state, mdb)
                         match initial_states with
                         |   None -> None
                         |   Some (default_init_name, initial_states_map) ->
                                 let initial_states_map' =
                                     Map.map
-                                        (fun state_name transf_list -> List.fold extend_state_with_fct_def state'' transf_list)
+                                        (fun state_name transf_list -> List.fold extend_state_with_fct_def (state'', mdb') transf_list)
                                         initial_states_map
                                 Some (default_init_name, initial_states_map')
                     if !trace > 0 then fprintf stderr "static function definitions found for: %s\n" (Map.keys state''._static |> String.concat ", ")
@@ -582,7 +584,7 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                     }
                     ParserSuccess ( result, s'')
 
-let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB * MACRO_DB * Map<string, TYPED_TERM> * (string * Map<string, STATE>) option =
+let extract_definitions_from_asmeta (asm : ASM) : SIGNATURE * STATE * RULES_DB * MACRO_DB * Map<string, TYPED_TERM> * (string * Map<string, STATE * MACRO_DB>) option =
     match asm with
     |   ASM (asm_content) ->
             let sign  = asm_content.signature
