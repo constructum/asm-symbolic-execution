@@ -1,7 +1,7 @@
 # symbolic execution of one step starting from initial state
 # note: script must be called with one of the initial state identifiers specified with 'init' in the AsmetaL model
-# example (from project root): examples-asmeta/bubblesort/run n4
-time dotnet run -asmeta -init $1 -file examples-asmeta/bubblesort/bubblesort.asm
+# example (from project root): examples-asmeta/bubblesort/run-dag n4
+time dotnet run -asmeta-dag -init $1 -file examples-asmeta/bubblesort/bubblesort.asm
 
 # # proper turbo ASM to basic ASM transformation (would require n to be static)
-# time dotnet run -asmeta -turbo2basic -file examples-asmeta/bubblesort/bubblesort.asm
+# time dotnet run -asmeta-dag -turbo2basic -file examples-asmeta/bubblesort/bubblesort.asm

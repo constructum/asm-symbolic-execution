@@ -19,6 +19,7 @@ let usage () =
             "                   into top-level environment"
             ""
             "  -asmeta        use AsmetaL as input language"
+            "  -asmeta-dag    use AsmetaL with experimental DAG-based symbolic execution"
             "  -init <state>  (AsmetaL only) start from initial state named <state>"
             "  -invcheck <n>  (AsmetaL only) check invariants during symbolic execution"
             "                   for at most <n> steps or indefinitely, if <n> not specified"

@@ -61,6 +61,16 @@ init mnp_4_4_4:
     function n = 4
     function p = 4
 
+init mnp_10_10_10:
+    function m = 10
+    function n = 10
+    function p = 10
+
+init mnp_20_20_20:
+    function m = 20
+    function n = 20
+    function p = 20
+
 
 
 /*
