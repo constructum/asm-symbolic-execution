@@ -60,6 +60,11 @@ type NAME =
 | StringConst of string
 | FctName of FCT_NAME
 
+let main_type_of ty =
+    match ty with
+    |   Subset (_, main_type) -> main_type
+    |   _ -> ty
+
 let rec type_to_string ty =
     match ty with
     |   TypeParam a -> "'" ^ a
@@ -342,12 +347,6 @@ let is_right_assoc fct_name (sign : SIGNATURE) =
 
 let precedence fct_name (sign : SIGNATURE) =
     get_fct_info "is_right_assoc" fct_name sign (fun fi -> fi.infix_status |> function Infix (_, n) -> n | _ -> 0)
-
-//--------------------------------------------------------------------
-
-let main_type = function
-|   Subset (_, ty) -> ty
-|   ty -> ty
 
 //--------------------------------------------------------------------
 

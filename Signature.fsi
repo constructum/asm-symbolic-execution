@@ -131,7 +131,7 @@ val is_left_assoc : string -> SIGNATURE -> bool
 val is_right_assoc : string -> SIGNATURE -> bool
 val precedence : string -> SIGNATURE -> int
 
-val main_type : TYPE -> TYPE
+val main_type_of : TYPE -> TYPE
 val match_type : TYPE -> TYPE -> TypeEnv.TYPE_ENV -> TypeEnv.TYPE_ENV
 val match_fct_type : string -> TYPE list -> (TYPE list * TYPE) list -> TYPE
 
