@@ -96,7 +96,11 @@ let times = function
 | _ -> UNDEF
 
 let div = function
-| [ INT x; INT y ] -> if y = 0 then UNDEF else INT (x / y)
+| [ INT x; INT y ] -> if y = 0 then failwith (sprintf "Division by zero error: %d div %d" x y) else INT (x / y)
+| _ -> UNDEF
+
+let mod_ = function
+| [ INT x; INT y ] -> if y = 0 then failwith (sprintf "Division by zero error: %d mod %d" x y) else INT (x % y)
 | _ -> UNDEF
 
 let _not = function
@@ -160,6 +164,7 @@ let background_functions =
         ("-",       minus,      ([Integer; Integer], Integer), Infix (LeftAssoc, 6));
         ("*",       times,      ([Integer; Integer], Integer), Infix (LeftAssoc, 7));
         ("div",     div,        ([Integer; Integer], Integer), Infix (LeftAssoc, 7));
+        ("mod",     mod_,      ([Integer; Integer], Integer), Infix (LeftAssoc, 7));
         ("set_interval", set_interval, ([Integer; Integer; Integer], Powerset Integer), NonInfix);
     ]
 
