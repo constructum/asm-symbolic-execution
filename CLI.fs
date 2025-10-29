@@ -33,7 +33,7 @@ let usage () =
             "  -turbo2basic   turbo ASM to basic ASM transformation"
             "                   (all non-static functions are uninterpreted)"
             ""
-            "  -nosmt         do not use SMT solver"
+            "  -nosmt         do not use SMT solver (option not available with -asmeta-dag)"
             ""
             "  -license       display license information"
             "" ] |> String.concat "\n" )
@@ -170,15 +170,15 @@ let CLI_with_ex(args) =
                 |   "-nonsymbolic" -> symbolic := false;   parse_arguments (i+1)
                 |   "-turbo2basic" -> turbo2basic := true; parse_arguments (i+1)
                 |   "-nosmt"       -> SymbEval.use_smt_solver := false; parse_arguments (i+1)
-                |   "-str"         -> fprintf stderr "-str %s " args[i+1]; objects_to_load := Str args[i+1] :: !objects_to_load; parse_arguments (i+2)
-                |   "-file"        -> fprintf stderr "-file %s " args[i+1]; objects_to_load := File args[i+1] :: !objects_to_load; parse_arguments (i+2)
+                |   "-str"         -> objects_to_load := Str args[i+1] :: !objects_to_load; parse_arguments (i+2)
+                |   "-file"        -> objects_to_load := File args[i+1] :: !objects_to_load; parse_arguments (i+2)
                 |   s -> writeln_err $"unknown option: {s}"; exit 1
         let load_everything L =
             TopLevel.init (!asmeta_flag || !asmeta_dag_flag)  // use AsmetaL parser
             let rec loadfiles = function
-            |   [] -> () 
-            |   (Str s) :: rest  -> TopLevel.loadstr !asmeta_flag !initial_state_name s; loadfiles rest
-            |   (File f) :: rest -> loadfile !asmeta_flag !initial_state_name f; loadfiles rest
+            |   [] -> ()
+            |   (Str s) :: rest  -> fprintf stderr "-str %s " s;  TopLevel.loadstr !asmeta_flag !initial_state_name s; loadfiles rest
+            |   (File f) :: rest -> fprintf stderr "-file %s " f; loadfile !asmeta_flag !initial_state_name f; loadfiles rest
             loadfiles L
         try parse_arguments 0 with _ -> usage (); exit 1
         if !asmeta_dag_flag  // experimental AsmetaL DAG mode
@@ -186,7 +186,9 @@ let CLI_with_ex(args) =
             if !asmeta_flag
             then writeln_err "AsmetaL DAG mode is not compatible with regular AsmetaL mode"; exit 1
             else if !turbo2basic
-            then writeln_err "'-turbo2basic' option not yet supported with '-asmeta-dag"; exit 1
+            then writeln_err "'-turbo2basic' option not implemented in '-asmeta-dag' mode"; exit 1
+            else if !SymbEval.use_smt_solver = false
+            then writeln_err "'-asmeta-dag' mode does not support '-nosmt' option"; exit 1
             else
                 asmeta_flag := true
                 load_everything (List.rev !objects_to_load)

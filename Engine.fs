@@ -943,9 +943,9 @@ and smt_eval_formula (eng : ENGINE) (phi : TERM) (UM : UPDATE_MAP, env, pc : PAT
     if !trace > 0 then fprintf stderr "smt_eval_formula(%s) -> " (term_to_string eng phi)
     let phi = expand_term eng phi (UM, env, pc)
     let result =
-        if !SymbEval.use_smt_solver && smt_formula_is_true eng phi
+        if smt_formula_is_true eng phi
         then TRUE eng
-        else if !SymbEval.use_smt_solver && smt_formula_is_true eng (s_not eng phi)
+        else if smt_formula_is_true eng (s_not eng phi)
         then FALSE eng
         else phi
     if !trace > 0 then fprintf stderr "%s\n" (term_to_string eng result)
@@ -1097,7 +1097,16 @@ and s_eval_term_ expand_initial (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env 
         |   G' ->
                 let t1_eval : TERM = eval_term_with_ext_path_cond expand_initial G_eval         t1 (UM, env, pc)
                 let t2_eval : TERM = eval_term_with_ext_path_cond expand_initial (s_not G_eval) t2 (UM, env, pc)
-                if t1_eval = t2_eval then t1_eval else CondTerm (G_eval, t1_eval, t2_eval)
+                match get_term' t1_eval, get_term' t2_eval with
+                |   Value' (BOOL true),  Value' (BOOL true) -> TRUE
+                |   Value' (BOOL true),  Value' (BOOL false) -> G_eval
+                |   Value' (BOOL false), Value' (BOOL true) -> s_not G_eval
+                |   Value' (BOOL false), Value' (BOOL false) -> FALSE
+                |   Value' (BOOL true),  _ -> s_or  (K G_eval,         K t2_eval)
+                |   Value' (BOOL false), _ -> s_and (K (s_not G_eval), K t2_eval)
+                |   _, Value' (BOOL true)  -> s_or  (K (s_not G_eval), K t1_eval)
+                |   _, Value' (BOOL false) -> s_and (K G_eval,         K t1_eval)
+                |   _, _ -> if t1_eval = t2_eval then t1_eval else CondTerm (G_eval, t1_eval, t2_eval)
 
     and eval_let_term expand_initial (v : string, t1 : TERM, t2 : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
         let eval_term = eval_term expand_initial
@@ -1110,8 +1119,7 @@ and s_eval_term_ expand_initial (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env 
         |   None -> failwith (sprintf "Engine.eval_domain_term: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
 
     and eval_quant_term expand_initial (q_kind : AST.QUANT_KIND, v : string, t_set : TERM, t_cond : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
-        let eval_term = eval_term expand_initial
-        let t_set = eval_term t_set (UM, env, pc)
+        let t_set = eval_term true t_set (UM, env, pc)    // always unfold the term defining the set
         let t_set_type = get_type t_set
         let elem_type =
             match t_set_type with
@@ -1119,7 +1127,7 @@ and s_eval_term_ expand_initial (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env 
             |   _ -> failwith (sprintf "Engine.eval_quant_term: expected a set or domain type, %s found instead" (Signature.type_to_string t_set_type))
         match get_term' (s_eval_term t_set eng (UM, env, pc)) with
         |   Value' (Background.SET (_, xs)) ->
-                let eval_instance x = eval_term t_cond (UM, add_binding env (v, Value x, elem_type), pc)
+                let eval_instance x = eval_term expand_initial t_cond (UM, add_binding env (v, Value x, elem_type), pc)
                 let t_conds = List.map eval_instance (Set.toList xs)
                 match q_kind with
                 |   AST.Forall -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_and ((fun () -> t_accum), (fun () -> t1))) TRUE  t_conds
@@ -1221,17 +1229,11 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
         |   Value' (BOOL true)  -> eval_rule R1 (UM, env, pc)
         |   Value' (BOOL false) -> eval_rule R2 (UM, env, pc)
         |   CondTerm' (G', G1, G2) ->
-                if get_type G1 <> Signature.Boolean || get_type G2 <> Signature.Boolean
-                then failwith (sprintf "s_eval_rule.eval_cond: '%s' and '%s' must be boolean terms" (term_to_string G1) (term_to_string G2))
-                else eval_rule (CondRule (G', CondRule (G1, R1, R2), CondRule (G2, R1, R2))) (UM, env, pc)
-        |   _ ->    //let (R1', R2') = (s_eval_rule R1 (S, env, add_cond G C), s_eval_rule R2 (S, env, add_cond (s_not G) C)_
-                    if not !SymbEval.use_smt_solver
-                    then    let R1' = eval_rule R1 (UM, env, add_cond G pc)
-                            let R2' = eval_rule R2 (UM, env, add_cond (s_not eng G) pc)
-                            if R1' = R2' then R1' else CondRule (G, R1', R2')
-                    else    let R1' = eval_rule_with_ext_path_cond G             R1 (UM, env, pc)
-                            let R2' = eval_rule_with_ext_path_cond (s_not eng G) R2 (UM, env, pc)
-                            if R1' = R2' then R1' else CondRule (G, R1', R2')
+                eval_rule (CondRule (G', CondRule (G1, R1, R2), CondRule (G2, R1, R2))) (UM, env, pc)
+        |   _ ->
+                let R1' = eval_rule_with_ext_path_cond G             R1 (UM, env, pc)
+                let R2' = eval_rule_with_ext_path_cond (s_not eng G) R2 (UM, env, pc)
+                if R1' = R2' then R1' else CondRule (G, R1', R2')
 
     and eval_par Rs (UM, env, pc) =
         match Rs with
