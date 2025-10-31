@@ -564,6 +564,11 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                                         (fun state_name transf_list -> List.fold extend_state_with_fct_def (state'', mdb') transf_list)
                                         initial_states_map
                                 Some (default_init_name, initial_states_map')
+                    let initial_states'' : (string * Map<string, STATE * MACRO_DB>) option =
+                        // initial_states' extended with the additional constructors added to abstract (enum) types
+                        Option.map (fun (default_init_name, initial_state_map) ->
+                            default_init_name,
+                            Map.map (fun _ (state, mdb) -> extend_with_carrier_sets (sign, state_override state state''), mdb) initial_state_map) initial_states'
                     if !trace > 0 then fprintf stderr "static function definitions found for: %s\n" (Map.keys state''._static |> String.concat ", ")
                     if !trace > 0 then fprintf stderr "dynamic function definitions found for: %s\n" (Map.keys state''._dynamic |> String.concat ", ")
                     if !trace > 0 then fprintf stderr "dynamic function initializations found for: %s\n" (Map.keys (fst state''._dynamic_initial) |> String.concat ", ")
@@ -580,7 +585,7 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                             rules  = rules_db_override rules_db rdb';
                             macros = macro_db_override macro_db mdb';
                         };
-                        initial_states = initial_states';
+                        initial_states = initial_states'';
                     }
                     ParserSuccess ( result, s'')
 
