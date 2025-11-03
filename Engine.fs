@@ -47,7 +47,7 @@ and RULE_DEF' =
     RuleName of string
 
 and RULE_DEF_ATTRS = {
-    rule_id   : int;
+    rule_def_id   : int;
     // rule_type : (Signature.TYPE list * Signature.TYPE);   // !!! to be implemented together with monomorphization
     rule_def  : (string list * RULE) option
 }
@@ -232,24 +232,34 @@ and inline get_rule_def' (Engine eid) (RuleDefId id : RULE_DEF_ID) : RULE_DEF' *
     engines.[eid].rule_defs |> get id
 
 and inline get_rule_name (Engine eid) (RuleDefId id : RULE_DEF_ID) = let RuleName r_name, _ =engines.[eid].rule_defs |> get id in r_name
-and inline get_rule_id (eng : ENGINE) (id : RULE_DEF_ID) = (snd (get_rule_def' eng id)).rule_id
 and inline get_rule_def (eng as Engine eid) (id : RULE_DEF_ID) = (snd (get_rule_def' eng id)).rule_def
 
-and inline make_rule (Engine eid) (R' : RULE') : RULE =
-    let e = engines.[eid]
-    e.rules |> add (R', ()) |> Rule
+// and inline make_rule (Engine eid) (R' : RULE') : RULE =
+//     let e = engines.[eid]
+//     e.rules |> add (R', ()) |> Rule
 
 and inline get_rule' (Engine eid) (Rule rid) = engines.[eid].rules |> get rid |> fst
 
-and inline UpdateRule eng ((f, ts), t_rhs) = make_rule eng (UpdateRule' ((f, ts), t_rhs))
-and inline CondRule eng (G, R1, R2) = make_rule eng (CondRule' (G, R1, R2))
-and inline ParRule eng Rs = make_rule eng (ParRule' Rs)
-and inline SeqRule eng Rs = make_rule eng (SeqRule' Rs)
-and inline IterRule eng R' = make_rule eng (IterRule' R')
-and inline LetRule eng (v, t1, R') = make_rule eng (LetRule' (v, t1, R'))
-and inline MacroRuleCall eng (r, args) = make_rule eng (MacroRuleCall' (r, args))
-and inline ForallRule eng (v, t_set, G, R') = make_rule eng (ForallRule' (v, t_set, G, R'))
-and inline S_Updates eng upds = make_rule eng (S_Updates' upds)   // Map.map (fun ((f, xs), t_rhs) -> ((get_fct_id eng f, xs), convert_term eng t_rhs)) upds
+and inline get_rule (eng as Engine eid : ENGINE) (R' : RULE') : RULE =
+    match IndMap.try_get_index R' engines.[eid].rules with
+    |   Some rid ->
+            Rule rid
+    |   None ->
+            let e = engines.[eid]
+            let rid = e.rules |> count
+            e.rules |> add (R', ()) |> Rule
+
+
+
+and inline UpdateRule eng ((f, ts), t_rhs) = get_rule eng (UpdateRule' ((f, ts), t_rhs))
+and inline CondRule eng (G, R1, R2) = get_rule eng (CondRule' (G, R1, R2))
+and inline ParRule eng Rs = get_rule eng (ParRule' Rs)
+and inline SeqRule eng Rs = get_rule eng (SeqRule' Rs)
+and inline IterRule eng R' = get_rule eng (IterRule' R')
+and inline LetRule eng (v, t1, R') = get_rule eng (LetRule' (v, t1, R'))
+and inline MacroRuleCall eng (r, args) = get_rule eng (MacroRuleCall' (r, args))
+and inline ForallRule eng (v, t_set, G, R') = get_rule eng (ForallRule' (v, t_set, G, R'))
+and inline S_Updates eng upds = get_rule eng (S_Updates' upds)   // Map.map (fun ((f, xs), t_rhs) -> ((get_fct_id eng f, xs), convert_term eng t_rhs)) upds
 
 and convert_rule (eng : ENGINE) (R : AST.RULE) : RULE =
     AST.rule_induction (convert_term eng) {
@@ -330,7 +340,7 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
         |> Seq.iteri (fun i (name, rule_def) ->
             new_engine.rule_defs |> add (
                 RuleName name, {
-                    rule_id   = i;
+                    rule_def_id   = i;
                     // rule_type = Signature.rule_types name sign;   // !!! to be implemented together with monomorphization
                     rule_def  = None
                 }) |> ignore )
@@ -349,7 +359,7 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
                 |   None -> failwith (sprintf "cannot find initial definition of controlled function '%s'\n" f_name)
         |   _ -> ()     // if not any of the above cases, do nothing (the entry of fctTable was already completely initialized)
     for i in 0..(new_engine.rule_defs |> count) - 1 do
-        let RuleName rd_name, (rd_attrs as { rule_id = id; rule_def = _ }) = new_engine.rule_defs |> get i
+        let RuleName rd_name, (rd_attrs as { rule_def_id = id; rule_def = _ }) = new_engine.rule_defs |> get i
         let (args, body) = extract_rule_def_rhs rd_name
         new_engine.rule_defs |> set i (RuleName rd_name, { rd_attrs with rule_def = Some (args, convert_rule (Engine eid) body) })
     let new_ctx = {
@@ -1300,8 +1310,8 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
         |   CondRule' (G, R1, R2) ->
                 //s_eval_rule (SeqRule [ CondRule (G, R1, R2); IterRule R ]) (UM, env, pc)
                 s_eval_rule (CondRule (G, SeqRule [R1; IterRule R], SeqRule [R2; IterRule R])) (UM, env, pc)
-        |   R' -> failwith (sprintf "SymEvalRules.s_eval_rule: eval_iter_rule - R'' = %s" (rule_to_string (make_rule eng R')))
-    
+        |   R' -> failwith (sprintf "SymEvalRules.s_eval_rule: eval_iter_rule - R'' = %s" (rule_to_string (get_rule eng R')))
+
     and eval_let (v, t, R) (UM, env, pc) =
         let t' = s_eval_term t (UM, env, pc)
         let R' = s_eval_rule R (UM, add_binding env (v, t', get_type t'), pc)
@@ -1326,7 +1336,7 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
             List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (UM, env, pc), get_type arg)) env formals args
         s_eval_rule body (UM, env', pc)
  
-    let R =
+    let R_eval =
         match get_rule' eng R with
         |   UpdateRule' ((f, ts), t) -> eval_update ((f, ts), t) (UM, env, pc)
         |   CondRule' (G, R1, R2)    -> eval_cond (G, R1, R2) (UM, env, pc)
@@ -1336,13 +1346,13 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
         |   LetRule' (v, t, R)       -> eval_let (v, t, R) (UM, env, pc) 
         |   ForallRule' (v, t, G, R) -> eval_forall (v, t, G, R) (UM, env, pc) 
         |   MacroRuleCall' (r, args) -> eval_macro_rule_call (r, args) (UM, env, pc)
-        |   S_Updates' S             -> S_Updates S
+        |   S_Updates' S             -> R
 
     level := !level - 1
     if (!trace > 1)
     then fprintf stderr "%ss_eval_rule result = \n%s\n%s----------------------\n" (spaces !level) (toString 120 (indent (!level) (pp_rule R))) (spaces !level)
 
-    R
+    R_eval
 
 
 //--------------------------------------------------------------------
@@ -1503,7 +1513,7 @@ let symbolic_execution_for_invariant_checking (eng : ENGINE) (opt_steps : int op
                 with_extended_path_cond (s_not eng G) (fun _ _ -> traverse i ((s_not eng G)::conditions) R2) (UM, env, pc)
         |   S_Updates' updates    ->
                 check_invariants invs UM0 conditions updates
-        |   R -> failwith (sprintf "symbolic_execution_for_invariant_checking: there should be no such rule here: %s\n" (rule_to_string eng (make_rule eng R)))
+        |   R -> failwith (sprintf "symbolic_execution_for_invariant_checking: there should be no such rule here: %s\n" (rule_to_string eng (get_rule eng R)))
     let state_header i = printf "\n=== state S_%d =====================================\n" i
     let rec F R_acc R_in i =
         reset_counters ()
