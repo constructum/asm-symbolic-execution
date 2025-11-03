@@ -1039,41 +1039,49 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                 match get_term' eng t2 with
                 |   Value' (BOOL false) -> FALSE eng
                 |   Value' (BOOL true) -> t1    // with_extended_path_cond t2' (fun _ -> t1) (S, env, C)
-                |   t2' -> if t1' = t2' then t1 else F [] [(fun _ _ -> t1); (fun _ _ -> t2)]
+                |   t2' -> if t1' = t2' then t1 else F [] [(fun _ _ -> t1); fun _ _ -> t2]
     |   "or", [ t1; t2 ] ->
-            match get_term' eng (t1 eng (UM, env, pc)) with
+            let t1 = t1 eng (UM, env, pc)
+            match get_term' eng t1 with
             |   Value' (BOOL true) -> TRUE eng
             |   Value' (BOOL false) -> t2 eng (UM, env, pc)
             |   t1' ->
-                match get_term' eng (t2 eng (UM, env, pc)) with
+                let t2 = t2 eng (UM, env, pc)
+                match get_term' eng t2 with
                 |   Value' (BOOL true) -> TRUE eng
-                |   Value' (BOOL false) -> get_term eng t1'
-                |   t2' -> if t1' = t2' then get_term eng t1' else F [] [( fun _ _ -> get_term eng t1'); ( fun _ _ -> get_term eng t2')]
+                |   Value' (BOOL false) -> t1
+                |   t2' -> if t1' = t2' then t1 else F [] [(fun _ _ -> t1); fun _ _ -> t2]
     |   "implies", [ t1; t2 ] ->
-            match get_term' eng (t1 eng (UM, env, pc)) with
+            let t1 = t1 eng (UM, env, pc)
+            match get_term' eng t1 with
             |   Value' (BOOL false) -> TRUE eng
-            |   t1' as Value' (BOOL true)  -> t2 eng (UM, env, pc)       // with_extended_path_cond t1' ( fun _ _ -> t2) (S, env, C)
+            |   Value' (BOOL true)  -> t2 eng (UM, env, pc)       // with_extended_path_cond t1' ( fun _ _ -> t2) (S, env, C)
             |   t1' ->
-                match get_term' eng (t2 eng (UM, env, pc)) with
-                |   Value' (BOOL false) -> s_not eng (get_term eng t1')
+                let t2 = t2 eng (UM, env, pc)
+                match get_term' eng t2 with
+                |   Value' (BOOL false) -> s_not eng t1
                 |   Value' (BOOL true)  -> TRUE eng
-                |   t2' -> if t1' = t2' then TRUE eng else F [] [( fun _ _ -> get_term eng t1'); ( fun _ _ -> get_term eng t2')]
+                |   t2' -> if t1' = t2' then TRUE eng else F [] [(fun _ _ -> t1); fun _ _ -> t2]
     |   "iff", [ t1; t2 ] ->
-        match get_term' eng (t1 eng (UM, env, pc)) with
-        |   Value' (BOOL false) -> s_not eng (t2 eng (UM, env, pc))
-        |   Value' (BOOL true)  -> t2 eng (UM, env, pc)
-        |   t1' ->
-            match get_term' eng (t2 eng (UM, env, pc)) with
-            |   Value' (BOOL false) -> s_not eng (get_term eng t1')
-            |   Value' (BOOL true)  -> get_term eng t1'
-            |   t2' -> if t1' = t2' then TRUE eng else F [] [( fun _ _ -> get_term eng t1'); ( fun _ _ -> get_term eng t2')]
+            let t1 = t1 eng (UM, env, pc)
+            match get_term' eng t1 with
+            |   Value' (BOOL false) -> s_not eng (t2 eng (UM, env, pc))
+            |   Value' (BOOL true)  -> t2 eng (UM, env, pc)
+            |   t1' ->
+                let t2 = t2 eng (UM, env, pc)
+                match get_term' eng t2 with
+                |   Value' (BOOL false) -> s_not eng t1
+                |   Value' (BOOL true)  -> t1
+                |   t2' -> if t1' = t2' then TRUE eng else F [] [(fun _ _ -> t1); fun _ _ -> t2]
     |   "=", [ t1; t2 ] ->
-        match get_term' eng (t1 eng (UM, env, pc)) with
-        |   t1' as Value' x1 ->
-            match get_term' eng (t2 eng (UM, env, pc)) with
-            |   Value' x2 -> Value eng (BOOL (x1 = x2))
-            |   t2' -> F [] [( fun _ _ -> get_term eng t1');  fun _ _ -> get_term eng t2']
-        |   t1' -> F [] [( fun _ _ -> get_term eng t1');  fun _ _ -> t2 eng (UM, env, pc)]
+            let t1 = t1 eng (UM, env, pc)
+            match get_term' eng t1 with
+            |   t1' as Value' x1 ->
+                let t2 = t2 eng (UM, env, pc)
+                match get_term' eng t2 with
+                |   Value' x2 -> Value eng (BOOL (x1 = x2))
+                |   t2' -> F [] [(fun _ _ -> t1);  fun _ _ -> t2]
+            |   t1' -> F [] [( fun _ _ -> t1);  fun _ _ -> t2 eng (UM, env, pc)]
     |   _ ->
     F [] ts
 
@@ -1093,8 +1101,7 @@ and eval_cond_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (
                  let t2_G'     = t2 eng (UM, env, add_cond G' (add_cond G2 pc))
                  let t2_not_G' = t2 eng (UM, env, add_cond (s_not eng G') (add_cond G2 pc))
                  s_eval_term (CondTerm eng (G', CondTerm eng (G1, t1_G', t2_G'), CondTerm eng (G2, t1_not_G', t2_not_G'))) eng (UM, env, pc)
-    |   G ->    let G = get_term eng G
-                if (!trace > 1)
+    |   _ ->    if (!trace > 1)
                 then fprintfn stderr "\n%sctx_condition: %s" (spaces !level) (term_to_string (ctx_condition eng pc))
                 if not SymbEval.simplify_cond then
                     // version 1: no simplification whatsoever (inefficient, but useful for debugging)
