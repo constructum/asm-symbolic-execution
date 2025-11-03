@@ -31,7 +31,7 @@ let eval_name name S = interpretation S name
 
 let eval_quantifier (q_kind, v, t_set, t_cond) (S, env) =
     match t_set (S, env) with
-    |   SET xs ->
+    |   SET (_, xs) ->
             let eval_cond x = (t_cond (S, add_binding env (v, x)) = BOOL true)
             match q_kind with
             |   Forall -> if Set.forall eval_cond xs then BOOL true else BOOL false
@@ -41,7 +41,7 @@ let eval_quantifier (q_kind, v, t_set, t_cond) (S, env) =
 
 let eval_domain ty S =
     match enum_finite_type ty S with
-    |   Some finset -> SET finset
+    |   Some finset -> SET (Signature.main_type_of ty, finset)
     |   None -> failwith (sprintf "Eval.eval_term: domain of type '%s' is not enumerable" (ty |> Signature.type_to_string));
 
 //--------------------------------------------------------------------
@@ -72,7 +72,7 @@ let rec iterate R (S : STATE, env : ENV) =
 
 let forall_rule (v, ts, G, R) (S : STATE, env : ENV) : Updates.UPDATE_SET=
     match ts (S, env) with
-    |   SET xs ->
+    |   SET (_, xs) ->
             let eval_instance x =
                 let env' = add_binding env (v, x)
                 in if G (S, env') = BOOL true then R (S, env') else Set.empty

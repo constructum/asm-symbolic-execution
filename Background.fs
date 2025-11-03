@@ -13,7 +13,7 @@ type VALUE =
 | INT of int
 | STRING of string
 | CELL of string * VALUE list     // for values of user-defined inductive data types
-| SET of VALUE Set                // for sets of values
+| SET of TYPE * VALUE Set                // for sets of values
 //| TUPLE of VALUE list
 
 let TRUE = BOOL true
@@ -24,7 +24,7 @@ let rec value_to_string = function
 |   BOOL b -> if b then "true" else "false"
 |   INT i -> i.ToString ()
 |   STRING s -> "\"" + s + "\""
-|   SET s -> "{" + (s |> Set.toList |> List.map value_to_string |> String.concat ", ") + "}"
+|   SET (_, s) -> "{" + (s |> Set.toList |> List.map value_to_string |> String.concat ", ") + "}"
 |   CELL (tag, args) -> if List.isEmpty args then tag else tag + " (" + (args >>| value_to_string |> String.concat ", ") + ")"
 
 let rec type_of_value (sign : SIGNATURE) (x : VALUE) =
@@ -33,7 +33,7 @@ let rec type_of_value (sign : SIGNATURE) (x : VALUE) =
     |   BOOL b   -> Boolean
     |   INT i    -> Integer
     |   STRING s -> String
-    |   SET xs    -> if Set.isEmpty xs then failwith "type_of_value: SET: empty_set" else Powerset (type_of_value sign (Set.minElement xs))
+    |   SET (ty, _) -> Powerset ty   
     |   CELL (tag, _) -> let (_, ran) = fct_type tag sign in ran
 
 //--------------------------------------------------------------------
@@ -120,7 +120,7 @@ let _iff = function
 | _ -> UNDEF
 
 let set_interval = function
-| [ INT a; INT b; INT step ] -> SET (Set.map (fun x -> INT x) (Set.ofSeq [a .. step .. b]))
+| [ INT a; INT b; INT step ] -> SET (Integer, Set.map (fun x -> INT x) (Set.ofSeq [a .. step .. b]))
 | _ -> UNDEF
 
 

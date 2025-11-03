@@ -100,7 +100,7 @@ let extend_with_carrier_sets (sign : SIGNATURE, S : STATE) : STATE =
         match Map.tryFind tyname (S._static) with
         |   Some f ->
                 match f [] with
-                |   SET elems -> { S with _carrier_sets = Map.add tyname (Some (Set elems)) S._carrier_sets }
+                |   SET (_, elems) -> { S with _carrier_sets = Map.add tyname (Some (Set elems)) S._carrier_sets }
                 |   _ -> failwith (sprintf "State.extend_with_carrier_set: subset domain '%s' domain must be defined by specifying a finite set" tyname)
         |   None -> failwith (sprintf "State.extend_with_carrier_set: subset domain '%s' declared, but not defined" tyname)
     let add_carrier_set S tyname =

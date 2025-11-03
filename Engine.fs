@@ -217,7 +217,7 @@ and convert_term (eng : ENGINE) (t : AST.TYPED_TERM) : TERM =
                                     raise ex
         CondTerm   = fun (_, (G, t1, t2)) -> CondTerm eng (G, t1, t2);
         VarTerm    = fun (ty, v) -> make_term_with_type eng (VarTerm' v) ty
-        QuantTerm  = fun (ty, (q_kind, v, t_set, t_cond)) -> fprintf stderr "QuantTerm type: %s" (Signature.type_to_string ty); QuantTerm eng (q_kind, v, t_set, t_cond);
+        QuantTerm  = fun (ty, (q_kind, v, t_set, t_cond)) -> QuantTerm eng (q_kind, v, t_set, t_cond);
         LetTerm    = fun (_, (v, t1, t2)) -> LetTerm eng (v, t1, t2);
         DomainTerm = fun (_, D) -> DomainTerm eng D;
     } t
@@ -917,7 +917,10 @@ and expand_term t (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : 
         LetTerm   = fun (v, t1, t2) (UM : UPDATE_MAP, env, pc) ->
                         let t1_val = t1 (UM, env, pc)
                         t2 (UM, add_binding env (v, t1_val, get_type t1_val), pc);
-        DomainTerm = fun dom (UM : UPDATE_MAP, env, pc) -> match State.enum_finite_type dom (initial_state_of eng) with Some xs -> Value eng (SET xs) | _ -> failwith (sprintf "Engine.expand_term: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
+        DomainTerm = fun dom (UM : UPDATE_MAP, env, pc) ->
+            match State.enum_finite_type dom (initial_state_of eng) with
+            |   Some xs -> Value eng (SET (Signature.main_type_of dom, xs))
+            |   _ -> failwith (sprintf "Engine.expand_term: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
     } t ((UM : UPDATE_MAP), (env : ENV), (pc : PATH_COND))
 
 and expand_quantifier (q_kind, v, t_set : UPDATE_MAP * ENV * PATH_COND -> TERM, t_cond : UPDATE_MAP * ENV * PATH_COND -> TERM)
@@ -928,15 +931,15 @@ and expand_quantifier (q_kind, v, t_set : UPDATE_MAP * ENV * PATH_COND -> TERM, 
         match t_set_type with
         |   Signature.Powerset tyname -> tyname
         |   _ -> failwith (sprintf "Engine.expand_quantifier: expected a set or domain type, %s found instead" (Signature.type_to_string t_set_type))
-    match get_term' eng t_set with
-    |   Value' (Background.SET xs) ->
+    match get_term' eng (s_eval_term t_set eng (UM, env, pc)) with
+    |   Value' (Background.SET (_, xs)) ->
             let eval_instance x = t_cond (UM, add_binding env (v, Value eng x, elem_type), pc)
             let t_conds = List.map eval_instance (Set.toList xs)
             match q_kind with
             |   AST.Forall -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_and eng (t_accum, t1)) (TRUE eng)  t_conds
             |   AST.Exist  -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_or  eng (t_accum, t1)) (FALSE eng) t_conds
             |   AST.ExistUnique -> failwith "Engine.expand_quantifier: 'ExistUnique' not implemented"
-    |   x -> failwith (sprintf "Engine.expand_quantifier: not a set (%A): %A v" t_set x)
+    |   x -> failwith (sprintf "Engine.expand_quantifier: not a set (%s)" (term_to_string eng t_set))
 
 and try_case_distinction_for_term_with_finite_range (eng : ENGINE) (UM : UPDATE_MAP, env, pc : PATH_COND) (f : FCT_ID) (ts0 : TERM list) : TERM =
     let generate_cond_term (t, cases : (VALUE * TERM) list) =
@@ -1127,7 +1130,10 @@ and s_eval_term_ (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PAT
         VarTerm    = fun v -> fun C (_, env, _) -> fst (get_env env v);
         QuantTerm  = fun (q_kind, v, t_set, t_cond) C (UM, env, pc) -> expand_quantifier (q_kind, v, t_set C, t_cond C) C (UM, env, pc);
         LetTerm    = fun (v, t1, t2) C (_, env, _) -> eval_let_term C (UM, env, pc) (v, t1, t2) 
-        DomainTerm = fun dom C (_, _, _) -> match State.enum_finite_type dom (initial_state_of C) with Some xs -> Value C (SET xs) | None -> failwith (sprintf "Engine.s_eval_term_: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
+        DomainTerm = fun dom C (_, _, _) ->
+            match State.enum_finite_type dom (initial_state_of C) with
+            |   Some xs -> Value C (SET (Signature.main_type_of dom, xs))
+            |   None -> failwith (sprintf "Engine.s_eval_term_: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
     } t eng (UM, env, pc)
 
 and s_eval_term (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
@@ -1295,7 +1301,7 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
 
     and eval_forall (v, ts, G, R) (UM, env, pc) =
         match get_term' eng (s_eval_term ts (UM, env, pc)) with
-        |   Value' (SET xs) ->
+        |   Value' (SET (_, xs)) ->
                 let eval_instance x =
                     let env' = let t_x = Value eng x in add_binding env (v, t_x, get_type t_x)
                     CondRule (s_eval_term G (UM, env', pc), s_eval_rule R (UM, env', pc), skipRule)
@@ -1340,7 +1346,7 @@ let rec reconvert_value (eng : ENGINE) x =
     |   BOOL b   -> Value eng x
     |   INT i    -> Value eng x
     |   STRING s -> Value eng x
-    |   SET fs   -> //AppTerm (FctName "asSet", ?????)
+    |   SET (_, fs) -> //AppTerm (FctName "asSet", ?????)
                     failwith "reconvert_value: SET not implemented yet"
     |   CELL (tag, args) -> AppTerm eng (get_fct_id eng tag, args >>| reconvert_value eng)
 

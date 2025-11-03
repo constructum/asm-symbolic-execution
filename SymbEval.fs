@@ -179,19 +179,22 @@ and expand_term t (S, env, C) =
         LetTerm   = fun (ty, (v, t1, t2)) (S, env, C) ->
                         let t1_val = t1 (S, env, C)
                         t2 (S, add_binding env (v, t1_val, get_type t1_val), C);
-        DomainTerm = fun (ty, dom) (S, env, C) -> match enum_finite_type dom S with Some xs -> Value' (ty, SET xs) | _ -> failwith (sprintf "SymbEval.expand_term: domain of type '%s' is not enumerable" (dom |> type_to_string))
+        DomainTerm = fun (ty, dom) (S, env, C) ->
+            match enum_finite_type dom S with
+            |   Some xs -> Value' (ty, SET (main_type_of dom, xs))
+            | _ -> failwith (sprintf "SymbEval.expand_term: domain of type '%s' is not enumerable" (dom |> type_to_string))
     } t (S, env, C)
 
 and expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C) : TYPED_TERM =
     match t_set (S, env, C) with
-    |   Value' (Powerset ty, SET xs) ->
+    |   Value' (Powerset ty, SET (_, xs)) ->
             let eval_instance x = t_cond (S, add_binding env (v, Value' (ty, x), ty), C)
             let t_conds = List.map eval_instance (Set.toList xs)
             match q_kind with
             |   Forall -> List.fold (fun (t_accum : TYPED_TERM) -> fun (t1 : TYPED_TERM) -> s_and (t_accum, t1)) (Value' (Boolean, BOOL true))  t_conds
             |   Exist  -> List.fold (fun (t_accum : TYPED_TERM) -> fun (t1 : TYPED_TERM) -> s_or  (t_accum, t1)) (Value' (Boolean, BOOL false)) t_conds
             |   ExistUnique -> failwith "SymbEval.expand_quantifier: 'ExistUnique' not implemented"
-    |   Value' (_, SET xs) -> failwith (sprintf "SymbEval.forall_rule: this should not happen")
+    |   Value' (_, SET (_, xs)) -> failwith (sprintf "SymbEval.forall_rule: this should not happen")
     |   x -> failwith (sprintf "SymbEval.expand_quantifier: not a set (%A): %A v" t_set x)
 
 and try_case_distinction_for_term_with_finite_range ty (S : S_STATE, env : ENV, C : CONTEXT) (f : FCT_NAME) (ts0 : TYPED_TERM list) : TYPED_TERM =
@@ -369,7 +372,10 @@ and s_eval_term_ (t : TYPED_TERM) ((S, env, C) : S_STATE * ENV * CONTEXT) =
         VarTerm    = fun (ty, v) -> fun (S, env, _) -> fst (get_env env v);
         QuantTerm  = fun (ty, (q_kind, v, t_set, t_cond)) (S, env, C) -> expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C);
         LetTerm    = fun (ty, (v, t1, t2)) -> fun (S, env, _) -> eval_let_term (S, env, C) (v, t1, t2) 
-        DomainTerm = fun (ty, dom) -> fun (S, env, C) -> match enum_finite_type dom S with Some xs -> Value' (ty, SET xs) | None -> failwith (sprintf "SymbEval.s_eval_term_: domain of type '%s' is not enumerable" (dom |> type_to_string))
+        DomainTerm = fun (ty, dom) -> fun (S, env, C) ->
+            match enum_finite_type dom S with
+            |   Some xs -> Value' (ty, SET (Signature.main_type_of dom, xs))
+            |   None -> failwith (sprintf "SymbEval.s_eval_term_: domain of type '%s' is not enumerable" (dom |> type_to_string))
     } t (S, env, C)
 
 and s_eval_term (t : TYPED_TERM) (S : S_STATE, env : ENV, C : CONTEXT) : TYPED_TERM =
@@ -528,13 +534,13 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
 
     and eval_forall (v, ts, G, R) (S, env, C) =
         match s_eval_term ts (S, env, C) with
-        |   Value' (Powerset ty, SET xs) ->
+        |   Value' (Powerset ty, SET (_, xs)) ->
                 let eval_instance x =
                     let env' = add_binding env (v, Value' (ty, x), ty)
                     CondRule (s_eval_term G (S, env', C), s_eval_rule R (S, env', C), skipRule)
                 let Rs = List.map (fun x -> eval_instance x) (Set.toList xs)
                 s_eval_rule (ParRule Rs) (S, env, C)
-        |   Value' (_, SET xs) -> failwith (sprintf "SymbEval.forall_rule: this should not happen")
+        |   Value' (_, SET _) -> failwith (sprintf "SymbEval.forall_rule: this should not happen")
         |   x -> failwith (sprintf "SymbEval.forall_rule: not a set (%A): %A v" ts x)
 
     and eval_macro_rule_call (r, args) (S, env, C) =
@@ -572,7 +578,7 @@ let rec reconvert_value sign x =
     |   BOOL b   -> AppTerm' (Boolean, (BoolConst b, []))
     |   INT i    -> AppTerm' (Integer, (IntConst i, []))
     |   STRING s -> AppTerm' (String, (StringConst s, []))
-    |   SET fs   -> //AppTerm (FctName "asSet", ?????)
+    |   SET (_, _) -> //AppTerm (FctName "asSet", ?????)
                     failwith "reconvert_value: SET not implemented yet"
     |   CELL (tag, args) -> AppTerm' (type_of_value sign x, (FctName tag, args >>| reconvert_value sign))
 

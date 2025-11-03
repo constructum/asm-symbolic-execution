@@ -345,9 +345,10 @@ let precedence fct_name (sign : SIGNATURE) =
 
 //--------------------------------------------------------------------
 
-let main_type = function
-|   Subset (_, ty) -> ty
-|   ty -> ty
+let main_type_of ty =
+    match ty with
+    |   Subset (_, main_type) -> main_type
+    |   _ -> ty
 
 //--------------------------------------------------------------------
 
