@@ -83,7 +83,7 @@ and TERM' =
 |   Initial'    of (FCT_ID * VALUE list)    // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
 |   AppTerm'    of (FCT_ID * TERM list)
 |   CondTerm'   of (TERM * TERM * TERM)
-|   VarTerm'    of (string)
+|   VarTerm'    of (string * Signature.TYPE)
 |   QuantTerm'  of (AST.QUANT_KIND * string * TERM * TERM)
 |   LetTerm'    of (string * TERM * TERM)
 |   DomainTerm' of Signature.TYPE                  // AsmetaL construct: finite type (e.g. enum, abstract, subsetof) used as finite set
@@ -141,19 +141,20 @@ and inline fct_name eng fct_id = let (FctName name) = fst (get_function' eng fct
 and inline fct_kind eng fct_id = (snd (get_function' eng fct_id)).fct_kind
 and inline fct_interpretation eng fct_id = (snd (get_function' eng fct_id)).fct_interpretation
 
-and inline make_term_with_opt_type (Engine eid) (t' : TERM') (opt_ty : Signature.TYPE option) : TERM =
-    let e = engines.[eid]
-    let term_id = e.terms |> count
-    e.terms |> add (
-        t', {
-            term_id = term_id;
-            term_type = match opt_ty with None -> compute_type (Engine eid) t' | Some ty -> ty;
-            smt_expr = ref None;
-            initial_state_eval_res = ref None
-        }) |> Term
-
-and inline make_term_with_type C (t' : TERM') ty : TERM = make_term_with_opt_type C t' (Some ty)
-and inline make_term C (t' : TERM') : TERM              = make_term_with_opt_type C t' None
+and inline get_term (eng as Engine eid : ENGINE) (t' : TERM') : TERM =
+    match IndMap.try_get_index t' engines.[eid].terms with
+    |   Some tid ->
+            Term tid
+    |   None ->
+            let e = engines.[eid]
+            let tid = e.terms |> count
+            let attrs = {
+                term_id    = tid;
+                term_type  = compute_type eng t';
+                smt_expr   = ref None;
+                initial_state_eval_res = ref None
+            }
+            e.terms |> add (t', attrs) |> Term
 
 and inline get_term'_attrs (Engine eid) (Term tid) = engines.[eid].terms |> get tid
 and inline get_term' (Engine eid) (Term tid) = engines.[eid].terms |> get_obj tid
@@ -166,7 +167,7 @@ and compute_type (eng as Engine eid) (t' : TERM') : Signature.TYPE =
     |   Initial' (f, xs) -> let f_name = fct_name eng f in Signature.match_fct_type f_name (xs >>| Background.type_of_value sign) (Signature.fct_types f_name sign)
     |   AppTerm' (f, ts) -> let f_name = fct_name eng f in Signature.match_fct_type f_name (ts >>| get_type) (Signature.fct_types f_name sign)
     |   CondTerm' (G, t1, t2) -> if get_type t1 = get_type t2 then get_type t1 else failwith "compute_type: types of branches of conditional term do not match"
-    |   VarTerm' v -> failwith (sprintf "compute_type: variable '%s' does not have a type" v)
+    |   VarTerm' (v, ty) -> ty
     |   QuantTerm' (_, _, t_set, _) -> Signature.Boolean
     |   LetTerm' (_, t1, t2) -> get_type t2
     |   DomainTerm' tyname -> Signature.Powerset tyname
@@ -183,14 +184,14 @@ and inline set_smt_expr (Engine eid) (t as Term tid : TERM) (smt_expr : SmtInter
 and inline initial_state_eval_res (Engine eid) (t as Term tid : TERM) : TERM option ref =
     (engines.[eid].terms |> get_attrs tid).initial_state_eval_res
 
-and inline Value eng x = make_term eng (Value' x)
-and inline Initial eng (f, xs) = make_term eng (Initial' (f, xs))
-and inline AppTerm eng (f, ts) = make_term eng (AppTerm' (f, ts))
-and inline CondTerm eng (G, t1, t2) = make_term eng (CondTerm' (G, t1, t2))
-and inline VarTerm eng v = make_term eng (VarTerm' v)
-and inline QuantTerm eng (q_kind, v, t_set, t_cond) = make_term eng (QuantTerm' (q_kind, v, t_set, t_cond))
-and inline LetTerm eng (x, t1, t2) = make_term eng (LetTerm' (x, t1, t2))
-and inline DomainTerm eng tyname = make_term eng (DomainTerm' tyname)    
+and inline Value eng x = get_term eng (Value' x)
+and inline Initial eng (f, xs) = get_term eng (Initial' (f, xs))
+and inline AppTerm eng (f, ts) = get_term eng (AppTerm' (f, ts))
+and inline CondTerm eng (G, t1, t2) = get_term eng (CondTerm' (G, t1, t2))
+and inline VarTerm eng v = get_term eng (VarTerm' v)
+and inline QuantTerm eng (q_kind, v, t_set, t_cond) = get_term eng (QuantTerm' (q_kind, v, t_set, t_cond))
+and inline LetTerm eng (x, t1, t2) = get_term eng (LetTerm' (x, t1, t2))
+and inline DomainTerm eng tyname = get_term eng (DomainTerm' tyname)
 and inline TRUE (Engine eid) = !engines.[eid].TRUE_ |> Option.get
 and inline FALSE (Engine eid) = !engines.[eid].FALSE_ |> Option.get
 and inline AND (Engine eid) = !engines.[eid].AND_ |> Option.get
@@ -204,10 +205,10 @@ and convert_term (eng : ENGINE) (t : AST.TYPED_TERM) : TERM =
         Initial    = fun (_, (f, xs)) -> Initial eng (get_fct_id eng f, xs);
         AppTerm    = fun (ty, (f, ts)) ->
                         match f with
-                        |   Signature.UndefConst    -> make_term_with_type eng (Value' UNDEF) ty
-                        |   Signature.BoolConst b   -> make_term_with_type eng (Value' (BOOL b)) ty
-                        |   Signature.IntConst i    -> make_term_with_type eng (Value' (INT i)) ty
-                        |   Signature.StringConst s -> make_term_with_type eng (Value' (STRING s)) ty
+                        |   Signature.UndefConst    -> Value eng UNDEF
+                        |   Signature.BoolConst b   -> Value eng (BOOL b)
+                        |   Signature.IntConst i    -> Value eng (INT i)
+                        |   Signature.StringConst s -> Value eng (STRING s)
                         |   Signature.FctName f ->
                                 let f_id = get_fct_id eng f
                                 try
@@ -216,7 +217,7 @@ and convert_term (eng : ENGINE) (t : AST.TYPED_TERM) : TERM =
                                     fprintf stderr "convert_term: in term %A\n" (AppTerm eng (f_id, ts))
                                     raise ex
         CondTerm   = fun (_, (G, t1, t2)) -> CondTerm eng (G, t1, t2);
-        VarTerm    = fun (ty, v) -> make_term_with_type eng (VarTerm' v) ty
+        VarTerm    = fun (ty, v) -> VarTerm eng (v, ty)
         QuantTerm  = fun (ty, (q_kind, v, t_set, t_cond)) -> QuantTerm eng (q_kind, v, t_set, t_cond);
         LetTerm    = fun (_, (v, t1, t2)) -> LetTerm eng (v, t1, t2);
         DomainTerm = fun (_, D) -> DomainTerm eng D;
@@ -389,7 +390,7 @@ type TERM_INDUCTION<'fct_id, 'term> = {
     Initial    : ('fct_id * VALUE list) -> 'term;
     AppTerm    : ('fct_id * 'term list) -> 'term;
     CondTerm   : ('term * 'term * 'term) -> 'term;
-    VarTerm    : (string) -> 'term;
+    VarTerm    : (string * Signature.TYPE) -> 'term;
     QuantTerm  : (AST.QUANT_KIND * string * 'term * 'term) -> 'term;
     LetTerm    : (string * 'term * 'term) -> 'term;
     DomainTerm : (Signature.TYPE) -> 'term;
@@ -401,7 +402,7 @@ let rec term_induction (eng: ENGINE) (fct_id : FCT_ID -> 'fct_id) (F : TERM_INDU
     |   Initial' (f, xs)      -> F.Initial (fct_id f, xs)
     |   AppTerm' (f, ts)      -> F.AppTerm (fct_id f, List.map (fun t -> term_ind t) ts)
     |   CondTerm' (G, t1, t2) -> F.CondTerm (term_ind G, term_ind t1, term_ind t2)
-    |   VarTerm' v            -> F.VarTerm v
+    |   VarTerm' (v, ty)      -> F.VarTerm (v, ty)
     |   QuantTerm' (q_kind, v, t_set, t_cond) -> F.QuantTerm (q_kind, v, term_ind t_set, term_ind t_cond)
     |   LetTerm' (x, t1, t2)  -> F.LetTerm (x, term_ind t1, term_ind t2)
     |   DomainTerm' tyname    -> F.DomainTerm tyname
@@ -476,7 +477,7 @@ let rec pp_term (eng : ENGINE) (t : TERM) =
         CondTerm = fun (G, t1, t2) -> blo0 [ str "if "; G; line_brk; str "then "; t1; line_brk; str "else "; t2; line_brk; str "endif" ];
         Value    = fun x -> str (value_to_string x);
         Initial  = fun (f, xs) -> pp_location_term "initial" (fct_name eng f, xs);
-        VarTerm = fun x -> str x;
+        VarTerm = fun (x, _) -> str x;
         QuantTerm = fun (q_kind, v, t_set, t_cond) ->
             blo0 [ str ("("^(AST.quant_kind_to_str q_kind)^" "); str v; str " in "; t_set; str " with "; t_cond; str ")" ];
         LetTerm = fun (v, t1, t2) -> blo0 [ str "let "; str v; str " = "; t1; line_brk; str "in "; t2; line_brk; str "endlet" ];
@@ -642,7 +643,7 @@ let replace_vars (eng : ENGINE) (env : ENV) (t : TERM) : TERM =
         Initial    = Initial eng
         AppTerm    = AppTerm eng
         CondTerm   = CondTerm eng
-        VarTerm    = fun v -> get_env env v |> fst
+        VarTerm    = fun (v, _) -> get_env env v |> fst
         QuantTerm  = QuantTerm eng
         LetTerm    = LetTerm eng
         DomainTerm = DomainTerm eng
@@ -912,7 +913,7 @@ and expand_term t (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : 
                     s_eval_term body eng (UM, env, pc)
             | _ -> AppTerm eng (f, ts >>| fun t -> t (UM, env, pc))
         CondTerm  = fun (G, t1, t2) (UM : UPDATE_MAP, env, pc) -> CondTerm eng (G (UM, env, pc), t1 (UM, env, pc), t2 (UM, env, pc));
-        VarTerm   = fun v           (UM : UPDATE_MAP, env, pc) -> fst (get_env env v);
+        VarTerm   = fun (v, _) (UM : UPDATE_MAP, env, pc) -> fst (get_env env v);
         QuantTerm = fun (q_kind, v, t_set, t_cond) (UM : UPDATE_MAP, env, pc) -> expand_quantifier (q_kind, v, t_set, t_cond) eng (UM, env, pc);
         LetTerm   = fun (v, t1, t2) (UM : UPDATE_MAP, env, pc) ->
                         let t1_val = t1 (UM, env, pc)
@@ -1046,33 +1047,33 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
             |   t1' ->
                 match get_term' eng (t2 eng (UM, env, pc)) with
                 |   Value' (BOOL true) -> TRUE eng
-                |   Value' (BOOL false) -> make_term eng t1'
-                |   t2' -> if t1' = t2' then make_term eng t1' else F [] [( fun _ _ -> make_term eng t1'); ( fun _ _ -> make_term eng t2')]
+                |   Value' (BOOL false) -> get_term eng t1'
+                |   t2' -> if t1' = t2' then get_term eng t1' else F [] [( fun _ _ -> get_term eng t1'); ( fun _ _ -> get_term eng t2')]
     |   "implies", [ t1; t2 ] ->
             match get_term' eng (t1 eng (UM, env, pc)) with
             |   Value' (BOOL false) -> TRUE eng
             |   t1' as Value' (BOOL true)  -> t2 eng (UM, env, pc)       // with_extended_path_cond t1' ( fun _ _ -> t2) (S, env, C)
             |   t1' ->
                 match get_term' eng (t2 eng (UM, env, pc)) with
-                |   Value' (BOOL false) -> s_not eng (make_term eng t1')
+                |   Value' (BOOL false) -> s_not eng (get_term eng t1')
                 |   Value' (BOOL true)  -> TRUE eng
-                |   t2' -> if t1' = t2' then TRUE eng else F [] [( fun _ _ -> make_term eng t1'); ( fun _ _ -> make_term eng t2')]
+                |   t2' -> if t1' = t2' then TRUE eng else F [] [( fun _ _ -> get_term eng t1'); ( fun _ _ -> get_term eng t2')]
     |   "iff", [ t1; t2 ] ->
         match get_term' eng (t1 eng (UM, env, pc)) with
         |   Value' (BOOL false) -> s_not eng (t2 eng (UM, env, pc))
         |   Value' (BOOL true)  -> t2 eng (UM, env, pc)
         |   t1' ->
             match get_term' eng (t2 eng (UM, env, pc)) with
-            |   Value' (BOOL false) -> s_not eng (make_term eng t1')
-            |   Value' (BOOL true)  -> make_term eng t1'
-            |   t2' -> if t1' = t2' then TRUE eng else F [] [( fun _ _ -> make_term eng t1'); ( fun _ _ -> make_term eng t2')]
+            |   Value' (BOOL false) -> s_not eng (get_term eng t1')
+            |   Value' (BOOL true)  -> get_term eng t1'
+            |   t2' -> if t1' = t2' then TRUE eng else F [] [( fun _ _ -> get_term eng t1'); ( fun _ _ -> get_term eng t2')]
     |   "=", [ t1; t2 ] ->
         match get_term' eng (t1 eng (UM, env, pc)) with
         |   t1' as Value' x1 ->
             match get_term' eng (t2 eng (UM, env, pc)) with
             |   Value' x2 -> Value eng (BOOL (x1 = x2))
-            |   t2' -> F [] [( fun _ _ -> make_term eng t1');  fun _ _ -> make_term eng t2']
-        |   t1' -> F [] [( fun _ _ -> make_term eng t1');  fun _ _ -> t2 eng (UM, env, pc)]
+            |   t2' -> F [] [( fun _ _ -> get_term eng t1');  fun _ _ -> get_term eng t2']
+        |   t1' -> F [] [( fun _ _ -> get_term eng t1');  fun _ _ -> t2 eng (UM, env, pc)]
     |   _ ->
     F [] ts
 
@@ -1092,7 +1093,7 @@ and eval_cond_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (
                  let t2_G'     = t2 eng (UM, env, add_cond G' (add_cond G2 pc))
                  let t2_not_G' = t2 eng (UM, env, add_cond (s_not eng G') (add_cond G2 pc))
                  s_eval_term (CondTerm eng (G', CondTerm eng (G1, t1_G', t2_G'), CondTerm eng (G2, t1_not_G', t2_not_G'))) eng (UM, env, pc)
-    |   G ->    let G = make_term eng G
+    |   G ->    let G = get_term eng G
                 if (!trace > 1)
                 then fprintfn stderr "\n%sctx_condition: %s" (spaces !level) (term_to_string (ctx_condition eng pc))
                 if not SymbEval.simplify_cond then
@@ -1127,7 +1128,7 @@ and s_eval_term_ (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PAT
         Initial    = fun (f, xs) C _ -> Initial C (f, xs);
         AppTerm    = fun (f, ts) C (UM, env, pc) -> eval_app_term C (UM, env, pc) (f, ts)
         CondTerm   = fun (G, t1, t2) C (UM, env, pc) -> eval_cond_term C (UM, env, pc) (G, t1, t2);
-        VarTerm    = fun v -> fun C (_, env, _) -> fst (get_env env v);
+        VarTerm    = fun (v, _) -> fun C (_, env, _) -> fst (get_env env v);
         QuantTerm  = fun (q_kind, v, t_set, t_cond) C (UM, env, pc) -> expand_quantifier (q_kind, v, t_set C, t_cond C) C (UM, env, pc);
         LetTerm    = fun (v, t1, t2) C (_, env, _) -> eval_let_term C (UM, env, pc) (v, t1, t2) 
         DomainTerm = fun dom C (_, _, _) ->
