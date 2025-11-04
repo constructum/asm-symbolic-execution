@@ -200,6 +200,7 @@ let CLI_with_ex(args) =
                 write $"\n--- number of generated types (type table size): {(Engine.get_engine' C).types |> IndMap.count}\n" 
                 write $"--- number of generated terms (term table size): {(Engine.get_engine' C).terms |> IndMap.count}\n" 
                 write $"--- number of generated rules (rule table size): {(Engine.get_engine' C).rules |> IndMap.count}\n" 
+                write $"--- number of generated symbolic update sets (s_update_set table size): {(Engine.get_engine' C).supds |> IndMap.count}\n" 
                 // fprintf stderr "%s" (DAG.show_fct_tables C)  // for debugging purposes   Count
                 ()
         else  // all other options

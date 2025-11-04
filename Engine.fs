@@ -64,6 +64,7 @@ and ENGINE' = {
     types           : IndMap<TYPE', TYPE_ATTRS>
     terms           : IndMap<TERM', TERM_ATTRS>
     rules           : IndMap<RULE', RULE_ATTRS>
+    supds           : IndMap<S_UPDATE_SET', S_UPDATE_SET_ATTRS>
 
     TRUE_           : TERM option ref
     FALSE_          : TERM option ref
@@ -133,8 +134,12 @@ and TERM_INDUCTION<'fct_id, 'term> = {
     DomainTerm : (TYPE) -> 'term;
 }
 
+and S_UPDATE_SET' = Set<(FCT_ID * VALUE list) * TERM>
+and S_UPDATE_SET  = S_UpdateSet of int
+and S_UPDATE_SET_ATTRS = { s_update_set_id : int }
+
 and RULE' =
-|   S_Updates' of Set<(FCT_ID * VALUE list) * TERM>  //Map<FCT_NAME * VALUE list, TERM>   // used for special purposes (symbolic evaluation): "partially interpreted rules", not actual rules of the language
+|   S_Updates' of S_UPDATE_SET     //Map<FCT_NAME * VALUE list, TERM>   // used for special purposes (symbolic evaluation): "partially interpreted rules", not actual rules of the language
 |   UpdateRule' of (FCT_ID * TERM list) * TERM
 |   CondRule' of TERM * RULE * RULE
 |   ParRule' of RULE list
@@ -149,7 +154,7 @@ and RULE = Rule of int
 and RULE_ATTRS = unit
 
 and RULE_INDUCTION<'term, 'rule> = {
-    S_Updates : Set<(FCT_ID * VALUE list) * TERM> -> 'rule;     // what not ""... * 'term>" ?
+    S_Updates : S_UPDATE_SET -> 'rule;
     UpdateRule : (FCT_ID * 'term list) * 'term -> 'rule;
     CondRule : 'term * 'rule * 'rule -> 'rule;
     ParRule : 'rule list -> 'rule;
@@ -171,7 +176,7 @@ and UPDATE_MAP = Map<FCT_ID, Map<VALUE list, TERM>>
 
 and ENV = Map<string, TERM * TYPE>
 
-and PATH_COND = Set<TERM> // * S_UPDATE_MAP
+and PATH_COND = Set<TERM>
 
 and ErrorDetails = ENGINE * string * ErrorDetails'
 
@@ -503,6 +508,43 @@ and convert_term (eng : ENGINE) (t : AST.TYPED_TERM) : TERM =
         DomainTerm = fun (_, D) -> DomainTerm eng (convert_type eng D);
     } t
 
+and inline get_s_update_set (eng as Engine eid : ENGINE) (us' : S_UPDATE_SET') : S_UPDATE_SET =
+    match IndMap.try_get_index us' engines.[eid].supds with
+    |   Some uid ->
+            S_UpdateSet uid
+    |   None ->
+            let e = engines.[eid]
+            let uid = e.supds |> count
+            let attrs : S_UPDATE_SET_ATTRS = {
+                s_update_set_id = uid
+            }
+            e.supds |> add (us', attrs) |> S_UpdateSet
+
+and inline get_s_update_set' (Engine eid) (S_UpdateSet uid : S_UPDATE_SET) : S_UPDATE_SET' =
+    engines.[eid].supds |> get uid |> fst
+
+and inline s_update_set_empty (eng as Engine eid) : S_UPDATE_SET =
+    get_s_update_set eng Set.empty
+
+and inline s_update_set_is_empty (eng as Engine eid) (S_UpdateSet uid : S_UPDATE_SET) : bool =
+    engines.[eid].supds |> get uid |> fst |> Set.isEmpty
+
+and inline s_update_set_union (eng as Engine eid) (S_UpdateSet uid1 : S_UPDATE_SET) (S_UpdateSet uid2 : S_UPDATE_SET) : S_UPDATE_SET =
+    let supds = engines.[eid].supds
+    let us1, _ = supds |> get uid1
+    let us2, _ = supds |> get uid2
+    get_s_update_set eng (Set.union us1 us2)
+
+and inline s_update_set_seq_merge_2 (eng as Engine eid) (S_UpdateSet uid1 : S_UPDATE_SET) (S_UpdateSet uid2 : S_UPDATE_SET) : S_UPDATE_SET =
+    let supds = engines.[eid].supds
+    let us1, _ = supds |> get uid1
+    let us2, _ = supds |> get uid2
+    get_s_update_set eng (seq_merge_2 eng us1 us2)
+
+and inline s_update_set_to_list (Engine eid) (S_UpdateSet uid : S_UPDATE_SET) : list<(FCT_ID * VALUE list) * TERM> =
+    let us', _ = engines.[eid].supds |> get uid
+    List.ofSeq us'
+
 and inline get_rule_def_id (Engine eid) (name : string) : RULE_DEF_ID =
     match engines.[eid].rule_defs |> try_get_index (RuleName name) with
     | Some rule_def_id -> RuleDefId rule_def_id
@@ -518,7 +560,8 @@ and inline get_rule' (Engine eid) (Rule rid) = engines.[eid].rules |> get rid |>
 
 and inline get_rule (eng as Engine eid : ENGINE) (R' : RULE') : RULE =
     match IndMap.try_get_index R' engines.[eid].rules with
-    |   Some rid -> Rule rid
+    |   Some rid ->
+            Rule rid
     |   None ->
             let e = engines.[eid]
             let rid = e.rules |> count
@@ -544,7 +587,7 @@ and convert_rule (eng : ENGINE) (R : AST.RULE) : RULE =
         LetRule    = fun (v, t1, R') -> LetRule eng (v, t1, R');
         MacroRuleCall = fun (r_name, args) -> MacroRuleCall eng (get_rule_def_id eng r_name, args);
         ForallRule = fun (v, t_set, G, R') -> ForallRule eng (v, t_set, G, R');
-        S_Updates  = fun upds -> S_Updates eng (Set.map (fun ((f, xs), t_rhs) -> (get_fct_id eng f, xs), convert_term eng t_rhs) upds)
+        S_Updates  = fun upds -> S_Updates eng (get_s_update_set eng (Set.map (fun ((f, xs), t_rhs) -> (get_fct_id eng f, xs), convert_term eng t_rhs) upds))
     } R
 
 and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def_db : AST.MACRO_DB, rule_def_db : AST.RULES_DB, invariants : Map<string, AST.TYPED_TERM>, smt_ctx : SmtInterface.SMT_CONTEXT) : ENGINE =
@@ -558,6 +601,7 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
         types           = newIndMap<TYPE', TYPE_ATTRS>()
         terms           = newIndMap<TERM', TERM_ATTRS>()
         rules           = newIndMap<RULE', RULE_ATTRS>()
+        supds           = newIndMap<S_UPDATE_SET', S_UPDATE_SET_ATTRS>()
         TRUE_           = ref None
         FALSE_          = ref None
         AND_            = ref None
@@ -752,7 +796,7 @@ and pp_rule (eng : ENGINE)  (R : RULE) =
     rule_induction eng pp_term {
         S_Updates = fun U ->
                         let pp_elem ((f, xs), t) = blo0 [ str (fct_name eng f); str " "; str "("; blo0 (pp_list [str",";brk 1] (xs >>| fun x -> str (value_to_string x))); str ") := "; (pp_term t) ]
-                        let L = Set.toList U >>| pp_elem
+                        let L = s_update_set_to_list eng U >>| pp_elem
                         blo0 [ str "{"; line_brk; blo2 ( pp_list [line_brk] L); line_brk; str "}" ];
         UpdateRule = fun ((f, ts), t) -> blo0 [ pp_app_term (Signature.FctName (fct_name eng f), ts); str " := "; t ];
         CondRule = fun (G, R1, R2) -> blo0 ( str "if " :: G:: str " then " :: line_brk :: blo2 [ R1 ] :: line_brk ::
@@ -1420,7 +1464,7 @@ let rec try_case_distinction_for_update_with_finite_domain
         mk_cond_rule cases
     let make_case_distinction (t : TERM) (elem_rule_pairs : (VALUE * RULE) list) =
         if List.isEmpty elem_rule_pairs
-        then failwith (sprintf "SymbEval.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string eng t))
+        then failwith (sprintf "Engine.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string eng t))
         generate_cond_rule (t, elem_rule_pairs)
     let rec F past_args = function
         |   [] -> UpdateRule ((f, List.rev past_args), t_rhs)
@@ -1442,7 +1486,9 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
     let (ParRule, SeqRule, IterRule, skipRule) = (ParRule eng, SeqRule eng, IterRule eng, skipRule eng)
     let s_eval_term t = s_eval_term t eng
     let s_eval_rule R = s_eval_rule R eng
-    let get_type, with_extended_path_cond = get_type eng, with_extended_path_cond eng
+    let get_type, get_s_update_set, get_s_update_set', s_update_set_union, s_update_set_empty =
+        get_type eng, get_s_update_set eng, get_s_update_set' eng, s_update_set_union eng, s_update_set_empty eng
+    let with_extended_path_cond = with_extended_path_cond eng
     let rule_to_string, term_to_string, pp_rule = rule_to_string eng, term_to_string eng, pp_rule eng
 
     if (!trace > 1)
@@ -1463,14 +1509,14 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
                     |   Initial' _      -> F (t1 :: ts_past) ts_fut
                     |   CondTerm' (G1, t11, t12) ->
                            s_eval_rule (CondRule (G1, F ts_past (t11 :: ts_fut), F ts_past (t12 :: ts_fut))) (UM, env, pc)
-                    |   QuantTerm' _          -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
-                    |   LetTerm' _            -> failwith "SymbEval.eval_app_term: LetTerm not implemented"
+                    |   QuantTerm' _    -> failwith "Engine.eval_app_term: QuantTerm not implemented"
+                    |   LetTerm' _      -> failwith "Engine.eval_app_term: LetTerm not implemented"
                     |   VarTerm' _      -> F (s_eval_term_ t1 eng (UM, env, pc) :: ts_past) ts_fut
                     |   AppTerm' _      -> F (s_eval_term_ t1 eng (UM, env, pc) :: ts_past) ts_fut
-                    |   DomainTerm' _   -> failwith "SymbEval.eval_app_term: DomainTerm not implemented"
+                    |   DomainTerm' _   -> failwith "Engine.eval_app_term: DomainTerm not implemented"
                 |   [] ->
                     match get_values eng (ts_past >>| fun t -> s_eval_term t (UM, env, pc)) with
-                    |   Some xs -> S_Updates (Set.singleton ((f, List.rev xs), s_eval_term t_rhs (UM, env, pc)));
+                    |   Some xs -> S_Updates (get_s_update_set (Set.singleton ((f, List.rev xs), s_eval_term t_rhs (UM, env, pc))))
                     |   None -> try_case_distinction_for_update_with_finite_domain eng (UM, env, pc) f ts t_rhs
             F [] ts
 
@@ -1495,7 +1541,7 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
 
     let rec eval_par Rs (UM, env, pc) =
         match Rs with
-        |   []          -> S_Updates Set.empty
+        |   []          -> S_Updates s_update_set_empty
         |   [R1]        -> s_eval_rule R1 (UM, env, pc)
         |   R1 :: Rs    -> List.fold (fun R1 R2 -> eval_binary_par R1 R2 (UM, env, pc)) R1 Rs
 
@@ -1504,7 +1550,7 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
         |   S_Updates' U1 ->
                 match get_rule' eng (s_eval_rule R2 (UM, env, pc)) with
                 |   S_Updates' U2 ->
-                        S_Updates (Set.union U1 U2)
+                        S_Updates (s_update_set_union U1 U2)
                 |   CondRule' (G2, R21, R22) ->
                         s_eval_rule (CondRule (G2, ParRule [ S_Updates U1; R21 ], ParRule [ S_Updates U1; R22 ])) (UM, env, pc)
                 |   _ -> failwith (sprintf "eval_binary_par: %s" (rule_to_string R2))
@@ -1514,7 +1560,7 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
 
     and eval_seq Rs (UM, env, pc) =
         match Rs with
-        |   []          -> S_Updates Set.empty
+        |   []          -> S_Updates s_update_set_empty
         |   [R1]        -> s_eval_rule R1 (UM, env, pc)
         |   R1 :: Rs    -> List.fold (fun R1 R2 -> eval_binary_seq R1 R2 (UM, env, pc)) R1 Rs
 
@@ -1522,13 +1568,13 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
         match get_rule' eng (s_eval_rule R1 (UM, env, pc)) with
         |   S_Updates' U1 ->
                 let S' =
-                    try sequel_s_state eng UM U1
+                    try sequel_s_state eng UM (get_s_update_set' U1)
                     with Error (_, _, InconsistentUpdates (C, _, u1, u2, _)) ->
                             raise (Error (eng, "s_eval_rule.eval_binary_seq",
-                                InconsistentUpdates (C, Some (List.ofSeq pc), u1, u2, Some U1)))
+                                InconsistentUpdates (C, Some (List.ofSeq pc), u1, u2, Some (get_s_update_set' U1))))
                 match get_rule' eng (s_eval_rule R2 (S', env, pc)) with
                 |   S_Updates' U2 ->
-                        S_Updates (seq_merge_2 eng U1 U2)
+                        S_Updates (s_update_set_seq_merge_2 eng U1 U2)
                 |   CondRule' (G2, R21, R22) ->
                         s_eval_rule (CondRule (G2, SeqRule [ S_Updates U1; R21 ], SeqRule [ S_Updates U1; R22 ])) (UM, env, pc)
                 |   _ -> failwith (sprintf "eval_binary_seq: %s" (rule_to_string R2))
@@ -1539,8 +1585,8 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
     and eval_iter R (UM, env, pc) =
         match get_rule' eng (s_eval_rule R (UM, env, pc)) with
         |   S_Updates' U ->
-                if Set.isEmpty U
-                then S_Updates Set.empty
+                if s_update_set_is_empty eng U
+                then S_Updates s_update_set_empty
                 else s_eval_rule (SeqRule [ S_Updates U; IterRule R ]) (UM, env, pc)
         |   CondRule' (G, R1, R2) ->
                 //s_eval_rule (SeqRule [ CondRule (G, R1, R2); IterRule R ]) (UM, env, pc)
@@ -1560,7 +1606,7 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
                     CondRule (s_eval_term G (UM, env', pc), s_eval_rule R (UM, env', pc), skipRule)
                 let Rs = List.map (fun x -> eval_instance x) (Set.toList xs)
                 s_eval_rule (ParRule Rs) (UM, env, pc)
-        |   x -> failwith (sprintf "SymbEval.forall_rule: not a set (%A): %A v" ts x)
+        |   x -> failwith (sprintf "Engine.forall_rule: not a set (%A): %A v" ts x)
 
     and eval_macro_rule_call (r, args) (UM, env, pc) =
         let (formals, body) =
@@ -1625,7 +1671,7 @@ let reconvert_rule (eng : ENGINE) R =
         LetRule    = LetRule eng;
         MacroRuleCall = MacroRuleCall eng;
         ForallRule = ForallRule eng;
-        S_Updates  = fun upds -> ParRule eng (List.map (fun ((f, xs), t_rhs) -> UpdateRule eng ((f, xs >>| Value eng), reconvert_term eng t_rhs)) (Set.toList upds))
+        S_Updates  = fun upds -> ParRule eng (List.map (fun ((f, xs), t_rhs) -> UpdateRule eng ((f, xs >>| Value eng), reconvert_term eng t_rhs)) (s_update_set_to_list eng upds))
     } R
 
 //--------------------------------------------------------------------
@@ -1660,7 +1706,7 @@ let term_size eng =
 
 let rule_size eng =
     rule_induction eng (term_size eng) {
-        S_Updates = fun U -> Set.count U;   // not relevant, but define somehow to allow printing for debugging
+        S_Updates = fun U -> Set.count (get_s_update_set' eng U);   // not relevant, but define somehow to allow printing for debugging
         UpdateRule = fun ((f, ts), t) -> 1 + 1 + List.sum ts + t;
         CondRule = fun (G, R1, R2) -> 1 + G + R1 + R2;
         ParRule = fun Rs -> 1 + List.sum Rs;
@@ -1675,7 +1721,7 @@ let rule_size eng =
 // first element of pair returned is the number of S_Updates rules, i.e. paths in the decision tree
 let symbolic_execution (eng : ENGINE) (R_in : RULE) (steps : int) : int * RULE =
     if (!trace > 2) then fprintf stderr "symbolic_execution\n"
-    if (steps <= 0) then failwith "SymbEval.symbolic_execution: number of steps must be >= 1"
+    if (steps <= 0) then failwith "Engine.symbolic_execution: number of steps must be >= 1"
     //  if (!trace > 2) then fprintf stderr "---\n%s\n---\n" (Signature.signature_to_string (signature_of C))
     let R_in_n_times = [ for _ in 1..steps -> R_in ]
     let R_in' = SeqRule eng (R_in_n_times @ [ skipRule eng ])      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
@@ -1695,7 +1741,7 @@ let symbolic_execution_for_invariant_checking (eng : ENGINE) (opt_steps : int op
     if (!trace > 2) then fprintf stderr "symbolic_execution_for_invariant_checking\n"
     let with_extended_path_cond = with_extended_path_cond eng
     match opt_steps with
-    |   Some n -> if n < 0 then failwith "SymbEval.symbolic_execution_for_invariant_checking: number of steps must be >= 0"
+    |   Some n -> if n < 0 then failwith "Engine.symbolic_execution_for_invariant_checking: number of steps must be >= 0"
     |   None -> ()
     let UM0 = Map.empty
     let invs = Map.toList (invariants_of eng)
@@ -1747,7 +1793,7 @@ let symbolic_execution_for_invariant_checking (eng : ENGINE) (opt_steps : int op
                 with_extended_path_cond G           (fun _ _ -> traverse i (G::conditions) R1) (UM, env, pc)
                 with_extended_path_cond (s_not eng G) (fun _ _ -> traverse i ((s_not eng G)::conditions) R2) (UM, env, pc)
         |   S_Updates' updates    ->
-                check_invariants invs UM0 conditions updates
+                check_invariants invs UM0 conditions (get_s_update_set' eng updates)
         |   R -> failwith (sprintf "symbolic_execution_for_invariant_checking: there should be no such rule here: %s\n" (rule_to_string eng (get_rule eng R)))
     let state_header i = printf "\n=== state S_%d =====================================\n" i
     let rec F R_acc R_in i =
@@ -1758,5 +1804,5 @@ let symbolic_execution_for_invariant_checking (eng : ENGINE) (opt_steps : int op
         if (match opt_steps with Some n -> i < n | None -> true)
         then let R_acc = s_eval_rule (SeqRule ([ R_acc; R_in; skipRule ])) eng (UM0, Map.empty, Set.empty)
              F R_acc R_in (i+1)
-    F (S_Updates Set.empty) (SeqRule ([ R_in; skipRule ])) 0
+    F (S_Updates (s_update_set_empty eng)) (SeqRule ([ R_in; skipRule ])) 0
     printf "\n=================================================\n"
