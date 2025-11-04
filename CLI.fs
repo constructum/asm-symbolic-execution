@@ -197,7 +197,8 @@ let CLI_with_ex(args) =
                 if !invcheck
                 then simple_exec (Engine.symbolic_execution_for_invariant_checking C !invcheck_steps) R_in
                 else exec_symbolic sign (fun (R : Engine.RULE) -> Engine.symbolic_execution C R (!steps)) R_in (Engine.pp_rule C, Engine.rule_size C)
-                write $"\n--- number of generated terms (term table size): {(Engine.get_engine' C).terms |> IndMap.count}\n" 
+                write $"\n--- number of generated types (types table size): {(Engine.get_engine' C).types |> IndMap.count}\n" 
+                write $"--- number of generated terms (term table size): {(Engine.get_engine' C).terms |> IndMap.count}\n" 
                 write $"--- number of generated rules (rule table size): {(Engine.get_engine' C).rules |> IndMap.count}\n" 
                 // fprintf stderr "%s" (DAG.show_fct_tables C)  // for debugging purposes   Count
                 ()
@@ -228,6 +229,7 @@ let CLI(args) =
         |   ex as Parser.Error (fct, reg, err)  -> writeln_err ("\n" + Parser.error_msg (fct, reg, err)); -1
         |   ex as AsmetaL.Error (fct, reg, err) -> writeln_err ("\n" + AsmetaL.error_msg (fct, reg, err)); -1
         |   ex as SymbUpdates.Error (mdl, fct, err) -> writeln_err ("\n" + SymbUpdates.error_msg (mdl, fct, err)); -1
+        |   ex as Engine.Error (eng, fct, err) -> writeln_err ("\n" + Engine.error_msg (eng, fct, err)); -1
         |   ex as Failure s -> writeln_err $"\nexception:\n{s}"; -1
 
 

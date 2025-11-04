@@ -34,9 +34,9 @@ and FUNCTION' =
     FctName of string
 
 and FUNCTION_ATTRS = {
-    fct_id   : int;
-    fct_kind : Signature.FCT_KIND;
-    // fct_type : (Signature.TYPE list * Signature.TYPE);   // !!! to be implemented together with monomorphization
+    fct_id    : int;
+    fct_kind  : Signature.FCT_KIND;
+    fct_types : (TYPE list * TYPE) list;   // !!! to be implemented together with monomorphization
     fct_interpretation : FUNCTION_INTERPRETATION
 }
 
@@ -48,7 +48,7 @@ and RULE_DEF' =
 
 and RULE_DEF_ATTRS = {
     rule_def_id   : int;
-    // rule_type : (Signature.TYPE list * Signature.TYPE);   // !!! to be implemented together with monomorphization
+    // rule_type : (TYPE list * TYPE);   // !!! to be implemented together with monomorphization
     rule_def  : (string list * RULE) option
 }
 and RULE_DEF_ID =
@@ -61,6 +61,7 @@ and ENGINE' = {
 
     functions       : IndMap<FUNCTION', FUNCTION_ATTRS>
     rule_defs       : IndMap<RULE_DEF', RULE_DEF_ATTRS>
+    types           : IndMap<TYPE', TYPE_ATTRS>
     terms           : IndMap<TERM', TERM_ATTRS>
     rules           : IndMap<RULE', RULE_ATTRS>
 
@@ -78,24 +79,58 @@ and ENGINE = Engine of int
 
 and ENGINES = ResizeArray<ENGINE'>
 
+and TYPE = Type of int
+
+and TYPE' =
+| Boolean'
+| Integer'
+| String'
+| Undef'
+| Rule'
+| TypeParam' of string
+| TypeCons' of string * TYPE list
+| Subset' of string * TYPE
+| Prod' of TYPE list
+| Seq' of TYPE
+| Powerset' of TYPE
+| Bag' of TYPE
+| Map' of TYPE * TYPE
+
+and TYPE_ATTRS = {
+    type_id : int
+    signature_type : Signature.TYPE
+    carrier_set : VALUE Set option
+}
+
 and TERM' =
 |   Value'      of (VALUE)                  // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
 |   Initial'    of (FCT_ID * VALUE list)    // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
 |   AppTerm'    of (FCT_ID * TERM list)
 |   CondTerm'   of (TERM * TERM * TERM)
-|   VarTerm'    of (string * Signature.TYPE)
+|   VarTerm'    of (string * TYPE)
 |   QuantTerm'  of (AST.QUANT_KIND * string * TERM * TERM)
 |   LetTerm'    of (string * TERM * TERM)
-|   DomainTerm' of Signature.TYPE                  // AsmetaL construct: finite type (e.g. enum, abstract, subsetof) used as finite set
+|   DomainTerm' of TYPE                  // AsmetaL construct: finite type (e.g. enum, abstract, subsetof) used as finite set
 //  | TupleTerm   of 'annotation * ('annotation ANN_TERM list)
 
 and TERM = Term of int
 
 and TERM_ATTRS = {
     term_id       : int
-    term_type     : Signature.TYPE
+    term_type     : TYPE
     smt_expr      : SmtInterface.SMT_EXPR option ref
     initial_state_eval_res : TERM option ref     // (symbolic) value of the term in the initial state, used also for static functions
+}
+
+and TERM_INDUCTION<'fct_id, 'term> = {
+    Value      : (VALUE) -> 'term;
+    Initial    : ('fct_id * VALUE list) -> 'term;
+    AppTerm    : ('fct_id * 'term list) -> 'term;
+    CondTerm   : ('term * 'term * 'term) -> 'term;
+    VarTerm    : (string * TYPE) -> 'term;
+    QuantTerm  : (AST.QUANT_KIND * string * 'term * 'term) -> 'term;
+    LetTerm    : (string * 'term * 'term) -> 'term;
+    DomainTerm : (TYPE) -> 'term;
 }
 
 and RULE' =
@@ -113,6 +148,18 @@ and RULE = Rule of int
 
 and RULE_ATTRS = unit
 
+and RULE_INDUCTION<'term, 'rule> = {
+    S_Updates : Set<(FCT_ID * VALUE list) * TERM> -> 'rule;     // what not ""... * 'term>" ?
+    UpdateRule : (FCT_ID * 'term list) * 'term -> 'rule;
+    CondRule : 'term * 'rule * 'rule -> 'rule;
+    ParRule : 'rule list -> 'rule;
+    SeqRule : 'rule list -> 'rule;
+    IterRule : 'rule -> 'rule;
+    LetRule : string * 'term * 'rule -> 'rule;
+    ForallRule : string * 'term * 'term * 'rule -> 'rule;
+    MacroRuleCall : RULE_DEF_ID * 'term list -> 'rule;     // Map<FCT_NAME * VALUE list, 'term> -> 'rule;
+}
+
 and FCT_DEF_DB = Map<Signature.FCT_NAME, string list * TERM>    // for function definitions
 and RULE_DEF_DB = Map<Signature.RULE_NAME, string list * RULE>     // for rule macros
 
@@ -122,14 +169,94 @@ and UPDATE = LOCATION * TERM
 and UPDATE_SET = Set<UPDATE>
 and UPDATE_MAP = Map<FCT_ID, Map<VALUE list, TERM>>
 
-and ENV = Map<string, TERM * Signature.TYPE>
+and ENV = Map<string, TERM * TYPE>
 
 and PATH_COND = Set<TERM> // * S_UPDATE_MAP
+
+and ErrorDetails = ENGINE * string * ErrorDetails'
+
+and ErrorDetails' =
+// type errors
+|   TypeMismatch of TYPE * TYPE
+|   FunctionCallTypeMismatch of (string * TYPE list * TYPE) * TYPE list
+|   TypeOfResultUnknown of string * TYPE list * TYPE
+|   NoMatchingFunctionType of string * TYPE list
+|   AmbiguousFunctionCall of string * TYPE list
+|   NotAFunctionName of string
+|   VariableAlreadyInUse of string
+|   UnknownVariable of string
+// runtime errors
+|   InconsistentUpdates of ENGINE * TERM list option * UPDATE * UPDATE * UPDATE_SET option
+
 
 let engines = new ENGINES()
 
 
-let rec inline get_fct_id (Engine eid) (name : string) : FCT_ID =
+exception Error of ErrorDetails
+
+let rec error_msg ((eng, fct_name, details) : ErrorDetails) =
+    let type_to_string, type_list_to_string = type_to_string eng, type_list_to_string eng
+    (sprintf "error in function Engine.%s:\n" fct_name) +
+    match details with
+    // type errors
+    |   TypeMismatch (ty, ty_sign) ->
+            sprintf "type mismatch: %s does not match %s" (ty |> type_to_string) (ty_sign |> type_to_string)
+    |   FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types) ->
+            sprintf "function '%s : %s -> %s' called with arguments of type(s) %s"
+                fct_name (sign_args_types |> type_list_to_string) (sign_res_type |> type_to_string) (args_types |> type_list_to_string)
+    |   TypeOfResultUnknown (fct_name, sign_args_types, sign_res_type) ->
+            sprintf "type of result of function %s : %s -> %s is unknown (type parameter '%s cannot be instantiated)"
+                fct_name (sign_args_types |> type_list_to_string) (sign_res_type |> type_to_string) (sign_res_type |> type_to_string)
+    |   NoMatchingFunctionType (fct_name, args_types) ->
+            sprintf "no matching function type found for '%s' with arguments of type(s) (%s)" fct_name (args_types |> type_list_to_string)
+    |   AmbiguousFunctionCall (fct_name, args_types) ->
+            sprintf "ambiguous function call: multiple matching function types found for '%s' with arguments of type(s) %s" fct_name (args_types |> type_list_to_string)
+    |   NotAFunctionName name ->
+            sprintf "there is no function name '%s' in the signature" name
+    |   VariableAlreadyInUse v ->
+            sprintf "variable '%s' already in use" v
+    |   UnknownVariable v ->
+            sprintf "unknown variable '%s'" v
+    // runtime errors
+    |   InconsistentUpdates (eng, opt_conditions, u1, u2, opt_u_set) ->
+            (   sprintf "\n--- inconsistent updates:\n%s\n%s\n" (show_s_update eng u1) (show_s_update eng u2) ) +
+            (   match opt_conditions with    
+                |   None -> ""
+                |   Some ts ->
+                        sprintf "\n--- initial state conditions leading to the inconsistent updates:\n%s\n"
+                            (String.concat "\n" (ts >>| term_to_string eng)) ) +
+            (   match opt_u_set with
+                |   None -> ""
+                |   Some U ->
+                        sprintf "\n--- updates collected on this path so far:\n%s\n" (String.concat "\n" (List.map (show_s_update eng) (List.ofSeq U))) )
+
+and type'_to_string eng (ty' : TYPE') =
+    let type_to_string, type_list_to_string = type_to_string eng, type_list_to_string eng
+    match ty' with
+    |   TypeParam' a -> "'" ^ a
+    |   Undef' -> "Undef"
+    |   Boolean' -> "Boolean"
+    |   Integer' -> "Integer"
+    |   String' -> "String"
+    |   Rule' -> "Rule"
+    |   TypeCons' (s, tys)  -> if List.isEmpty tys then s else s ^ "(" ^ (tys |> type_list_to_string) ^ ")"
+    |   Subset' (tyname, main_type) -> (tyname) ^ " subsetof " ^ (type_to_string main_type)
+    |   Prod' tys -> "Prod(" ^ (tys |> type_list_to_string) ^ ")"
+    |   Seq' ty -> "Seq(" ^ (type_to_string ty) ^ ")"
+    |   Powerset' ty -> "Powerset(" ^ (type_to_string ty) ^ ")"
+    |   Bag' ty -> "Bag(" ^ (type_to_string ty) ^ ")"
+    |   Map' (ty1, ty2) -> "Map(" ^ (type_to_string ty1) ^ ", " ^ (type_to_string ty2) ^ ")"
+
+and type_to_string eng ty =
+    type'_to_string eng (get_type' eng ty)
+
+and type_list_to_string (eng : ENGINE) tys =
+    tys >>| type_to_string eng |> String.concat ", "
+
+and fct_type_to_string (eng : ENGINE) (args_type, res_type) =
+    sprintf "%s -> %s" (args_type |> type_list_to_string eng) (res_type |> type_to_string eng)
+
+and inline get_fct_id (Engine eid) (name : string) : FCT_ID =
     match engines.[eid].functions |> try_get_index (FctName name) with
     | Some fct_id -> FctId fct_id
     | None -> failwith (sprintf "Engine.get_fct_id: function '%s' not found in global context #%d" name eid)
@@ -139,7 +266,184 @@ and inline get_function' (Engine eid) (FctId id) : FUNCTION' * FUNCTION_ATTRS =
 
 and inline fct_name eng fct_id = let (FctName name) = fst (get_function' eng fct_id) in name
 and inline fct_kind eng fct_id = (snd (get_function' eng fct_id)).fct_kind
+and inline fct_types eng fct_id = (snd (get_function' eng fct_id)).fct_types
 and inline fct_interpretation eng fct_id = (snd (get_function' eng fct_id)).fct_interpretation
+
+and inline make_type (eng as Engine eid : ENGINE) (ty' : TYPE') (opt_sign_type : Signature.TYPE option) : TYPE =
+    let enum_finite_type (ty' : TYPE') (S : State.STATE) =
+        match ty' with
+        |   Boolean' -> Some State.boolean_carrier_set
+        |   Integer' -> None
+        |   String'  -> None
+        |   Undef'   -> Some State.undef_carrier_set
+        |   Rule' ->
+                try Some (Option.get (Map.find "Rule" S._carrier_sets))
+                with _ -> failwith "SymbState.enum_finite_type: carrier set of 'Rule' not found or not defined"  // not found: not in map; not defined: None
+        |   TypeParam' _ -> None
+        |   TypeCons' (tyname, []) ->
+                try Some (Option.get (Map.find tyname S._carrier_sets))
+                with _ -> failwith (sprintf "SymbState.enum_finite_type: carrier set of '%s' not found" tyname)
+        |   Subset' (tyname, _) ->
+                try Some (Option.get (Map.find tyname S._carrier_sets))
+                with _ -> failwith (sprintf "SymbState.enum_finite_type: carrier set of '%s' not found" tyname)
+        |   TypeCons' (tyname, _)  -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for user-defined type '%s' with type arity > 0" tyname)
+        |   Prod' _  -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for 'Prod' types")
+        |   Seq' _   -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for 'Seq' types")
+        |   Powerset' _ -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for 'Powerset' types")
+        |   Bag' _ -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for 'Bag' types")
+        |   Map' _ -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for 'Map' types")
+    let rec type'_to_sign_type (ty' : TYPE') : Signature.TYPE =
+        let type_to_sign_type ty = type'_to_sign_type (get_type' eng ty)
+        match ty' with
+        |   Boolean' -> Signature.Boolean
+        |   Integer' -> Signature.Integer
+        |   String'  -> Signature.String
+        |   Undef'   -> Signature.Undef
+        |   Rule'    -> Signature.Rule
+        |   TypeParam' name -> Signature.TypeParam name
+        |   TypeCons' (tyname, ty_args) -> Signature.TypeCons (tyname, ty_args |> List.map type_to_sign_type)
+        |   Subset' (tyname, main_ty) -> Signature.Subset (tyname, type_to_sign_type main_ty)
+        |   Prod' ty_elems -> Signature.Prod (ty_elems |> List.map (type_to_sign_type))
+        |   Seq' elem_ty -> Signature.Seq (type_to_sign_type elem_ty)
+        |   Powerset' elem_ty -> Signature.Powerset (type_to_sign_type elem_ty)
+        |   Bag' elem_ty -> Signature.Bag (type_to_sign_type elem_ty)
+        |   Map' (dom_ty, rng_ty) -> Signature.Map (type_to_sign_type dom_ty, type_to_sign_type rng_ty)
+    match IndMap.try_get_index ty' engines.[eid].types with
+    |   Some type_id ->
+            Type type_id
+    |   None ->
+            let e = engines.[eid]
+            let type_id = e.types |> count
+            let attrs = {
+                type_id = type_id;
+                signature_type = match opt_sign_type with Some sign_ty -> sign_ty | None -> type'_to_sign_type ty';
+                carrier_set = try enum_finite_type ty' e.initial_state with _ -> None        //!!!! temporarily set to None for type where enum_finite_type is not yet implemented
+            }
+            e.types |> add (ty', attrs) |> Type
+
+and inline get_type eng ty' = make_type eng ty' None        // precond.: type must exist, i.e. must have been created before with make_type called with (Some signature_type)
+and get_type' (Engine eid) (Type type_id) = engines.[eid].types |> get_obj type_id
+
+and convert_type (eng as Engine eid) (ty : Signature.TYPE) : TYPE =
+    let make_type, convert_type = make_type eng, convert_type eng
+    match ty with
+    |   Signature.Boolean                    -> make_type Boolean' (Some ty)
+    |   Signature.Integer                    -> make_type Integer' (Some ty)
+    |   Signature.String                     -> make_type String' (Some ty)
+    |   Signature.Undef                      -> make_type Undef' (Some ty)
+    |   Signature.Rule                       -> make_type Rule' (Some ty)
+    |   Signature.TypeParam name             -> make_type (TypeParam' name) (Some ty)
+    |   Signature.Prod ty_elems              -> make_type (Prod' (ty_elems |> List.map convert_type)) (Some ty)
+    |   Signature.Seq elem_ty                -> make_type (Seq' (convert_type elem_ty)) (Some ty)
+    |   Signature.Powerset elem_ty           -> make_type (Powerset' (convert_type elem_ty)) (Some ty)
+    |   Signature.Bag elem_ty                -> make_type (Bag' (convert_type elem_ty)) (Some ty)
+    |   Signature.Map (dom_ty, rng_ty)       -> make_type (Map' (convert_type dom_ty, convert_type rng_ty)) (Some ty)
+    |   Signature.TypeCons (tyname, ty_args) -> make_type (TypeCons' (tyname, ty_args |> List.map convert_type)) (Some ty)
+    |   Signature.Subset (tyname, main_ty)   -> make_type (Subset' (tyname, convert_type main_ty)) (Some ty)
+
+and inline to_signature_type (eng as Engine eid) (Type type_id : TYPE) : Signature.TYPE =
+    (snd (engines.[eid].types |> get type_id)).signature_type
+
+and inline enum_finite_type (eng as Engine eid) (Type type_id : TYPE) : VALUE Set option =
+    (snd (engines.[eid].types |> get type_id)).carrier_set
+
+and inline BooleanType (eng : ENGINE) = get_type eng Boolean'
+and inline IntegerType (eng : ENGINE) = get_type eng Integer'
+and inline StringType (eng : ENGINE) = get_type eng String'
+and inline UndefType (eng : ENGINE) = get_type eng Undef'
+and inline RuleType (eng : ENGINE) = get_type eng Rule'
+and inline TypeParam (eng : ENGINE) (name : string) = get_type eng (TypeParam' name)
+and inline ProdType (eng : ENGINE) (ty_elems : TYPE list) = get_type eng (Prod' ty_elems)
+and inline SeqType (eng : ENGINE) (elem_ty : TYPE) = get_type eng (Seq' elem_ty)
+and inline PowersetType (eng : ENGINE) (elem_ty : TYPE) = get_type eng (Powerset' elem_ty)
+and inline BagType (eng : ENGINE) (elem_ty : TYPE) = get_type eng (Bag' elem_ty)
+and inline MapType (eng : ENGINE) (dom_ty : TYPE, rng_ty : TYPE) = get_type eng (Map' (dom_ty, rng_ty))
+and inline TypeCons (eng : ENGINE) (tyname : string, ty_args : TYPE list) = get_type eng (TypeCons' (tyname, ty_args))
+and inline SubsetType (eng : ENGINE) (tyname : string, main_ty : TYPE) = get_type eng (Subset' (tyname, main_ty))
+
+and match_type (eng : ENGINE) (ty : TYPE) (ty_sign : TYPE) (ty_env : Map<string, TYPE>) : Map<string, TYPE> =
+    let type_to_string, get_type', match_type = type_to_string eng, get_type' eng, match_type eng
+    if !trace > 0 then fprintf stderr "match_type(%s, %s)\n" (ty |> type_to_string) (ty_sign |> type_to_string)
+    match (get_type' ty, get_type' ty_sign) with
+    |   (_, Subset' (_, ty_sign')) -> match_type ty ty_sign' ty_env
+    |   (Subset' (_, ty'), _)      -> match_type ty' ty_sign ty_env
+    |   (TypeParam' a, _) ->
+            failwith (sprintf "%s: type parameter not allowed in concrete type to be matched to signature type %s"
+                (type_to_string ty) (type_to_string ty_sign))
+    |   _ ->
+            if ty = ty_sign then Map.empty else
+                match get_type' ty_sign with
+                |   TypeParam' a ->
+                        if Map.containsKey a ty_env then
+                            if ty = Map.find a ty_env then ty_env
+                            else raise (Error (eng, "match_type", TypeMismatch (ty, ty_sign)))
+                        else Map.add a ty ty_env
+                |   _ -> raise (Error (eng, "match_type", TypeMismatch (ty, ty_sign)))
+
+and match_one_fct_type eng (fct_name : string) (args_types : TYPE list) (sign_fct_type : TYPE list * TYPE) : TYPE =
+    let (sign_args_types, sign_res_type) = sign_fct_type
+    let result_type sign_res_type ty_env =
+        match get_type' eng sign_res_type with
+        |   TypeParam' a ->
+                try Map.find a ty_env
+                with _ -> raise (Error (eng, "match_one_fct_type", TypeOfResultUnknown (fct_name, sign_args_types, sign_res_type)))
+        |   _ -> sign_res_type
+    let rec match_types = function
+        |   ([], [], ty_env : Map<string, TYPE>) ->
+                (ty_env, result_type sign_res_type ty_env)
+        |   (arg_type :: args_types', sign_arg_type :: sign_arg_types', ty_env) -> 
+                let ty_env_1 =
+                    try match_type eng arg_type sign_arg_type ty_env
+                    with _ -> raise (Error (eng, "match_one_fct_type", FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types)))
+                match_types (args_types', sign_arg_types', ty_env_1)
+        |   (_, _, _) -> // arity does not match
+                raise (Error (eng, "match_one_fct_type", FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types)))
+    let (_, result_type) = match_types (args_types, sign_args_types, Map.empty)
+    result_type
+
+and match_fct_type (eng as Engine eid) (fct_name : string) (args_types : TYPE list) (sign_fct_types : list<TYPE list * TYPE>) : TYPE =
+    if !trace > 0 then fprintf stderr "\nfunction '%s': match_fct_type (%s) with:\n%s\n" fct_name (args_types |> type_list_to_string eng) (String.concat "," (sign_fct_types >>| fct_type_to_string eng))
+    let rec matching_types results candidates =
+        match candidates with
+        |   [] -> results
+        |   sign_fct_type :: candidates' ->
+                if !trace > 1 then fprintf stderr "  sign_fct_type = %s\n" (sign_fct_type |> fct_type_to_string eng)
+                try match match_one_fct_type eng fct_name args_types sign_fct_type with
+                    |   ty -> matching_types (ty :: results) candidates'
+                with ex -> matching_types results candidates'
+    let results = List.rev (matching_types [] sign_fct_types)
+    match results with
+    |   [] -> raise (Error (eng, "match_fct_type", NoMatchingFunctionType (fct_name, args_types)))
+    |   [ty] -> ty
+    |   _ -> raise (Error (eng, "match_fct_type", AmbiguousFunctionCall (fct_name, args_types)))
+
+and type_of_value (eng as Engine eid) x = convert_type eng (Background.type_of_value engines.[eid].signature x)    //!!!! could be made more efficient for cells
+and main_type_of eng ty = match get_type' eng ty with Subset' (_, main_type) -> main_type | _ -> ty
+
+
+and compute_type (eng as Engine eid) (t' : TERM') : TYPE =
+    let sign, fct_name, fct_types, type_of_value, get_term_type = engines.[eid].signature, fct_name eng, fct_types eng, type_of_value eng, get_term_type eng
+    match t' with
+    |   Value' x -> type_of_value x
+    |   Initial' (f, xs) -> match_fct_type eng (fct_name f) (xs >>| type_of_value) (fct_types f)
+    |   AppTerm' (f, ts) -> match_fct_type eng (fct_name f) (ts >>| get_term_type) (fct_types f)
+    |   CondTerm' (G, t1, t2) -> if get_term_type t1 = get_term_type t2 then get_term_type t1 else failwith "compute_type: types of branches of conditional term do not match"
+    |   VarTerm' (v, ty) -> ty
+    |   QuantTerm' (_, _, t_set, _) -> BooleanType eng
+    |   LetTerm' (_, t1, t2) -> get_term_type t2
+    |   DomainTerm' tyname -> PowersetType eng tyname
+
+and get_term_type (Engine eid) (t as Term tid : TERM) : TYPE =
+    (engines.[eid].terms |> get_attrs tid).term_type
+
+and inline get_smt_expr (Engine eid) (t as Term tid : TERM) : SmtInterface.SMT_EXPR option =
+    !(engines.[eid].terms |> get_attrs tid).smt_expr
+
+and inline set_smt_expr (Engine eid) (t as Term tid : TERM) (smt_expr : SmtInterface.SMT_EXPR) =
+    (engines.[eid].terms |> get_attrs tid).smt_expr := Some smt_expr
+
+and inline initial_state_eval_res (Engine eid) (t as Term tid : TERM) : TERM option ref =
+    (engines.[eid].terms |> get_attrs tid).initial_state_eval_res
 
 and inline get_term (eng as Engine eid : ENGINE) (t' : TERM') : TERM =
     match IndMap.try_get_index t' engines.[eid].terms with
@@ -159,30 +463,6 @@ and inline get_term (eng as Engine eid : ENGINE) (t' : TERM') : TERM =
 and inline get_term'_attrs (Engine eid) (Term tid) = engines.[eid].terms |> get tid
 and inline get_term' (Engine eid) (Term tid) = engines.[eid].terms |> get_obj tid
 and inline get_term_attrs (Engine eid) (Term tid) = engines.[eid].terms |> get_attrs tid
-
-and compute_type (eng as Engine eid) (t' : TERM') : Signature.TYPE =
-    let (sign, get_type) = (engines.[eid].signature, get_type eng)
-    match t' with
-    |   Value' x -> Background.type_of_value sign x
-    |   Initial' (f, xs) -> let f_name = fct_name eng f in Signature.match_fct_type f_name (xs >>| Background.type_of_value sign) (Signature.fct_types f_name sign)
-    |   AppTerm' (f, ts) -> let f_name = fct_name eng f in Signature.match_fct_type f_name (ts >>| get_type) (Signature.fct_types f_name sign)
-    |   CondTerm' (G, t1, t2) -> if get_type t1 = get_type t2 then get_type t1 else failwith "compute_type: types of branches of conditional term do not match"
-    |   VarTerm' (v, ty) -> ty
-    |   QuantTerm' (_, _, t_set, _) -> Signature.Boolean
-    |   LetTerm' (_, t1, t2) -> get_type t2
-    |   DomainTerm' tyname -> Signature.Powerset tyname
-
-and get_type (Engine eid) (t as Term tid : TERM) : Signature.TYPE =
-    (engines.[eid].terms |> get_attrs tid).term_type
-
-and inline get_smt_expr (Engine eid) (t as Term tid : TERM) : SmtInterface.SMT_EXPR option =
-    !(engines.[eid].terms |> get_attrs tid).smt_expr
-
-and inline set_smt_expr (Engine eid) (t as Term tid : TERM) (smt_expr : SmtInterface.SMT_EXPR) =
-    (engines.[eid].terms |> get_attrs tid).smt_expr := Some smt_expr
-
-and inline initial_state_eval_res (Engine eid) (t as Term tid : TERM) : TERM option ref =
-    (engines.[eid].terms |> get_attrs tid).initial_state_eval_res
 
 and inline Value eng x = get_term eng (Value' x)
 and inline Initial eng (f, xs) = get_term eng (Initial' (f, xs))
@@ -217,10 +497,10 @@ and convert_term (eng : ENGINE) (t : AST.TYPED_TERM) : TERM =
                                     fprintf stderr "convert_term: in term %A\n" (AppTerm eng (f_id, ts))
                                     raise ex
         CondTerm   = fun (_, (G, t1, t2)) -> CondTerm eng (G, t1, t2);
-        VarTerm    = fun (ty, v) -> VarTerm eng (v, ty)
+        VarTerm    = fun (ty, v) -> VarTerm eng (v, convert_type eng ty)
         QuantTerm  = fun (ty, (q_kind, v, t_set, t_cond)) -> QuantTerm eng (q_kind, v, t_set, t_cond);
         LetTerm    = fun (_, (v, t1, t2)) -> LetTerm eng (v, t1, t2);
-        DomainTerm = fun (_, D) -> DomainTerm eng D;
+        DomainTerm = fun (_, D) -> DomainTerm eng (convert_type eng D);
     } t
 
 and inline get_rule_def_id (Engine eid) (name : string) : RULE_DEF_ID =
@@ -234,22 +514,15 @@ and inline get_rule_def' (Engine eid) (RuleDefId id : RULE_DEF_ID) : RULE_DEF' *
 and inline get_rule_name (Engine eid) (RuleDefId id : RULE_DEF_ID) = let RuleName r_name, _ =engines.[eid].rule_defs |> get id in r_name
 and inline get_rule_def (eng as Engine eid) (id : RULE_DEF_ID) = (snd (get_rule_def' eng id)).rule_def
 
-// and inline make_rule (Engine eid) (R' : RULE') : RULE =
-//     let e = engines.[eid]
-//     e.rules |> add (R', ()) |> Rule
-
 and inline get_rule' (Engine eid) (Rule rid) = engines.[eid].rules |> get rid |> fst
 
 and inline get_rule (eng as Engine eid : ENGINE) (R' : RULE') : RULE =
     match IndMap.try_get_index R' engines.[eid].rules with
-    |   Some rid ->
-            Rule rid
+    |   Some rid -> Rule rid
     |   None ->
             let e = engines.[eid]
             let rid = e.rules |> count
             e.rules |> add (R', ()) |> Rule
-
-
 
 and inline UpdateRule eng ((f, ts), t_rhs) = get_rule eng (UpdateRule' ((f, ts), t_rhs))
 and inline CondRule eng (G, R1, R2) = get_rule eng (CondRule' (G, R1, R2))
@@ -282,6 +555,7 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
         invariants      = Map.empty
         functions       = newIndMap<FUNCTION', FUNCTION_ATTRS>()
         rule_defs       = newIndMap<RULE_DEF', RULE_DEF_ATTRS>()
+        types           = newIndMap<TYPE', TYPE_ATTRS>()
         terms           = newIndMap<TERM', TERM_ATTRS>()
         rules           = newIndMap<RULE', RULE_ATTRS>()
         TRUE_           = ref None
@@ -332,7 +606,7 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
                         FctName name, {
                             fct_id   = i;
                             fct_kind = Signature.fct_kind name sign;
-                            // fct_type = Signature.fct_types name sign;   // !!! to be implemented together with monomorphization
+                            fct_types = List.map (fun (args_ty, res_ty) -> (args_ty >>| convert_type (Engine eid), convert_type (Engine eid) res_ty)) (Signature.fct_types name sign);   // !!! to be implemented together with monomorphization
                             fct_interpretation = fct_interpretation
                         }) |> ignore )
     rule_def_db |> Map.toList
@@ -395,17 +669,7 @@ and smt_solver_pop (Engine eid) =
 
 //--------------------------------------------------------------------
 
-type TERM_INDUCTION<'fct_id, 'term> = {
-    Value      : (VALUE) -> 'term;
-    Initial    : ('fct_id * VALUE list) -> 'term;
-    AppTerm    : ('fct_id * 'term list) -> 'term;
-    CondTerm   : ('term * 'term * 'term) -> 'term;
-    VarTerm    : (string * Signature.TYPE) -> 'term;
-    QuantTerm  : (AST.QUANT_KIND * string * 'term * 'term) -> 'term;
-    LetTerm    : (string * 'term * 'term) -> 'term;
-    DomainTerm : (Signature.TYPE) -> 'term;
-}
-let rec term_induction (eng: ENGINE) (fct_id : FCT_ID -> 'fct_id) (F : TERM_INDUCTION<'fct_id, 'term>) (t : TERM) :'term =
+and term_induction (eng: ENGINE) (fct_id : FCT_ID -> 'fct_id) (F : TERM_INDUCTION<'fct_id, 'term>) (t : TERM) :'term =
     let term_ind = term_induction eng fct_id F
     match get_term' eng t with
     |   Value' x              -> F.Value x
@@ -419,23 +683,11 @@ let rec term_induction (eng: ENGINE) (fct_id : FCT_ID -> 'fct_id) (F : TERM_INDU
 
 //--------------------------------------------------------------------
 
-let skipRule eng = ParRule eng []
+and skipRule eng = ParRule eng []
 
 //--------------------------------------------------------------------
 
-type RULE_INDUCTION<'term, 'rule> = {
-    S_Updates : Set<(FCT_ID * VALUE list) * TERM> -> 'rule;     // what not ""... * 'term>" ?
-    UpdateRule : (FCT_ID * 'term list) * 'term -> 'rule;
-    CondRule : 'term * 'rule * 'rule -> 'rule;
-    ParRule : 'rule list -> 'rule;
-    SeqRule : 'rule list -> 'rule;
-    IterRule : 'rule -> 'rule;
-    LetRule : string * 'term * 'rule -> 'rule;
-    ForallRule : string * 'term * 'term * 'rule -> 'rule;
-    MacroRuleCall : RULE_DEF_ID * 'term list -> 'rule;     // Map<FCT_NAME * VALUE list, 'term> -> 'rule;
-}
-
-let rec rule_induction (eng: ENGINE) (term : TERM -> 'term) (F : RULE_INDUCTION<'term, 'rule>) (R : RULE) : 'rule =
+and rule_induction (eng: ENGINE) (term : TERM -> 'term) (F : RULE_INDUCTION<'term, 'rule>) (R : RULE) : 'rule =
     let rule_ind = rule_induction eng term
     match get_rule' eng R with
     |   S_Updates' U -> F.S_Updates U   // F.S_Updates (Map.map (fun loc -> fun t_rhs -> term t_rhs) U)
@@ -454,12 +706,12 @@ let rec rule_induction (eng: ENGINE) (term : TERM -> 'term) (F : RULE_INDUCTION<
 //
 //--------------------------------------------------------------------
 
-let rec pp_list sep = function
+and pp_list sep = function
 |   []         -> []
 |   [x]        -> [ x ]
 |   (x :: xs') -> x :: (sep @ (pp_list sep xs'))
 
-let pp_name (name : Signature.NAME) =
+and pp_name (name : Signature.NAME) =
     (   match name with
     |   Signature.UndefConst -> "undef"
     |   Signature.BoolConst b -> if b then "true" else "false"
@@ -467,19 +719,19 @@ let pp_name (name : Signature.NAME) =
     |   Signature.StringConst s -> "\"" + s + "\""
     |   Signature.FctName f -> f ) |> str
 
-let pp_app_term sign = function
+and pp_app_term sign = function
     |   (Signature.FctName f, [t1; t2]) when Signature.infix_status f sign <> Signature.NonInfix ->
             blo0 [ str "("; blo0 [ t1; brk 1; str (sprintf "%s " f); t2 ]; str ")" ]
     |   (Signature.FctName f, ts) when ts <> [] ->
             blo0 [ str f; str " "; str "("; blo0 (pp_list [str",";brk 1] ts); str ")" ]
     |   (name, _) -> pp_name name
 
-let pp_location_term sign prefix = function
+and pp_location_term sign prefix = function
     |   (f : string, xs : VALUE list) when xs <> [] ->
             blo0 [ str (prefix+"["); str f; str "("; blo0 (pp_list [str",";brk 1] (List.map (fun x -> str (value_to_string x)) xs)); str ")]" ]
     |   (f, _) -> blo0 [ str $"{prefix}[{f}]" ]
 
-let rec pp_term (eng : ENGINE) (t : TERM) =
+and pp_term (eng : ENGINE) (t : TERM) =
     let sign = (get_engine' eng).signature
     let (pp_app_term, pp_location_term) = (pp_app_term sign, pp_location_term sign)
     term_induction eng (fun x -> x) {
@@ -491,10 +743,10 @@ let rec pp_term (eng : ENGINE) (t : TERM) =
         QuantTerm = fun (q_kind, v, t_set, t_cond) ->
             blo0 [ str ("("^(AST.quant_kind_to_str q_kind)^" "); str v; str " in "; t_set; str " with "; t_cond; str ")" ];
         LetTerm = fun (v, t1, t2) -> blo0 [ str "let "; str v; str " = "; t1; line_brk; str "in "; t2; line_brk; str "endlet" ];
-        DomainTerm = fun tyname -> str (Signature.type_to_string tyname);
+        DomainTerm = fun tyname -> str (type_to_string eng tyname);
     } t
 
-let rec pp_rule (eng : ENGINE)  (R : RULE) =
+and pp_rule (eng : ENGINE)  (R : RULE) =
     let sign = (get_engine' eng).signature
     let (pp_app_term, pp_term) = (pp_app_term sign, pp_term eng)
     rule_induction eng pp_term {
@@ -514,9 +766,9 @@ let rec pp_rule (eng : ENGINE)  (R : RULE) =
     } R
 
 
-let name_to_string t      = t |> pp_name |> PrettyPrinting.toString 80
-let term_to_string sign t = t |> pp_term sign |> PrettyPrinting.toString 80
-let rule_to_string sign t = t |> pp_rule sign |> PrettyPrinting.toString 80
+and name_to_string t      = t |> pp_name |> PrettyPrinting.toString 80
+and term_to_string sign t = t |> pp_term sign |> PrettyPrinting.toString 80
+and rule_to_string sign t = t |> pp_rule sign |> PrettyPrinting.toString 80
 
 //--------------------------------------------------------------------
 //
@@ -524,7 +776,7 @@ let rule_to_string sign t = t |> pp_rule sign |> PrettyPrinting.toString 80
 //
 //--------------------------------------------------------------------
 
-let show_fct_tables (eng as Engine eid: ENGINE) =
+and show_fct_tables (eng as Engine eid: ENGINE) =
     let e = get_engine' eng
     let index_s = e.functions |> show_index (fun (FctName f_name) -> f_name)
     let show_table_entry (i, FctName f_name, { fct_kind = f_kind; fct_id = f_id; fct_interpretation = f_intp }) =
@@ -550,79 +802,59 @@ let show_fct_tables (eng as Engine eid: ENGINE) =
 //
 //--------------------------------------------------------------------
 
-let location_to_string eng ((f, xs) : LOCATION) : string = Updates.location_to_string (fct_name eng f, xs)
+and location_to_string eng ((f, xs) : LOCATION) : string = Updates.location_to_string (fct_name eng f, xs)
 
-let show_s_update eng ((f, xs), t) =
+and show_s_update eng ((f, xs), t) =
     let f = fct_name eng f
     sprintf "%s := %s"
         (if List.isEmpty xs then f else sprintf "%s (%s)" f (String.concat ", " (List.map value_to_string xs)))
         (PrettyPrinting.toString 80 (pp_term eng t))
 
-let show_s_update_set eng (U :UPDATE_SET) =
+and show_s_update_set eng (U :UPDATE_SET) =
     "{ " +
     ( Set.toList U >>| show_s_update eng
         |> String.concat ", "   ) +
     " }"
 
-let show_s_update_map eng (U :UPDATE_MAP) =
+and show_s_update_map eng (U :UPDATE_MAP) =
     let s_update_set = Set.ofSeq (Map.toSeq U |> Seq.collect (fun (f : FCT_ID, table) -> table |> Map.toSeq |> Seq.map (fun (args, value) -> (f, args), value)))
     show_s_update_set eng s_update_set
 
 //--------------------------------------------------------------------
-    
-type ErrorDetails =
-|   InconsistentUpdates of ENGINE * TERM list option * UPDATE * UPDATE * UPDATE_SET option
 
-exception Error of ENGINE * string * string * ErrorDetails
-
-let error_msg (eng : ENGINE, modul : string, fct : string, err : ErrorDetails) = 
-    sprintf "error - function %s.%s:\n" modul fct +
-    match err with
-    |   InconsistentUpdates (eng, opt_conditions, u1, u2, opt_u_set) ->
-            (   sprintf "\n--- inconsistent updates:\n%s\n%s\n" (show_s_update eng u1) (show_s_update eng u2) ) +
-            (   match opt_conditions with    
-                |   None -> ""
-                |   Some ts ->
-                        sprintf "\n--- initial state conditions leading to the inconsistent updates:\n%s\n"
-                            (String.concat "\n" (ts >>| term_to_string eng)) ) +
-            (   match opt_u_set with
-                |   None -> ""
-                |   Some U ->
-                        sprintf "\n--- updates collected on this path so far:\n%s\n" (String.concat "\n" (List.map (show_s_update eng) (List.ofSeq U))) )
-
-let add_s_update eng (U : UPDATE_MAP) (u as (loc as (f, args), value): UPDATE) =
+and add_s_update eng (U : UPDATE_MAP) (u as (loc as (f, args), value): UPDATE) =
     if !trace > 0 then fprintf stderr "add_s_update: %s\n" (show_s_update eng u)
     Map.change f
         ( function None -> Some (Map.add args value Map.empty)
                  | Some table ->
                         Some (  if Map.containsKey args table
                                 then if value <> Map.find args table  // deal with conflicting updates
-                                     then raise (Error (eng, module_name, "add_s_update", InconsistentUpdates (eng, None, (loc, Map.find args table), (loc, value), None)))
+                                     then raise (Error (eng, "add_s_update", InconsistentUpdates (eng, None, (loc, Map.find args table), (loc, value), None)))
                                      else table
                                 else Map.add args value table ) )
         U
 
-let s_update_set_to_s_update_map eng (U : UPDATE_SET) =
+and s_update_set_to_s_update_map eng (U : UPDATE_SET) =
     Set.fold (add_s_update eng) Map.empty U
 
-let consistent eng (U : UPDATE_SET) =
+and consistent eng (U : UPDATE_SET) =
     try let x = s_update_set_to_s_update_map eng U
         in true
     with Failure _ -> false
     
-let locations (U : UPDATE_SET) : Set<LOCATION> =
+and locations (U : UPDATE_SET) : Set<LOCATION> =
     Set.map (fun (loc, value) -> loc) U
 
-let seq_merge_2 eng (U : UPDATE_SET) (V : UPDATE_SET) =
+and seq_merge_2 eng (U : UPDATE_SET) (V : UPDATE_SET) =
     if not (consistent eng U)
     then U
     else let U_reduced = Set.filter (fun (loc, _) -> not (Set.contains loc (locations V))) U
          in Set.union U_reduced V
 
-let seq_merge_n eng (Us : UPDATE_SET list) : UPDATE_SET =
+and seq_merge_n eng (Us : UPDATE_SET list) : UPDATE_SET =
     List.fold (seq_merge_2 eng) Set.empty Us
 
-let apply_s_update_map (UM0 : UPDATE_MAP) (UM' : UPDATE_MAP) =
+and apply_s_update_map (UM0 : UPDATE_MAP) (UM' : UPDATE_MAP) =
     let update_dynamic_function_table (f_table : Map<VALUE list, TERM>) (updates_of_f : Map<VALUE list, TERM>) =
             Map.fold (fun table args value -> Map.add args value table) f_table updates_of_f
     let apply_to_s_update_map (UM0 : UPDATE_MAP) (UM' : UPDATE_MAP) =
@@ -634,20 +866,20 @@ let apply_s_update_map (UM0 : UPDATE_MAP) (UM' : UPDATE_MAP) =
                 UM0 UM'
     in  apply_to_s_update_map UM0 UM'
 
-let apply_s_update_set eng S U =
+and apply_s_update_set eng S U =
     apply_s_update_map S (s_update_set_to_s_update_map eng U)
 
-let sequel_s_state : ENGINE -> UPDATE_MAP -> UPDATE_SET -> UPDATE_MAP = apply_s_update_set
+and sequel_s_state : ENGINE -> UPDATE_MAP -> UPDATE_SET -> UPDATE_MAP = apply_s_update_set
 
 //--------------------------------------------------------------------
 
-let get_env (env : ENV) (var : string) =
+and get_env (env : ENV) (var : string) =
     Map.find var env
 
-let add_binding (env : ENV) (var : string, t : TERM, ty : Signature.TYPE) =
+and add_binding (env : ENV) (var : string, t : TERM, ty : TYPE) =
     Map.add var (t, ty) env
 
-let replace_vars (eng : ENGINE) (env : ENV) (t : TERM) : TERM =
+and replace_vars (eng : ENGINE) (env : ENV) (t : TERM) : TERM =
     term_induction eng (fun x -> x) {
         Value      = Value eng
         Initial    = Initial eng
@@ -661,14 +893,14 @@ let replace_vars (eng : ENGINE) (env : ENV) (t : TERM) : TERM =
 
 //--------------------------------------------------------------------
 
-let get_values eng (ts : TERM list) : VALUE list option =    // only if all arguments are values
+and get_values eng (ts : TERM list) : VALUE list option =    // only if all arguments are values
     List.fold ( function
                 |   Some ts -> (fun t -> match get_term' eng t with Value' v -> Some(v :: ts) | _ -> None)
                 |   None -> (fun _ -> None) ) (Some []) (List.rev ts)
 
 //--------------------------------------------------------------------
 
-let add_cond (G : TERM) (C : PATH_COND) = (Set.add G C)
+and add_cond (G : TERM) (C : PATH_COND) = (Set.add G C)
 
 //--------------------------------------------------------------------
 //
@@ -679,21 +911,23 @@ let add_cond (G : TERM) (C : PATH_COND) = (Set.add G C)
 let rec smt_map_term (eng as Engine eid) (t : TERM) : SmtInterface.SMT_EXPR =
     let C = engines[eid].smt_ctx
     let (ctx, con, fct) = (!C.ctx, !C.con, !C.fct)
+    let get_term_type' t = get_type' eng (get_term_type eng t)
+    let type_to_string, get_type = type_to_string eng, get_type eng
 
     let smt_map_ITE (eng as Engine eid) (G_, t1_, t2_) : SmtInterface.SMT_EXPR =
         let err_msg (G, T_G, t1, T_t1, t2, T_t2) =
             failwith (sprintf "smt_map_ITE: type error: for term %s the expected type is (Boolean, T, T), where T is Boolean, Integer or a user-defined type; type (%s, %s, %s) found instead"
-                (term_to_string eng (CondTerm eng (G, t1, t2))) (Signature.type_to_string T_G) (Signature.type_to_string T_t1) (Signature.type_to_string T_t2) )
-        match (smt_map_term eng G_, get_type eng G_, smt_map_term eng t1_, get_type eng t1_, smt_map_term eng t2_, get_type eng t2_) with
-        |   (SmtInterface.SMT_BoolExpr G, Signature.Boolean, SmtInterface.SMT_BoolExpr t1, Signature.Boolean, SmtInterface.SMT_BoolExpr t2, Boolean) ->
+                (term_to_string eng (CondTerm eng (G, t1, t2))) (type_to_string T_G) (type_to_string T_t1) (type_to_string T_t2) )
+        match (smt_map_term eng G_, get_term_type' G_, smt_map_term eng t1_, get_term_type' t1_, smt_map_term eng t2_, get_term_type' t2_) with
+        |   (SmtInterface.SMT_BoolExpr G, Boolean', SmtInterface.SMT_BoolExpr t1, Boolean', SmtInterface.SMT_BoolExpr t2, Boolean') ->
                 SmtInterface.SMT_BoolExpr (ctx.MkITE (G, t1 :> Microsoft.Z3.Expr, t2 :> Microsoft.Z3.Expr) :?> Microsoft.Z3.BoolExpr)
-        |   (SmtInterface.SMT_BoolExpr G, Signature.Boolean, SmtInterface.SMT_IntExpr t1, Signature.Integer, SmtInterface.SMT_IntExpr t2, Integer) ->
+        |   (SmtInterface.SMT_BoolExpr G, Boolean', SmtInterface.SMT_IntExpr t1, Integer', SmtInterface.SMT_IntExpr t2, Integer') ->
                 SmtInterface.SMT_IntExpr (ctx.MkITE (G, t1 :> Microsoft.Z3.Expr, t2 :> Microsoft.Z3.Expr) :?> Microsoft.Z3.IntExpr)
-        |   (SmtInterface.SMT_BoolExpr G, Signature.Boolean, SmtInterface.SMT_Expr t1, Signature.TypeCons (tyname1, []), SmtInterface.SMT_Expr t2, Signature.TypeCons (tyname2, [])) ->
+        |   (SmtInterface.SMT_BoolExpr G, Boolean', SmtInterface.SMT_Expr t1, TypeCons' (tyname1, []), SmtInterface.SMT_Expr t2, TypeCons' (tyname2, [])) ->
                 if tyname1 = tyname2
                 then SmtInterface.SMT_Expr (ctx.MkITE (G, (t1 : Microsoft.Z3.Expr), (t2 : Microsoft.Z3.Expr)) : Microsoft.Z3.Expr)
-                else err_msg (G_, Signature.Boolean, t1_, Signature.TypeCons (tyname1, []), t2_, Signature.TypeCons (tyname2, []))
-        |   (_, T_G, _, T_t1, _, T_t2) -> err_msg (G_, T_G, t1_, T_t1, t2_, T_t2)
+                else err_msg (G_, BooleanType eng, t1_, TypeCons eng (tyname1, []), t2_, TypeCons eng (tyname2, []))
+        |   (_, T_G, _, T_t1, _, T_t2) -> err_msg (G_, get_type T_G, t1_, get_type T_t1, t2_, get_type T_t2)
 
     let smt_map_app_term (eng : ENGINE) (f_id : FCT_ID, ts) : SmtInterface.SMT_EXPR =
         let FctName f, { fct_id = fct_id; fct_kind = f_kind; fct_interpretation = fct_intp } = get_function' eng f_id
@@ -826,7 +1060,7 @@ let ctx_condition eng C =
 
 let smt_assert (eng as Engine eid) (phi : TERM) =
     let C = engines.[eid].smt_ctx
-    if get_type eng phi = Signature.Boolean
+    if get_term_type eng phi = BooleanType eng
     then match smt_map_term eng phi with
          | SmtInterface.SMT_BoolExpr be -> C.ctr := !C.ctr + 1; (!C.slv).Assert be
          | _ -> failwith (sprintf "smt_assert: error converting Boolean term (term = %s)" (term_to_string eng phi))
@@ -843,7 +1077,7 @@ let with_extended_path_cond (eng : ENGINE) (G : TERM) eval_fct (UM : UPDATE_MAP,
 
 let smt_formula_is_true (eng as Engine eid) (phi : TERM) =
     let C = engines.[eid].smt_ctx
-    if get_type eng phi = Signature.Boolean
+    if get_term_type eng phi = BooleanType eng
     then match smt_map_term eng phi with
          | SmtInterface.SMT_BoolExpr be -> C.ctr := !C.ctr + 1; ((!C.slv).Check ((!C.ctx).MkNot be) = Microsoft.Z3.Status.UNSATISFIABLE)
          | _ -> failwith (sprintf "smt_formula_is_true: error converting Boolean term (term = %s)" (term_to_string eng phi))
@@ -851,21 +1085,21 @@ let smt_formula_is_true (eng as Engine eid) (phi : TERM) =
 
 let smt_formula_is_false (eng as Engine eid) (phi : TERM) =
     let C = engines.[eid].smt_ctx
-    if get_type eng phi = Signature.Boolean
+    if get_term_type eng phi = BooleanType eng
     then match smt_map_term eng phi with
          | SmtInterface.SMT_BoolExpr be -> C.ctr := !C.ctr + 1; ((!C.slv).Check be = Microsoft.Z3.Status.UNSATISFIABLE)
          | _ -> failwith (sprintf "smt_formula_is_false: error converting Boolean term (term = %s)" (term_to_string eng phi))
     else failwith (sprintf "'smt_formula_is_false' expects a Boolean term, %s found instead " (term_to_string eng phi))
 
-let rec interpretation (eng as Engine eid : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as FctId f_id) (xs : VALUE list) =
+let rec interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as FctId f_id) (xs : VALUE list) =
     let Value = Value eng
     let eval_fct_definition_in_curr_state (fct_definition as (args, body)) xs =
-        let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x, type_of_value engines.[eid].signature x)) Map.empty args xs
+        let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x, type_of_value eng x)) Map.empty args xs
         let body' = body
 //        let body' = replace_vars eng env body
         s_eval_term body' eng (UM, env, pc)
     let eval_fct_definition_in_initial_state (fct_definition as (args, body)) xs =
-        let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x, type_of_value engines.[eid].signature x)) Map.empty args xs
+        let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x, type_of_value eng x)) Map.empty args xs
         let body' = body
 //        let body' = replace_vars eng env body
         s_eval_term body' eng (Map.empty, env, Set.empty)   //!!!! to be modified if at some point initial state constraints are implemented => path condition may then be non-empty
@@ -910,7 +1144,7 @@ and smt_eval_formula (phi : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env, pc : PAT
     result
 
 and expand_term t (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
-    let get_type = get_type eng
+    let get_term_type, type_to_string = get_term_type eng, type_to_string eng
     term_induction eng (fun x -> x) {
         Value   = fun x (UM, env, pc) -> Value eng x;
         Initial = fun (f, xs) (UM, env, pc) -> Initial eng (f, xs)
@@ -919,7 +1153,7 @@ and expand_term t (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : 
             match f_intp with
             |   StaticUserDefined (_, Some (args, body)) ->
                     let ts = ts >>| fun t -> t (UM, env, pc)
-                    let env = List.fold2 (fun env' arg t -> add_binding env' (arg, s_eval_term t eng (UM, env, pc), get_type t)) Map.empty args ts
+                    let env = List.fold2 (fun env' arg t -> add_binding env' (arg, s_eval_term t eng (UM, env, pc), get_term_type t)) Map.empty args ts
                     s_eval_term body eng (UM, env, pc)
             | _ -> AppTerm eng (f, ts >>| fun t -> t (UM, env, pc))
         CondTerm  = fun (G, t1, t2) (UM : UPDATE_MAP, env, pc) -> CondTerm eng (G (UM, env, pc), t1 (UM, env, pc), t2 (UM, env, pc));
@@ -927,21 +1161,21 @@ and expand_term t (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : 
         QuantTerm = fun (q_kind, v, t_set, t_cond) (UM : UPDATE_MAP, env, pc) -> expand_quantifier (q_kind, v, t_set, t_cond) eng (UM, env, pc);
         LetTerm   = fun (v, t1, t2) (UM : UPDATE_MAP, env, pc) ->
                         let t1_val = t1 (UM, env, pc)
-                        t2 (UM, add_binding env (v, t1_val, get_type t1_val), pc);
+                        t2 (UM, add_binding env (v, t1_val, get_term_type t1_val), pc);
         DomainTerm = fun dom (UM : UPDATE_MAP, env, pc) ->
-            match State.enum_finite_type dom (initial_state_of eng) with
-            |   Some xs -> Value eng (SET (Signature.main_type_of dom, xs))
-            |   _ -> failwith (sprintf "Engine.expand_term: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
+            match enum_finite_type eng dom with
+            |   Some xs -> Value eng (SET ((main_type_of eng dom) |> to_signature_type eng, xs))
+            |   _ -> failwith (sprintf "Engine.expand_term: domain of type '%s' is not enumerable" (dom |> type_to_string))
     } t ((UM : UPDATE_MAP), (env : ENV), (pc : PATH_COND))
 
 and expand_quantifier (q_kind, v, t_set : UPDATE_MAP * ENV * PATH_COND -> TERM, t_cond : UPDATE_MAP * ENV * PATH_COND -> TERM)
                         (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
     let t_set = t_set (UM, env, pc)
-    let t_set_type = get_type eng t_set
+    let t_set_type = get_term_type eng t_set
     let elem_type =
-        match t_set_type with
-        |   Signature.Powerset tyname -> tyname
-        |   _ -> failwith (sprintf "Engine.expand_quantifier: expected a set or domain type, %s found instead" (Signature.type_to_string t_set_type))
+        match get_type' eng t_set_type with
+        |   Powerset' tyname -> tyname
+        |   _ -> failwith (sprintf "Engine.expand_quantifier: expected a set or domain type, %s found instead" (type_to_string eng t_set_type))
     match get_term' eng (s_eval_term t_set eng (UM, env, pc)) with
     |   Value' (Background.SET (_, xs)) ->
             let eval_instance x = t_cond (UM, add_binding env (v, Value eng x, elem_type), pc)
@@ -978,7 +1212,7 @@ and try_case_distinction_for_term_with_finite_range (eng : ENGINE) (UM : UPDATE_
             match get_term' eng t1 with
             |   Value' x1 -> F (Value eng x1 :: past_args) ts'
             |   _ ->
-                    match (try State.enum_finite_type (get_type eng t1) (initial_state_of eng) with _ -> None) with
+                    match (try enum_finite_type eng (get_term_type eng t1) with _ -> None) with
                     |   None ->
                             failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
                                         (fct_name eng f) (term_to_string eng (AppTerm eng (f, ts0))))
@@ -1028,8 +1262,8 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                         match f_kind with
                         |   Signature.Static ->
                                 let t = AppTerm eng (fct_id, ts)
-                                match get_type eng t with
-                                |   Signature.Boolean ->
+                                match get_type' eng (get_term_type eng t) with
+                                |   Boolean' ->
                                         AppTerm eng (fct_id, ts)
                                         // if Set.contains t pc                  then TRUE eng
                                         // else if Set.contains (s_not eng t) pc then FALSE eng
@@ -1096,7 +1330,7 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
     F [] ts
 
 and eval_cond_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (G, t1 : ENGINE -> UPDATE_MAP * ENV * PATH_COND -> TERM, t2) : TERM = 
-    let get_type = get_type eng
+    let get_term_type' t = get_type' eng (get_term_type eng t)
     let with_extended_path_cond = with_extended_path_cond eng
     let term_to_string = term_to_string eng
     let G = G eng (UM, env, pc)
@@ -1104,7 +1338,7 @@ and eval_cond_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (
     |   Value' (BOOL true)  -> t1 eng (UM, env, pc)
     |   Value' (BOOL false) -> t2 eng (UM, env, pc)
     |   CondTerm' (G', G1, G2) ->
-            if get_type G1 <> Signature.Boolean || get_type G2 <> Signature.Boolean
+            if get_term_type' G1 <> Boolean' || get_term_type' G2 <> Boolean'
             then failwith (sprintf "eval_cond_term: '%s' and '%s' must be boolean terms" (term_to_string G1) (term_to_string G2))
             else let t1_G'     = t1 eng (UM, env, add_cond G' (add_cond G1 pc))
                  let t1_not_G' = t1 eng (UM, env, add_cond (s_not eng G') (add_cond G1 pc))
@@ -1133,7 +1367,7 @@ and eval_cond_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (
                                     if t1' = t2' then t1' else CondTerm eng (G, t1', t2')
 and eval_let_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (v, t1, t2) : TERM =
     let t1 = t1 eng (UM, env, pc)
-    t2 eng (UM, add_binding env (v, t1, get_type eng t1), pc)
+    t2 eng (UM, add_binding env (v, t1, get_term_type eng t1), pc)
     // let env' = add_binding env (v, t1, get_type eng t1)
     // let t2 = t2 eng (UM, env', pc)
     // let t2 = replace_vars eng env' t2
@@ -1149,14 +1383,14 @@ and s_eval_term_ (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PAT
         QuantTerm  = fun (q_kind, v, t_set, t_cond) C (UM, env, pc) -> expand_quantifier (q_kind, v, t_set C, t_cond C) C (UM, env, pc);
         LetTerm    = fun (v, t1, t2) C (_, env, _) -> eval_let_term C (UM, env, pc) (v, t1, t2) 
         DomainTerm = fun dom C (_, _, _) ->
-            match State.enum_finite_type dom (initial_state_of C) with
-            |   Some xs -> Value C (SET (Signature.main_type_of dom, xs))
-            |   None -> failwith (sprintf "Engine.s_eval_term_: domain of type '%s' is not enumerable" (dom |> Signature.type_to_string))
+            match enum_finite_type eng dom with
+            |   Some xs -> Value C (SET (main_type_of eng dom |> to_signature_type eng, xs))
+            |   None -> failwith (sprintf "Engine.s_eval_term_: domain of type '%s' is not enumerable" (dom |> type_to_string eng))
     } t eng (UM, env, pc)
 
 and s_eval_term (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
     let t = s_eval_term_ t eng (UM, env, pc)
-    if get_type eng t = Signature.Boolean
+    if get_type' eng (get_term_type eng t) = Boolean'
     then    match get_term' eng t with
             |   Value' (BOOL _)  -> t
             |   _ -> smt_eval_formula t eng (UM, env, pc)
@@ -1171,7 +1405,7 @@ let rec try_case_distinction_for_update_with_finite_domain
     let mkEq (t1 : TERM) t2 = s_equals eng (t1, t2)  // AppTerm' (Boolean, (FctName "=", [t1; t2]))
     let generate_cond_rule (t, cases : (VALUE * RULE) list) : RULE =
         let t = s_eval_term t eng (UM, env, pc)
-        let ty = get_type eng t
+        let ty = get_term_type eng t
         let rec mk_cond_rule cases =
             match cases with
             |   [] -> failwith "mk_cond_rule: empty list of cases"
@@ -1195,7 +1429,7 @@ let rec try_case_distinction_for_update_with_finite_domain
             match get_term' eng t1 with
             |   Value' x1 -> F (Value eng x1 :: past_args) ts'
             |   _ ->
-                    match (try State.enum_finite_type (get_type eng t1) (initial_state_of eng) with _ -> None) with
+                    match (try enum_finite_type eng (get_term_type eng t1) with _ -> None) with
                     |   None ->
                             failwith (sprintf "location (%s, (%s)) on the lhs of update cannot be fully evaluated"
                                         (fct_name eng f) (String.concat ", " (ts0 >>| term_to_string eng)))
@@ -1241,12 +1475,13 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
             F [] ts
 
     let eval_cond (G, R1, R2) (UM, env, pc) = 
+        let get_term_type' t = get_type' eng (get_term_type eng t)
         let G = s_eval_term G (UM, env, pc)
         match get_term' eng G with
         |   Value' (BOOL true)  -> s_eval_rule R1 (UM, env, pc)
         |   Value' (BOOL false) -> s_eval_rule R2 (UM, env, pc)
         |   CondTerm' (G', G1, G2) ->
-                if get_type G1 <> Signature.Boolean || get_type G2 <> Signature.Boolean
+                if get_term_type' G1 <> Boolean' || get_term_type' G2 <> Boolean'
                 then failwith (sprintf "s_eval_rule.eval_cond: '%s' and '%s' must be boolean terms" (term_to_string G1) (term_to_string G2))
                 else s_eval_rule (CondRule (G', CondRule (G1, R1, R2), CondRule (G2, R1, R2))) (UM, env, pc)
         |   _ ->    //let (R1', R2') = (s_eval_rule R1 (S, env, add_cond G C), s_eval_rule R2 (S, env, add_cond (s_not G) C)_
@@ -1288,8 +1523,8 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
         |   S_Updates' U1 ->
                 let S' =
                     try sequel_s_state eng UM U1
-                    with Error (_, _, _, InconsistentUpdates (C, _, u1, u2, _)) ->
-                            raise (Error (C, module_name, "s_eval_rule.eval_binary_seq",
+                    with Error (_, _, InconsistentUpdates (C, _, u1, u2, _)) ->
+                            raise (Error (eng, "s_eval_rule.eval_binary_seq",
                                 InconsistentUpdates (C, Some (List.ofSeq pc), u1, u2, Some U1)))
                 match get_rule' eng (s_eval_rule R2 (S', env, pc)) with
                 |   S_Updates' U2 ->
@@ -1314,14 +1549,14 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
 
     and eval_let (v, t, R) (UM, env, pc) =
         let t' = s_eval_term t (UM, env, pc)
-        let R' = s_eval_rule R (UM, add_binding env (v, t', get_type t'), pc)
+        let R' = s_eval_rule R (UM, add_binding env (v, t', get_term_type eng t'), pc)
         R'
 
     and eval_forall (v, ts, G, R) (UM, env, pc) =
         match get_term' eng (s_eval_term ts (UM, env, pc)) with
         |   Value' (SET (_, xs)) ->
                 let eval_instance x =
-                    let env' = let t_x = Value eng x in add_binding env (v, t_x, get_type t_x)
+                    let env' = let t_x = Value eng x in add_binding env (v, t_x, get_term_type eng t_x)
                     CondRule (s_eval_term G (UM, env', pc), s_eval_rule R (UM, env', pc), skipRule)
                 let Rs = List.map (fun x -> eval_instance x) (Set.toList xs)
                 s_eval_rule (ParRule Rs) (UM, env, pc)
@@ -1333,7 +1568,7 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
             |   Some (formals, body) -> (formals, body)
             |   None -> failwith (sprintf "Engine.eval_macro_rule_call: macro rule '%s' not defined" (get_rule_name eng r))
         let env' =
-            List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (UM, env, pc), get_type arg)) env formals args
+            List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (UM, env, pc), get_term_type eng arg)) env formals args
         s_eval_rule body (UM, env', pc)
  
     let R_eval =
