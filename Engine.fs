@@ -638,21 +638,26 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
         match rule_def_db |> Map.tryFind r_name with
         |   Some (args, R) -> (args, R)
         |   None -> failwith (sprintf "Engine.new_engine: no definition found for rule macro '%s'\n" r_name)
-    sign |> Map.toList
-        |> List.filter (fun (name, _) -> Signature.is_function_name name sign)
-        |> List.map (fun (name, _) -> (name, extract_fct_interpretation_if_possible name))
-        |> List.filter (function (_, None) -> false | _ -> true)
-        |> Seq.iteri ( fun i (name, opt_fct_interpretation) ->
-            match opt_fct_interpretation with
-            |   None -> ()
-            |   Some fct_interpretation ->
-                    new_engine.functions |> add (
-                        FctName name, {
-                            fct_id   = i;
-                            fct_kind = Signature.fct_kind name sign;
-                            fct_types = List.map (fun (args_ty, res_ty) -> (args_ty >>| convert_type (Engine eid), convert_type (Engine eid) res_ty)) (Signature.fct_types name sign);   // !!! to be implemented together with monomorphization
-                            fct_interpretation = fct_interpretation
-                        }) |> ignore )
+    let add_functions fct_list =
+        fct_list
+            |> List.map (fun (name, _) -> (name, extract_fct_interpretation_if_possible name))
+            |> List.filter (function (_, None) -> false | _ -> true)
+            |> Seq.iteri ( fun i (name, opt_fct_interpretation) ->
+                match opt_fct_interpretation with
+                |   None -> ()
+                |   Some fct_interpretation ->
+                        new_engine.functions |> add (
+                            FctName name, {
+                                fct_id   = i;
+                                fct_kind = Signature.fct_kind name sign;
+                                fct_types = List.map (fun (args_ty, res_ty) -> (args_ty >>| convert_type (Engine eid), convert_type (Engine eid) res_ty)) (Signature.fct_types name sign);
+                                fct_interpretation = fct_interpretation
+                            }) |> ignore )
+    let functions = sign |> Map.toList |> List.filter (fun (name, _) -> Signature.is_function_name name sign)
+    // add to engine non-derived functions first, then derived functions
+    functions |> List.filter (fun (name, _) -> not (Signature.fct_kind name sign = Signature.Derived)) |> add_functions
+    functions |> List.filter (fun (name, _) -> Signature.fct_kind name sign = Signature.Derived) |> add_functions
+    // add rules
     rule_def_db |> Map.toList
         |> List.map (fun (name, _) -> (name, extract_rule_def_rhs name))
         |> Seq.iteri (fun i (name, rule_def) ->
@@ -1139,13 +1144,11 @@ let rec interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as F
     let Value = Value eng
     let eval_fct_definition_in_curr_state (fct_definition as (args, body)) xs =
         let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x, type_of_value eng x)) Map.empty args xs
-        let body' = body
-//        let body' = replace_vars eng env body
+        let body' = body        // alternative: // let body' = replace_vars eng env body
         s_eval_term body' eng (UM, env, pc)
     let eval_fct_definition_in_initial_state (fct_definition as (args, body)) xs =
         let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x, type_of_value eng x)) Map.empty args xs
-        let body' = body
-//        let body' = replace_vars eng env body
+        let body' = body        // alternative: // let body' = replace_vars eng env body
         s_eval_term body' eng (Map.empty, env, Set.empty)   //!!!! to be modified if at some point initial state constraints are implemented => path condition may then be non-empty
     let FctName f_name, { fct_interpretation = f_intp; fct_id = f_id } = get_function' eng f
     match f_intp with
@@ -1166,7 +1169,7 @@ let rec interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as F
             try Map.find xs (Map.find (FctId f_id) UM)
             with _ -> Initial eng (f, xs)
     |   Derived (fct_def : string list * TERM) ->
-            failwith (sprintf "Engine.interpretation: derived function '%s' - not implemented" f_name)
+            eval_fct_definition_in_curr_state fct_def xs
     |   StaticSymbolic (s_fct_interpretation: TERM list -> TERM) ->
             failwith (sprintf "Engine.interpretation: static symbolic function '%s' - not implemented" f_name)
     |   StaticUserDefined (_, None) ->
