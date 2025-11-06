@@ -1275,44 +1275,39 @@ and try_case_distinction_for_term_with_finite_range (eng : ENGINE) (UM : UPDATE_
 and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (fct_id : FCT_ID, ts : (ENGINE -> UPDATE_MAP * ENV * PATH_COND -> TERM) list) : TERM = 
 //  let with_extended_path_cond = with_extended_path_cond C
     //if !trace > 0 then fprintfn stderr "|signature|=%d | eval_app_term %s%s\n" (Map.count sign) (spaces !level) (term_to_string sign (AppTerm (fct_name, [])))
-    let rec F (ts_past : TERM list) ts =
+    let rec F (ts_past : TERM list, xs_past: VALUE list option) ts =
         match ts with
         |   t :: ts_fut ->
                 let t = t eng (UM, env, pc)
                 match get_term' eng t with
-                |   Value' x1             -> F (t :: ts_past) ts_fut
-                |   Initial'  (f, xs)     -> F (t :: ts_past) ts_fut
-                |   CondTerm' (G1, t11, t12) -> s_eval_term_ (CondTerm eng (G1, F ts_past ((fun _ _ -> t11) :: ts_fut), F ts_past ((fun _ _ -> t12) :: ts_fut))) eng (UM, env, pc)
-                |   LetTerm'  (v, t1, t2) -> F (t :: ts_past) ts_fut
-                |   VarTerm'  v           -> F (t :: ts_past) ts_fut
-                |   AppTerm'  _           -> F (t :: ts_past) ts_fut
-                |   QuantTerm' _          -> failwith "Engine.eval_app_term: QuantTerm not implemented"
-                |   DomainTerm' _         -> failwith "Engine.eval_app_term: DomainTerm not implemented"
+                |   Value' x1             -> F (t :: ts_past, Option.map (fun xs -> x1 :: xs) xs_past) ts_fut
+                |   Initial'  (f, xs)     -> F (t :: ts_past, None) ts_fut
+                |   CondTerm' (G1, t11, t12) -> s_eval_term_ (CondTerm eng (G1, F (ts_past, xs_past) ((fun _ _ -> t11) :: ts_fut), F (ts_past, xs_past) ((fun _ _ -> t12) :: ts_fut))) eng (UM, env, pc)
+                |   AppTerm'  _           -> F (t :: ts_past, None) ts_fut
+                |   LetTerm'  (v, t1, t2) -> failwith "Engine.eval_app_term: LetTerm should not occur here"
+                |   VarTerm'  v           -> failwith "Engine.eval_app_term: VarTerm should not occur here"
+                |   QuantTerm' _          -> failwith "Engine.eval_app_term: QuantTerm should not occur here"
+                |   DomainTerm' _         -> failwith "Engine.eval_app_term: DomainTerm should not occur here"
         |   [] ->
-                let FctName f_name, { fct_kind = f_kind; fct_interpretation = f_intp }  = get_function' eng fct_id
-                match (f_name, List.rev ts_past) with
-                |   "and", [ t1; t2 ] -> s_and eng (t1, t2)
-                |   "or", [ t1; t2 ]  -> s_or eng (t1, t2)
-                |   "xor", [ t1; t2 ] -> s_xor eng (t1, t2)
-                |   "implies", [ t1; t2 ] -> s_implies eng (t1, t2)
-                |   "iff", [ t1; t2 ] -> s_iff eng (t1, t2)
-                |   "=", [ t1; t2 ]   -> s_equals eng (t1, t2)
-                |   f, ts ->
-                    match get_values eng ts with
-                    |   Some xs -> interpretation eng UM pc fct_id xs
+                match Option.map List.rev xs_past with
+                    |   Some xs ->
+                            interpretation eng UM pc fct_id xs       // arguments fully evaluated to values
                     |   None ->
-                        match f_kind with
-                        |   Signature.Static ->
-                                let t = AppTerm eng (fct_id, ts)
-                                match get_type' eng (get_term_type eng t) with
-                                |   Boolean' ->
-                                        AppTerm eng (fct_id, ts)
-                                        // if Set.contains t pc                  then TRUE eng
-                                        // else if Set.contains (s_not eng t) pc then FALSE eng
-                                        // else smt_eval_formula t eng (UM, env, pc)
-                                | _ -> AppTerm eng (fct_id, ts)
-                        |   Signature.Controlled -> s_eval_term (try_case_distinction_for_term_with_finite_range eng (UM, env, pc) fct_id ts) eng (UM, env, pc)
-                        |   other_kind -> failwith (sprintf "Engine.eval_app_term: kind '%s' of function '%s' not implemented" (Signature.fct_kind_to_string other_kind) f)
+                            let FctName f_name, { fct_kind = f_kind; fct_interpretation = f_intp }  = get_function' eng fct_id
+                            match f_kind with
+                            |   Signature.Static ->
+                                    match f_name, List.rev ts_past with
+                                    |   "and", [ t1; t2 ] -> s_and eng (t1, t2)
+                                    |   "or", [ t1; t2 ]  -> s_or eng (t1, t2)
+                                    |   "xor", [ t1; t2 ] -> s_xor eng (t1, t2)
+                                    |   "implies", [ t1; t2 ] -> s_implies eng (t1, t2)
+                                    |   "iff", [ t1; t2 ] -> s_iff eng (t1, t2)
+                                    |   "=", [ t1; t2 ]   -> s_equals eng (t1, t2)
+                                    |   _, ts             -> AppTerm eng (fct_id, ts)
+                            |   Signature.Controlled ->
+                                    let ts = List.rev ts_past
+                                    s_eval_term (try_case_distinction_for_term_with_finite_range eng (UM, env, pc) fct_id ts) eng (UM, env, pc)
+                            |   other_kind -> failwith (sprintf "Engine.eval_app_term: kind '%s' of function '%s' not implemented" (Signature.fct_kind_to_string other_kind) f_name)
     let f_name = fct_name eng fct_id           //!!!!!!!!!!!!! this can replaced by fct_id
     match (f_name, ts) with
     |   "and", [ t1; t2 ] ->
@@ -1325,7 +1320,7 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                 match get_term' eng t2 with
                 |   Value' (BOOL false) -> FALSE eng
                 |   Value' (BOOL true) -> t1    // with_extended_path_cond t2' (fun _ -> t1) (S, env, C)
-                |   t2' -> if t1' = t2' then t1 else F [] [(fun _ _ -> t1); fun _ _ -> t2]
+                |   t2' -> if t1' = t2' then t1 else F ([], Some []) [(fun _ _ -> t1); fun _ _ -> t2]
     |   "or", [ t1; t2 ] ->
             let t1 = t1 eng (UM, env, pc)
             match get_term' eng t1 with
@@ -1336,7 +1331,7 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                 match get_term' eng t2 with
                 |   Value' (BOOL true) -> TRUE eng
                 |   Value' (BOOL false) -> t1
-                |   t2' -> if t1' = t2' then t1 else F [] [(fun _ _ -> t1); fun _ _ -> t2]
+                |   t2' -> if t1' = t2' then t1 else F ([], Some []) [(fun _ _ -> t1); fun _ _ -> t2]
     |   "implies", [ t1; t2 ] ->
             let t1 = t1 eng (UM, env, pc)
             match get_term' eng t1 with
@@ -1347,7 +1342,7 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                 match get_term' eng t2 with
                 |   Value' (BOOL false) -> s_not eng t1
                 |   Value' (BOOL true)  -> TRUE eng
-                |   t2' -> if t1' = t2' then TRUE eng else F [] [(fun _ _ -> t1); fun _ _ -> t2]
+                |   t2' -> if t1' = t2' then TRUE eng else F ([], Some []) [(fun _ _ -> t1); fun _ _ -> t2]
     |   "iff", [ t1; t2 ] ->
             let t1 = t1 eng (UM, env, pc)
             match get_term' eng t1 with
@@ -1358,7 +1353,7 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                 match get_term' eng t2 with
                 |   Value' (BOOL false) -> s_not eng t1
                 |   Value' (BOOL true)  -> t1
-                |   t2' -> if t1' = t2' then TRUE eng else F [] [(fun _ _ -> t1); fun _ _ -> t2]
+                |   t2' -> if t1' = t2' then TRUE eng else F ([], Some []) [(fun _ _ -> t1); fun _ _ -> t2]
     |   "=", [ t1; t2 ] ->
             let t1 = t1 eng (UM, env, pc)
             match get_term' eng t1 with
@@ -1366,10 +1361,10 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                 let t2 = t2 eng (UM, env, pc)
                 match get_term' eng t2 with
                 |   Value' x2 -> Value eng (BOOL (x1 = x2))
-                |   t2' -> F [] [(fun _ _ -> t1);  fun _ _ -> t2]
-            |   t1' -> F [] [( fun _ _ -> t1);  fun _ _ -> t2 eng (UM, env, pc)]
+                |   t2' -> F ([], Some []) [(fun _ _ -> t1);  fun _ _ -> t2]
+            |   t1' -> F ([], Some []) [( fun _ _ -> t1);  fun _ _ -> t2 eng (UM, env, pc)]
     |   _ ->
-    F [] ts
+    F ([], Some []) ts
 
 and eval_cond_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (G, t1 : ENGINE -> UPDATE_MAP * ENV * PATH_COND -> TERM, t2) : TERM = 
     let get_term_type' t = get_type' eng (get_term_type eng t)
@@ -1496,27 +1491,29 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
 
     let eval_update ((f, ts), t_rhs) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : RULE =
         if !trace > 0 then fprintf stderr "eval_update: %s\n" (rule_to_string (UpdateRule ((f, ts), t_rhs)))
-        match get_term' eng (s_eval_term t_rhs (UM, env, pc)) with
+        let t_rhs = s_eval_term t_rhs (UM, env, pc)
+        match get_term' eng t_rhs with
         |   CondTerm' (G, t1, t2) ->
                 s_eval_rule (CondRule (G, UpdateRule ((f, ts), t1), UpdateRule ((f, ts), t2))) (UM, env, pc)
         |   _ ->
-            let rec F (ts_past : TERM list) : TERM list -> RULE = function
+            let rec F (ts_past : TERM list, xs_past : VALUE list option) : TERM list -> RULE = function
                 |   (t1 :: ts_fut) ->
+                    let t1 = s_eval_term t1 (UM, env, pc)
                     match get_term' eng t1 with
-                    |   Value' _        -> F (t1 :: ts_past) ts_fut
-                    |   Initial' _      -> F (t1 :: ts_past) ts_fut
+                    |   Value' x1       -> F (t1 :: ts_past, Option.map (fun xs -> x1 :: xs) xs_past) ts_fut
+                    |   Initial' _      -> F (t1 :: ts_past, None) ts_fut
                     |   CondTerm' (G1, t11, t12) ->
-                           s_eval_rule (CondRule (G1, F ts_past (t11 :: ts_fut), F ts_past (t12 :: ts_fut))) (UM, env, pc)
-                    |   QuantTerm' _    -> failwith "Engine.eval_app_term: QuantTerm not implemented"
-                    |   LetTerm' _      -> failwith "Engine.eval_app_term: LetTerm not implemented"
-                    |   VarTerm' _      -> F (s_eval_term_ t1 eng (UM, env, pc) :: ts_past) ts_fut
-                    |   AppTerm' _      -> F (s_eval_term_ t1 eng (UM, env, pc) :: ts_past) ts_fut
-                    |   DomainTerm' _   -> failwith "Engine.eval_app_term: DomainTerm not implemented"
+                           s_eval_rule (CondRule (G1, F (ts_past, xs_past) (t11 :: ts_fut), F (ts_past, xs_past) (t12 :: ts_fut))) (UM, env, pc)
+                    |   AppTerm' _      -> F (t1 :: ts_past, None) ts_fut
+                    |   LetTerm' _      -> failwith "Engine.eval_app_term: LetTerm should not occur here"
+                    |   VarTerm' _      -> failwith "Engine.eval_app_term: VarTerm should not occur here"
+                    |   DomainTerm' _   -> failwith "Engine.eval_app_term: DomainTerm should not occur here"
+                    |   QuantTerm' _    -> failwith "Engine.eval_app_term: QuantTerm should not occur here"
                 |   [] ->
-                    match get_values eng (ts_past >>| fun t -> s_eval_term t (UM, env, pc)) with
-                    |   Some xs -> S_Updates (get_s_update_set (Set.singleton ((f, List.rev xs), s_eval_term t_rhs (UM, env, pc))))
+                    match Option.map List.rev xs_past with
+                    |   Some xs -> S_Updates (get_s_update_set (Set.singleton ((f, xs), t_rhs)))
                     |   None -> try_case_distinction_for_update_with_finite_domain eng (UM, env, pc) f ts t_rhs
-            F [] ts
+            F ([], Some []) ts
 
     let eval_cond (G, R1, R2) (UM, env, pc) = 
         let get_term_type' t = get_type' eng (get_term_type eng t)
