@@ -174,7 +174,7 @@ and UPDATE = LOCATION * TERM
 and UPDATE_SET = Set<UPDATE>
 and UPDATE_MAP = Map<FCT_ID, Map<VALUE list, TERM>>
 
-and ENV = Map<string, TERM * TYPE>
+and ENV = Map<string, TERM>
 
 and PATH_COND = Set<TERM>
 
@@ -925,8 +925,8 @@ and sequel_s_state : ENGINE -> UPDATE_MAP -> UPDATE_SET -> UPDATE_MAP = apply_s_
 and get_env (env : ENV) (var : string) =
     Map.find var env
 
-and add_binding (env : ENV) (var : string, t : TERM, ty : TYPE) =
-    Map.add var (t, ty) env
+and add_binding (env : ENV) (var : string, t : TERM) =
+    Map.add var t env
 
 and replace_vars (eng : ENGINE) (env : ENV) (t : TERM) : TERM =
     term_induction eng (fun x -> x) {
@@ -934,7 +934,7 @@ and replace_vars (eng : ENGINE) (env : ENV) (t : TERM) : TERM =
         Initial    = Initial eng
         AppTerm    = AppTerm eng
         CondTerm   = CondTerm eng
-        VarTerm    = fun (v, _) -> get_env env v |> fst
+        VarTerm    = fun (v, _) -> get_env env v
         QuantTerm  = QuantTerm eng
         LetTerm    = LetTerm eng
         DomainTerm = DomainTerm eng
@@ -1143,11 +1143,11 @@ let smt_formula_is_false (eng as Engine eid) (phi : TERM) =
 let rec interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as FctId f_id) (xs : VALUE list) =
     let Value = Value eng
     let eval_fct_definition_in_curr_state (fct_definition as (args, body)) xs =
-        let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x, type_of_value eng x)) Map.empty args xs
+        let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x)) Map.empty args xs
         let body' = body        // alternative: // let body' = replace_vars eng env body
         s_eval_term body' eng (UM, env, pc)
     let eval_fct_definition_in_initial_state (fct_definition as (args, body)) xs =
-        let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x, type_of_value eng x)) Map.empty args xs
+        let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x)) Map.empty args xs
         let body' = body        // alternative: // let body' = replace_vars eng env body
         s_eval_term body' eng (Map.empty, env, Set.empty)   //!!!! to be modified if at some point initial state constraints are implemented => path condition may then be non-empty
     let FctName f_name, { fct_interpretation = f_intp; fct_id = f_id } = get_function' eng f
@@ -1204,15 +1204,15 @@ and expand_term t (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : 
             match f_intp with
             |   StaticUserDefined (_, Some (args, body)) ->
                     let ts = ts >>| fun t -> t (UM, env, pc)
-                    let env = List.fold2 (fun env' arg t -> add_binding env' (arg, s_eval_term t eng (UM, env, pc), get_term_type t)) Map.empty args ts
+                    let env = List.fold2 (fun env' arg t -> add_binding env' (arg, s_eval_term t eng (UM, env, pc))) Map.empty args ts
                     s_eval_term body eng (UM, env, pc)
             | _ -> AppTerm eng (f, ts >>| fun t -> t (UM, env, pc))
         CondTerm  = fun (G, t1, t2) (UM : UPDATE_MAP, env, pc) -> CondTerm eng (G (UM, env, pc), t1 (UM, env, pc), t2 (UM, env, pc));
-        VarTerm   = fun (v, _) (UM : UPDATE_MAP, env, pc) -> fst (get_env env v);
+        VarTerm   = fun (v, _) (UM : UPDATE_MAP, env, pc) -> get_env env v;
         QuantTerm = fun (q_kind, v, t_set, t_cond) (UM : UPDATE_MAP, env, pc) -> expand_quantifier (q_kind, v, t_set, t_cond) eng (UM, env, pc);
         LetTerm   = fun (v, t1, t2) (UM : UPDATE_MAP, env, pc) ->
                         let t1_val = t1 (UM, env, pc)
-                        t2 (UM, add_binding env (v, t1_val, get_term_type t1_val), pc);
+                        t2 (UM, add_binding env (v, t1_val), pc);
         DomainTerm = fun dom (UM : UPDATE_MAP, env, pc) ->
             match enum_finite_type eng dom with
             |   Some xs -> Value eng (SET ((main_type_of eng dom) |> to_signature_type eng, xs))
@@ -1223,13 +1223,13 @@ and expand_quantifier (q_kind, v, t_set : UPDATE_MAP * ENV * PATH_COND -> TERM, 
                         (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
     let t_set = t_set (UM, env, pc)
     let t_set_type = get_term_type eng t_set
-    let elem_type =
+    let _ =
         match get_type' eng t_set_type with
         |   Powerset' tyname -> tyname
         |   _ -> failwith (sprintf "Engine.expand_quantifier: expected a set or domain type, %s found instead" (type_to_string eng t_set_type))
     match get_term' eng (s_eval_term t_set eng (UM, env, pc)) with
     |   Value' (Background.SET (_, xs)) ->
-            let eval_instance x = t_cond (UM, add_binding env (v, Value eng x, elem_type), pc)
+            let eval_instance x = t_cond (UM, add_binding env (v, Value eng x), pc)
             let t_conds = List.map eval_instance (Set.toList xs)
             match q_kind with
             |   AST.Forall -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_and eng (t_accum, t1)) (TRUE eng)  t_conds
@@ -1404,7 +1404,7 @@ and eval_cond_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (
                                     if t1' = t2' then t1' else CondTerm eng (G, t1', t2')
 and eval_let_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (v, t1, t2) : TERM =
     let t1 = t1 eng (UM, env, pc)
-    t2 eng (UM, add_binding env (v, t1, get_term_type eng t1), pc)
+    t2 eng (UM, add_binding env (v, t1), pc)
     // let env' = add_binding env (v, t1, get_type eng t1)
     // let t2 = t2 eng (UM, env', pc)
     // let t2 = replace_vars eng env' t2
@@ -1416,7 +1416,7 @@ and s_eval_term_ (t : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PAT
         Initial    = fun (f, xs) C _ -> Initial C (f, xs);
         AppTerm    = fun (f, ts) C (UM, env, pc) -> eval_app_term C (UM, env, pc) (f, ts)
         CondTerm   = fun (G, t1, t2) C (UM, env, pc) -> eval_cond_term C (UM, env, pc) (G, t1, t2);
-        VarTerm    = fun (v, _) -> fun C (_, env, _) -> fst (get_env env v);
+        VarTerm    = fun (v, _) -> fun C (_, env, _) -> get_env env v;
         QuantTerm  = fun (q_kind, v, t_set, t_cond) C (UM, env, pc) -> expand_quantifier (q_kind, v, t_set C, t_cond C) C (UM, env, pc);
         LetTerm    = fun (v, t1, t2) C (_, env, _) -> eval_let_term C (UM, env, pc) (v, t1, t2) 
         DomainTerm = fun dom C (_, _, _) ->
@@ -1590,14 +1590,14 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
 
     and eval_let (v, t, R) (UM, env, pc) =
         let t' = s_eval_term t (UM, env, pc)
-        let R' = s_eval_rule R (UM, add_binding env (v, t', get_term_type eng t'), pc)
+        let R' = s_eval_rule R (UM, add_binding env (v, t'), pc)
         R'
 
     and eval_forall (v, ts, G, R) (UM, env, pc) =
         match get_term' eng (s_eval_term ts (UM, env, pc)) with
         |   Value' (SET (_, xs)) ->
                 let eval_instance x =
-                    let env' = let t_x = Value eng x in add_binding env (v, t_x, get_term_type eng t_x)
+                    let env' = let t_x = Value eng x in add_binding env (v, t_x)
                     CondRule (s_eval_term G (UM, env', pc), s_eval_rule R (UM, env', pc), skipRule)
                 let Rs = List.map (fun x -> eval_instance x) (Set.toList xs)
                 s_eval_rule (ParRule Rs) (UM, env, pc)
@@ -1609,7 +1609,7 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
             |   Some (formals, body) -> (formals, body)
             |   None -> failwith (sprintf "Engine.eval_macro_rule_call: macro rule '%s' not defined" (get_rule_name eng r))
         let env' =
-            List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (UM, env, pc), get_term_type eng arg)) env formals args
+            List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (UM, env, pc))) env formals args
         s_eval_rule body (UM, env', pc)
  
     let R_eval =
