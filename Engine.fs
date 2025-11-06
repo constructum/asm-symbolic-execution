@@ -1157,7 +1157,11 @@ let rec interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as F
     |   StaticBackground (fct_interpretation : VALUE list -> VALUE) ->
             Value (fct_interpretation xs)
     |   StaticUserDefined (_ : VALUE list -> VALUE, Some (fct_def : string list * TERM)) ->
-            eval_fct_definition_in_curr_state fct_def xs
+            // memoization of computed values for static user-defined functions
+            let res = initial_state_eval_res eng (AppTerm eng (f, xs >>| Value))
+            match !res with
+            |   Some t' -> t'
+            |   None -> let t' = eval_fct_definition_in_initial_state fct_def xs in res := Some t'; t'
     |   ControlledInitial (_ : VALUE list -> VALUE, Some (fct_def : string list * TERM)) -> 
             try Map.find xs (Map.find (FctId f_id) UM)
             with _ ->
@@ -1295,16 +1299,7 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                 |   "=", [ t1; t2 ]   -> s_equals eng (t1, t2)
                 |   f, ts ->
                     match get_values eng ts with
-                    |   Some xs ->
-                            match f_intp with
-                            //   !!!!!!!!! memoization of static non-background functions, a bit ad-hoc, works for Fibonacci
-                            |   StaticUserDefined _ ->
-                                    let res = initial_state_eval_res eng (AppTerm eng (fct_id, ts))
-                                    match !res with
-                                    |   Some t' -> t'
-                                    |   None -> let t' = interpretation eng UM pc fct_id xs in res := Some t'; t'
-                                    //memoize (AppTerm eng (fct_id, ts)) (fun () -> interpretation eng UM pc fct_id xs)
-                            |   _ -> interpretation eng UM pc fct_id xs
+                    |   Some xs -> interpretation eng UM pc fct_id xs
                     |   None ->
                         match f_kind with
                         |   Signature.Static ->
