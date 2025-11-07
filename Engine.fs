@@ -1362,19 +1362,24 @@ and eval_app_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (f
                             |   Signature.Controlled ->
                                     let ts = List.rev ts_past
                                     s_eval_term (try_case_distinction_for_term_with_finite_range eng (UM, env, pc) fct_id ts) eng (UM, env, pc)
-                            |   other_kind -> failwith (sprintf "Engine.eval_app_term: kind '%s' of function '%s' not implemented" (Signature.fct_kind_to_string other_kind) f_name)
-    let f_name = fct_name eng fct_id           //!!!!!!!!!!!!! this can replaced by fct_id
+                            |   Signature.Derived ->
+                                    let ts = List.rev ts_past
+                                    s_eval_term (try_case_distinction_for_term_with_finite_range eng (UM, env, pc) fct_id ts) eng (UM, env, pc)
+                            |   other_kind ->
+                                    let ts = List.rev ts_past
+                                    failwith (sprintf "Engine.eval_app_term: %s not evaluable - arguments of %s function '%s' are not fully evaluated" (term_to_string eng (AppTerm eng (fct_id, ts))) (Signature.fct_kind_to_string other_kind) f_name)
+    let f_name = fct_name eng fct_id
     match (f_name, ts) with
     |   "and", [ t1; t2 ] ->
             let t1 = t1 eng (UM, env, pc)
             match get_term' eng t1 with
             |   Value' (BOOL false) -> FALSE eng
-            |   Value' (BOOL true)  -> t2 eng (UM, env, pc)        // alternative: with_extended_path_cond t1' (fun _ -> t2) (S, env, C)
+            |   Value' (BOOL true)  -> t2 eng (UM, env, pc)         // alternative: with_extended_path_cond t1' (fun _ -> t2) (S, env, C)
             |   t1' ->
                 let t2 = t2 eng (UM, env, pc)
                 match get_term' eng t2 with
                 |   Value' (BOOL false) -> FALSE eng
-                |   Value' (BOOL true) -> t1    // with_extended_path_cond t2' (fun _ -> t1) (S, env, C)
+                |   Value' (BOOL true) -> t1                        // with_extended_path_cond t2' (fun _ -> t1) (S, env, C)
                 |   t2' -> if t1' = t2' then t1 else F ([], Some []) [(fun _ _ -> t1); fun _ _ -> t2]
     |   "or", [ t1; t2 ] ->
             let t1 = t1 eng (UM, env, pc)
