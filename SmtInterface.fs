@@ -11,6 +11,8 @@ let trace = ref 0
 
 type SMT_CONTEXT = {
     ctx : Context ref;
+    scopeIdStack : int list ref;
+    scopeIdMax : int ref;
     slv : Solver ref;
     typ : Map<string, Sort> ref;
     fct : Map<string, FuncDecl> ref;
@@ -23,32 +25,49 @@ type SMT_EXPR =
 |   SMT_IntExpr of IntExpr
 |   SMT_Expr of Expr
 
-let new_smt_context () : SMT_CONTEXT =
+let rec new_smt_context () : SMT_CONTEXT =
     let ctx = ref (new Context ())
+    let scopeIdStack = ref []
+    let scopeIdMax = ref 0
     let slv = ref ((!ctx).MkSolver());
     let typ = ref Map.empty
     let fct = ref Map.empty
     let con = ref Map.empty
     let ctr = ref 0
-    { ctx = ctx; slv = slv; typ = typ; fct = fct; con = con; ctr = ctr }
+    let C = { ctx = ctx; scopeIdStack = scopeIdStack; scopeIdMax = scopeIdMax; slv = slv; typ = typ; fct = fct; con = con; ctr = ctr;  }
+    smt_solver_push C
+    C
 
-let smt_ctx_reset (C : SMT_CONTEXT) =
+
+and smt_ctx_reset (C : SMT_CONTEXT) =
     (!C.ctx).Dispose ();
     C.ctx := new Context ()
+    C.scopeIdStack := []
+    C.scopeIdMax := 0
     (!C.slv).Reset ();
     C.typ := Map.empty
     C.fct := Map.empty
     C.con := Map.empty
     C.ctr := 0
+    smt_solver_push C
 
-let smt_solver_reset (C : SMT_CONTEXT) =
+and smt_solver_reset (C : SMT_CONTEXT) =
+    // !!! what to do about scopeIdStack and scopeIdMax?
     (!C.slv).Reset ()
 
-let smt_solver_push (C : SMT_CONTEXT) =
+and smt_solver_push (C : SMT_CONTEXT) =
+    C.scopeIdStack := !C.scopeIdMax :: !C.scopeIdStack;
+    C.scopeIdMax := !C.scopeIdMax + 1;
     (!C.slv).Push ()
 
-let smt_solver_pop (C : SMT_CONTEXT) =
+and smt_solver_pop (C : SMT_CONTEXT) =
+    C.scopeIdStack := List.tail !C.scopeIdStack;
     (!C.slv).Pop ()
+
+and smt_scope_id = fun (C : SMT_CONTEXT) ->
+    match !C.scopeIdStack with
+    |   [] -> failwith "smt_scope_id: no current context"
+    |   id::_ -> id
 
 let rec smt_map_type (C : SMT_CONTEXT) (sign : SIGNATURE) (T : TYPE) : Sort =
     //assert(match T with Boolean -> true | Integer -> true | String -> true | TypeCons(tyname,[]) -> type_kind tyname sign = EnumType | _ -> false)

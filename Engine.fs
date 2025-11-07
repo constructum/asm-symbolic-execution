@@ -13,6 +13,7 @@ open Background
 //--------------------------------------------------------------------
 
 let trace = ref 0
+let trace_smt_calls = false
 let level = ref 0
 let module_name = "Engine"
 
@@ -72,6 +73,7 @@ and ENGINE' = {
     OR_             : FCT_ID option ref
     NOT_            : FCT_ID option ref
     EQUALS_         : FCT_ID option ref
+    BOOLEAN_TYPE_   : TYPE option ref
 
     smt_ctx         : SmtInterface.SMT_CONTEXT
 }
@@ -120,6 +122,7 @@ and TERM_ATTRS = {
     term_id       : int
     term_type     : TYPE
     smt_expr      : SmtInterface.SMT_EXPR option ref
+    smt_result    : Dictionary<int, TERM>
     initial_state_eval_res : TERM option ref     // (symbolic) value of the term in the initial state, used also for static functions
 }
 
@@ -441,6 +444,11 @@ and compute_type (eng as Engine eid) (t' : TERM') : TYPE =
 and get_term_type (Engine eid) (t as Term tid : TERM) : TYPE =
     (engines.[eid].terms |> get_attrs tid).term_type
 
+and inline is_boolean_term (eng as Engine eid) (t as Term tid : TERM) : bool =
+    let e = engines.[eid]
+    match (e.terms |> get_attrs tid).term_type with
+    |   Type type_id -> match e.types |> get_obj type_id with Boolean' -> true | _-> false
+
 and inline get_smt_expr (Engine eid) (t as Term tid : TERM) : SmtInterface.SMT_EXPR option =
     !(engines.[eid].terms |> get_attrs tid).smt_expr
 
@@ -461,7 +469,8 @@ and inline get_term (eng as Engine eid : ENGINE) (t' : TERM') : TERM =
                 term_id    = tid;
                 term_type  = compute_type eng t';
                 smt_expr   = ref None;
-                initial_state_eval_res = ref None
+                smt_result = Dictionary<int, TERM>();
+                initial_state_eval_res = ref None;
             }
             e.terms |> add (t', attrs) |> Term
 
@@ -483,6 +492,8 @@ and inline AND (Engine eid) = !engines.[eid].AND_ |> Option.get
 and inline OR (Engine eid) = !engines.[eid].OR_ |> Option.get
 and inline NOT (Engine eid) = !engines.[eid].NOT_ |> Option.get
 and inline EQUALS (Engine eid) = !engines.[eid].EQUALS_ |> Option.get
+and inline BOOLEAN_TYPE (Engine eid) = !engines.[eid].BOOLEAN_TYPE_ |> Option.get
+
 
 and convert_term (eng : ENGINE) (t : AST.TYPED_TERM) : TERM =
     AST.ann_term_induction (fun x -> x) {
@@ -608,6 +619,7 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
         OR_             = ref None
         NOT_            = ref None
         EQUALS_         = ref None
+        BOOLEAN_TYPE_   = ref None
         smt_ctx         = smt_ctx
     }
     engines.Add new_engine
@@ -696,6 +708,7 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
     engines.[eid].OR_     := Some (get_fct_id (Engine eid) "or")
     engines.[eid].NOT_    := Some (get_fct_id (Engine eid) "not")
     engines.[eid].EQUALS_ := Some (get_fct_id (Engine eid) "=")
+    engines.[eid].BOOLEAN_TYPE_ := Some (BooleanType (Engine eid))
     Engine eid
 
 and get_engine' (Engine eid : ENGINE) : ENGINE' =
@@ -1128,15 +1141,24 @@ let smt_formula_is_true (eng as Engine eid) (phi : TERM) =
     let C = engines.[eid].smt_ctx
     if get_term_type eng phi = BooleanType eng
     then match smt_map_term eng phi with
-         | SmtInterface.SMT_BoolExpr be -> C.ctr := !C.ctr + 1; ((!C.slv).Check ((!C.ctx).MkNot be) = Microsoft.Z3.Status.UNSATISFIABLE)
+         | SmtInterface.SMT_BoolExpr be ->
+                C.ctr := !C.ctr + 1;
+                let result = ((!C.slv).Check ((!C.ctx).MkNot be) = Microsoft.Z3.Status.UNSATISFIABLE);
+                // if trace_smt_calls then fprintf stderr "smt_formula_is_true[scope=%d]: %s -> %b\n" (SmtInterface.smt_scope_id C) (term_to_string eng phi) result;
+                result
          | _ -> failwith (sprintf "smt_formula_is_true: error converting Boolean term (term = %s)" (term_to_string eng phi))
     else failwith (sprintf "'smt_formula_is_true' expects a Boolean term, %s found instead " (term_to_string eng phi))
 
 let smt_formula_is_false (eng as Engine eid) (phi : TERM) =
+    if trace_smt_calls then fprintf stderr "smt_formula_is_false: %s -> " (term_to_string eng phi)
     let C = engines.[eid].smt_ctx
     if get_term_type eng phi = BooleanType eng
     then match smt_map_term eng phi with
-         | SmtInterface.SMT_BoolExpr be -> C.ctr := !C.ctr + 1; ((!C.slv).Check be = Microsoft.Z3.Status.UNSATISFIABLE)
+         | SmtInterface.SMT_BoolExpr be ->
+                C.ctr := !C.ctr + 1;
+                let result = ((!C.slv).Check be = Microsoft.Z3.Status.UNSATISFIABLE);
+                // if trace_smt_calls then fprintf stderr "smt_formula_is_false[scope=%d]: %s -> %b\n" (SmtInterface.smt_scope_id C) (term_to_string eng phi) result;
+                result
          | _ -> failwith (sprintf "smt_formula_is_false: error converting Boolean term (term = %s)" (term_to_string eng phi))
     else failwith (sprintf "'smt_formula_is_false' expects a Boolean term, %s found instead " (term_to_string eng phi))
 
@@ -1181,17 +1203,50 @@ let rec interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as F
     |   ControlledInitial (_, None) -> 
             failwith (sprintf "initial state definition of controlled function '%s' missing" f_name)
 
-and smt_eval_formula (phi : TERM) (eng : ENGINE) (UM : UPDATE_MAP, env, pc : PATH_COND) =
+and smt_eval_formula (phi : TERM) (eng as Engine eid: ENGINE) (UM : UPDATE_MAP, env, pc : PATH_COND) =
     // precondition: term_type sign phi = Boolean
-    if !trace > 0 then fprintf stderr "smt_eval_formula(%s) -> " (term_to_string eng phi)
-    let phi = expand_term phi eng (UM, env, pc)
+    let C = engines[eid].smt_ctx
+    let phi = expand_term phi eng (UM, env, pc)     // phi must not contain variables, therefore: expand first
+    let result_cache = (get_term_attrs eng phi).smt_result
+    let scope_id_stack = !C.scopeIdStack
+    let inline smt_reduce_bool_expr phi =
+        if get_term_type eng phi = BooleanType eng then
+            match smt_map_term eng phi with
+            | SmtInterface.SMT_BoolExpr be ->
+                    if (C.ctr := !C.ctr + 1; (!C.slv).Check ((!C.ctx).MkNot be) = Microsoft.Z3.Status.UNSATISFIABLE)
+                    then TRUE eng
+                    else if (C.ctr := !C.ctr + 1; (!C.slv).Check be = Microsoft.Z3.Status.UNSATISFIABLE)
+                    then FALSE eng
+                    else phi
+            | _ -> failwith (sprintf "smt_check_formula: error converting Boolean term (term = %s)" (term_to_string eng phi))
+        else failwith (sprintf "'smt_reduce_bool_expr' expects a Boolean term, %s found instead " (term_to_string eng phi))
+    let rec find_cached_in_stack (stack : int list) : TERM option =
+        match stack with
+        |   [] -> None
+        |   scope_id :: rest ->
+                match result_cache.TryGetValue(scope_id) with
+                |   true, found_result -> Some found_result
+                |   _ -> find_cached_in_stack rest
     let result =
-        if (!SymbEval.use_smt_solver && smt_formula_is_true eng phi)
-        then TRUE eng
-        else if (!SymbEval.use_smt_solver && smt_formula_is_true eng (s_not eng phi))
-        then FALSE eng
-        else phi
-    if !trace > 0 then fprintf stderr "%s\n" (term_to_string eng result)
+        match result_cache.TryGetValue(List.head scope_id_stack) with
+        |   true, cached_result ->
+                if !trace > 0 || trace_smt_calls then fprintf stderr "[CACHED AT TOP] "
+                cached_result
+        |   _ ->
+            match find_cached_in_stack (List.tail scope_id_stack) with
+            |   Some cached_result ->
+                    if !trace > 0 || trace_smt_calls then fprintf stderr "[CACHED INSIDE] "
+                    let inner_result =
+                        if cached_result = TRUE eng || cached_result = FALSE eng
+                        then cached_result
+                        else smt_reduce_bool_expr phi
+                    result_cache.Add(SmtInterface.smt_scope_id C, inner_result)
+                    inner_result
+            |   None ->
+                    let inner_result = smt_reduce_bool_expr phi
+                    result_cache.Add(SmtInterface.smt_scope_id C, inner_result)
+                    inner_result
+    if !trace > 0 || trace_smt_calls then fprintf stderr "smt_eval_formula[scope=%d]: %s -> %s\n" (SmtInterface.smt_scope_id C) (term_to_string eng phi) (term_to_string eng result)
     result
 
 and expand_term t (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
@@ -1384,24 +1439,16 @@ and eval_cond_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (
                  s_eval_term (CondTerm eng (G', CondTerm eng (G1, t1_G', t2_G'), CondTerm eng (G2, t1_not_G', t2_not_G'))) eng (UM, env, pc)
     |   _ ->    if (!trace > 1)
                 then fprintfn stderr "\n%sctx_condition: %s" (spaces !level) (term_to_string (ctx_condition eng pc))
-                if not SymbEval.simplify_cond then
-                    // version 1: no simplification whatsoever (inefficient, but useful for debugging)
-                    CondTerm eng (G, t1 eng (UM, env, add_cond G pc), t2 eng (UM, env, add_cond (s_not eng G) pc))
-                else 
-                    // version 2: with simplification
-                    if Set.contains G pc
-                    then t1 eng (UM, env, pc)
-                    else if Set.contains (s_not eng G) pc
-                    then t2 eng (UM, env, pc)
-                    else let (t1', t2') = (t1 eng (UM, env, add_cond G pc), t2 eng (UM, env, add_cond (s_not eng G) pc))
-                         if t1' = t2' then t1'
-                         else if not !SymbEval.use_smt_solver
-                              then  let t1' = s_eval_term t1' eng (UM, env, add_cond G pc)
-                                    let t2' = s_eval_term t2' eng (UM, env, add_cond (s_not eng G) pc)
-                                    if t1' = t2' then t1' else CondTerm eng (G, t1', t2')
-                              else  let t1' = with_extended_path_cond G             ( fun _ -> s_eval_term t1') (UM, env, pc)  
-                                    let t2' = with_extended_path_cond (s_not eng G) ( fun _ -> s_eval_term t2') (UM, env, pc)  
-                                    if t1' = t2' then t1' else CondTerm eng (G, t1', t2')
+                if Set.contains G pc
+                then t1 eng (UM, env, pc)
+                else if Set.contains (s_not eng G) pc
+                then t2 eng (UM, env, pc)
+                else let (t1', t2') = (t1 eng (UM, env, add_cond G pc), t2 eng (UM, env, add_cond (s_not eng G) pc))
+                     if t1' = t2' then t1'
+                     else let t1' = with_extended_path_cond G             ( fun _ -> s_eval_term t1') (UM, env, pc)  
+                          let t2' = with_extended_path_cond (s_not eng G) ( fun _ -> s_eval_term t2') (UM, env, pc)  
+                          if t1' = t2' then t1' else CondTerm eng (G, t1', t2')
+
 and eval_let_term (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) (v, t1, t2) : TERM =
     let t1 = t1 eng (UM, env, pc)
     t2 eng (UM, add_binding env (v, t1), pc)
@@ -1526,13 +1573,9 @@ and s_eval_rule (R : RULE) (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH
                 then failwith (sprintf "s_eval_rule.eval_cond: '%s' and '%s' must be boolean terms" (term_to_string G1) (term_to_string G2))
                 else s_eval_rule (CondRule (G', CondRule (G1, R1, R2), CondRule (G2, R1, R2))) (UM, env, pc)
         |   _ ->    //let (R1', R2') = (s_eval_rule R1 (S, env, add_cond G C), s_eval_rule R2 (S, env, add_cond (s_not G) C)_
-                    if not !SymbEval.use_smt_solver
-                    then    let R1' = s_eval_rule R1 (UM, env, (add_cond G pc))
-                            let R2' = s_eval_rule R2 (UM, env, (add_cond (s_not eng G) pc))
-                            if R1' = R2' then R1' else CondRule (G, R1', R2')
-                    else    let R1' = with_extended_path_cond G           (fun _ _ -> s_eval_rule R1) (UM, env, pc)
-                            let R2' = with_extended_path_cond (s_not eng G) (fun _ _ -> s_eval_rule R2) (UM, env, pc)  
-                            if R1' = R2' then R1' else CondRule (G, R1', R2')
+                    let R1' = with_extended_path_cond G           (fun _ _ -> s_eval_rule R1) (UM, env, pc)
+                    let R2' = with_extended_path_cond (s_not eng G) (fun _ _ -> s_eval_rule R2) (UM, env, pc)  
+                    if R1' = R2' then R1' else CondRule (G, R1', R2')
 
     let rec eval_par Rs (UM, env, pc) =
         match Rs with
