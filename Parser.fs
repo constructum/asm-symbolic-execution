@@ -266,7 +266,7 @@ let rec operator_parser (static_term, env) (elem : bool * TypeEnv.TYPE_ENV -> Pa
                                         if (prec1 < prec2) || (prec1 = prec2 && assoc1 = RightAssoc && assoc2 = RightAssoc)
                                         then F ((Opnd ((loc', pos', pos''), t3))::(Optr (Infix (assoc2, prec2), op2))::stack) s''
                                         else if (prec1 > prec2) || (prec1 = prec2 && assoc1 = LeftAssoc && assoc2 = LeftAssoc)
-                                        then F ((Opnd ((loc', pos', pos''), t3))::(Optr (Infix (assoc2, prec2), op2))::(reduce stack)) s''
+                                        then F (reduce stack) s
                                         else raise (Error ("operator_parser", Some (merge_src_reg reg1 reg2), InfixOperatorsSamePrecedenceDifferentAssociativity (op1, op2)))
                         |   ParserFailure failures -> ParserFailure failures
                 |   ParserFailure failures -> ParserSuccess (extract stack, s)
