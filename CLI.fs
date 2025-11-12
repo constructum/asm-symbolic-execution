@@ -82,14 +82,17 @@ let license () =
             ""
             "" ]  |> String.concat "\n" )
 
-let exec_symbolic (sign : Signature.SIGNATURE) (symb_exec_fct : 'rule -> 'a * 'rule) (R_in : 'rule) (rule_to_string, rule_size) : unit =
+let exec_symbolic (symb_exec_fct : 'rule -> 'a * 'a option * 'rule) (R_in : 'rule) (rule_to_string, rule_size) : unit =
 //    let (_, R_in) = try AST.get_rule main_rule_name (TopLevel.rules ()) with _ -> failwith $"rule '{main_rule_name}' not defined"
     match Common.time symb_exec_fct R_in with
-    |   (Some (no_of_leaves, R_out), _, _, cpu, usr, sys) ->
+    |   (Some (no_of_leaves, no_of_distinct_states, R_out), _, _, cpu, usr, sys) ->
             write "\n\n--- generated rule:\n"
             PrettyPrinting.pr stdout 80 (rule_to_string R_out)
             write $"\n\n--- size of generated rule: {(rule_size R_out)}\n"
-            write $"\n--- number of leaves in decision tree: {no_of_leaves}\n"
+            write $"\n--- number of paths in decision tree: {no_of_leaves}\n"
+            match no_of_distinct_states with
+            |   Some n  -> write $"--- number of distinct symbolic states reached: {n}\n"
+            |   None    -> ()
             write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n"     //!!! in DAG version, Toplevel should not be used
             print_time (cpu, usr, sys)
     |   (_, Some ex, _, cpu, usr, sys) ->
@@ -150,6 +153,7 @@ let CLI_with_ex(args) =
         let objects_to_load = ref []
         let main_rule_name = ref "Main"
         let initial_state_name = ref None
+        let state_enumeration_based = ref false
         let rec parse_arguments i = 
             if i < n then 
                 match args[i] with
@@ -167,6 +171,7 @@ let CLI_with_ex(args) =
                                                         parse_arguments (i+1)
                 |   "-symbolic"    -> symbolic := true;    parse_arguments (i+1)
                 |   "-steps"       -> steps := int (args[i+1]); parse_arguments (i+2)
+                |   "-run-steps"   -> steps := int (args[i+1]); state_enumeration_based := true; parse_arguments (i+2)
                 |   "-nonsymbolic" -> symbolic := false;   parse_arguments (i+1)
                 |   "-turbo2basic" -> turbo2basic := true; parse_arguments (i+1)
                 |   "-nosmt"       -> SymbEval.use_smt_solver := false; parse_arguments (i+1)
@@ -190,13 +195,14 @@ let CLI_with_ex(args) =
             else
                 asmeta_flag := true
                 load_everything (List.rev !objects_to_load)
-                let sign = TopLevel.signature ()
                 let (_, R_in) = try AST.get_rule !main_rule_name (TopLevel.rules ()) with _ -> failwith ("rule '" + !main_rule_name + " not defined")
                 let C = Engine.new_engine (TopLevel.signature (), TopLevel.initial_state (), TopLevel.macros (), TopLevel.rules (), TopLevel.invariants (), TopLevel.smt_ctx)
                 let R_in = Engine.convert_rule C R_in
                 if !invcheck
                 then simple_exec (Engine.symbolic_execution_for_invariant_checking C !invcheck_steps) R_in
-                else exec_symbolic sign (fun (R : Engine.RULE) -> Engine.symbolic_execution C R (!steps)) R_in (Engine.pp_rule C, Engine.rule_size C)
+                else if !state_enumeration_based
+                     then exec_symbolic (fun (R : Engine.RULE) -> Engine.symbolic_sequential_asm_run C R (!steps)) R_in (Engine.pp_rule C, Engine.rule_size C)
+                     else exec_symbolic (fun (R : Engine.RULE) -> Engine.symbolic_execution C R (!steps)) R_in (Engine.pp_rule C, Engine.rule_size C)
                 write $"\n--- number of generated types (type table size): {(Engine.get_engine' C).types |> IndMap.count}\n" 
                 write $"--- number of generated terms (term table size): {(Engine.get_engine' C).terms |> IndMap.count}\n" 
                 write $"--- number of generated rules (rule table size): {(Engine.get_engine' C).rules |> IndMap.count}\n" 
@@ -207,7 +213,6 @@ let CLI_with_ex(args) =
             // !!! tbd: for AsmetaL the main rule name it not always 'r_Main', but should be set according to the content of the ASM file
             load_everything (List.rev !objects_to_load)
             let sign = TopLevel.signature ()
-            let exec_symbolic = exec_symbolic sign
             let (_, R_in) = try AST.get_rule (!main_rule_name) (TopLevel.rules ()) with _ -> failwith ("rule '" + !main_rule_name + "' not defined")
             if !invcheck
             then simple_exec (SymbEval.symbolic_execution_for_invariant_checking !invcheck_steps) R_in

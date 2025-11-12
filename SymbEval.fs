@@ -624,7 +624,7 @@ let count_s_updates = rule_induction (fun _ -> ()) {
 //--------------------------------------------------------------------
 
 // first element of pair returned is the number of S_Updates rules, i.e. paths in the decision tree
-let symbolic_execution (R_in : RULE) (steps : int) : int * RULE =
+let symbolic_execution (R_in : RULE) (steps : int) : int * int option * RULE =
     if (!trace > 2) then fprintf stderr "symbolic_execution\n"
     if (steps <= 0) then failwith "SymbEval.symbolic_execution: number of steps must be >= 1"
     let S0 = TopLevel.initial_state ()
@@ -632,7 +632,7 @@ let symbolic_execution (R_in : RULE) (steps : int) : int * RULE =
     let R_in_n_times = [ for _ in 1..steps -> R_in ]
     let R_in' = SeqRule (R_in_n_times @ [ skipRule ])      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
     let R_out = s_eval_rule R_in' (state_to_s_state S0, Map.empty, empty_context)
-    (count_s_updates R_out, reconvert_rule (S0._signature) R_out)
+    (count_s_updates R_out, None, reconvert_rule (S0._signature) R_out)
 
 let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : RULE) : unit =
     let proc = Process.GetCurrentProcess()
@@ -719,8 +719,8 @@ let symbolic_execution_for_invariant_checking (opt_steps : int option) (R_in : R
 //   - section 4)
 //
 // first element of pair returned is the number of S_Updates rules, i.e. paths in the decision tree
-let symbolic_execution_for_turbo_asm_to_basic_asm_transformation (R_in : RULE) : int * RULE =
+let symbolic_execution_for_turbo_asm_to_basic_asm_transformation (R_in : RULE) : int * int option * RULE =
     let S0 = TopLevel.initial_state ()
     let R_in' = SeqRule [ R_in; skipRule ]      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
     let R_out = s_eval_rule R_in' (state_to_s_state_only_static S0, Map.empty, empty_context)
-    (count_s_updates R_out, reconvert_rule (S0._signature) R_out)
+    (count_s_updates R_out, None, reconvert_rule (S0._signature) R_out)
