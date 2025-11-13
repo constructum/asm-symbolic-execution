@@ -436,7 +436,7 @@ and main_type_of eng ty = match get_type' eng ty with Subset' (_, main_type) -> 
 
 
 and compute_type (eng as Engine eid) (t' : TERM') : TYPE =
-    let sign, fct_name, fct_types, type_of_value, get_term_type = engines.[eid].signature, fct_name eng, fct_types eng, type_of_value eng, get_term_type eng
+    let fct_name, fct_types, type_of_value, get_term_type = fct_name eng, fct_types eng, type_of_value eng, get_term_type eng
     match t' with
     |   Value' x -> type_of_value x
     |   Initial' (f, xs) -> match_fct_type eng (fct_name f) (xs >>| type_of_value) (fct_types f)
@@ -447,7 +447,7 @@ and compute_type (eng as Engine eid) (t' : TERM') : TYPE =
     |   LetTerm' (_, t1, t2) -> get_term_type t2
     |   DomainTerm' tyname -> PowersetType eng tyname
 
-and get_term_type (Engine eid) (t as Term tid : TERM) : TYPE =
+and get_term_type (eng as Engine eid) (t as Term tid : TERM) : TYPE =
     (engines.[eid].terms |> get_attrs tid).term_type
 
 and inline is_boolean_term (eng as Engine eid) (t as Term tid : TERM) : bool =
@@ -464,7 +464,7 @@ and inline set_smt_expr (Engine eid) (t as Term tid : TERM) (smt_expr : SmtInter
 and inline initial_state_eval_res (Engine eid) (t as Term tid : TERM) : TERM option ref =
     (engines.[eid].terms |> get_attrs tid).initial_state_eval_res
 
-and inline get_term (eng as Engine eid : ENGINE) (t' : TERM') : TERM =
+and get_term (eng as Engine eid : ENGINE) (t' : TERM') : TERM =
     match IndMap.try_get_index t' engines.[eid].terms with
     |   Some tid ->
             Term tid
@@ -481,7 +481,7 @@ and inline get_term (eng as Engine eid : ENGINE) (t' : TERM') : TERM =
             e.terms |> add (t', attrs) |> Term
 
 and inline get_term'_attrs (Engine eid) (Term tid) = engines.[eid].terms |> get tid
-and inline get_term' (Engine eid) (Term tid) = engines.[eid].terms |> get_obj tid
+and get_term' (Engine eid) (Term tid) = engines.[eid].terms |> get_obj tid
 and inline get_term_attrs (Engine eid) (Term tid) = engines.[eid].terms |> get_attrs tid
 
 and inline Value eng x = get_term eng (Value' x)
@@ -1304,7 +1304,19 @@ and expand_quantifier (q_kind, v, t_set : UPDATE_MAP * ENV * PATH_COND -> TERM, 
             |   AST.ExistUnique -> failwith "Engine.expand_quantifier: 'ExistUnique' not implemented"
     |   x -> failwith (sprintf "Engine.expand_quantifier: not a set (%s)" (term_to_string eng t_set))
 
-and s_eval_term (eng : ENGINE) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+and cases eng (condConstructor : ENGINE -> TERM * 'a * 'a -> 'a) (t : TERM) (x_t_list : (VALUE * 'a) list) : 'a =
+    // the second element of the pairs in x_t_list is typically of type
+    //  - TERM (then the parameter 'condConstructor' should be 'CondTerm'), or
+    //  - RULE (then the parameter 'condConstructor' should be 'CondRule')
+    let eq t1 t2 = s_equals eng (t1, t2)
+    let rec mk_cond_term = function
+    |   [] -> failwith "cases: empty list of cases"
+    |   [(x1, t1)] -> t1        // does not use x1, because this is the 'else' case
+    |   (x1, t1) :: cases' -> condConstructor eng (eq t (Value eng x1), t1, mk_cond_term cases')
+    mk_cond_term x_t_list
+
+and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+    let cases = cases eng CondTerm
     let TRUE, FALSE, get_term', fct_name, fct_kind = TRUE eng, FALSE eng, get_term' eng, fct_name eng, fct_kind eng
     let s_and, s_or, s_not, s_xor, s_implies, s_iff, s_equals = s_and eng, s_or eng, s_not eng, s_xor eng, s_implies eng, s_iff eng, s_equals eng
     let Value, AppTerm, CondTerm, VarTerm, LetTerm, DomainTerm, QuantTerm = Value eng, AppTerm eng, CondTerm eng, VarTerm eng, LetTerm eng, DomainTerm eng, QuantTerm eng
@@ -1312,74 +1324,62 @@ and s_eval_term (eng : ENGINE) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH
     let pp_term, term_to_string = pp_term eng, term_to_string eng
 
     if !trace > 0 then
-        fprintf stderr "%s[[ %s ]]_%s\n" (spaces()) (indent (pp_term t)) (show_s_update_map eng UM)
+        fprintf stderr "%s[[ %s ]]_%s - unfold=%b\n" (spaces()) (indent (pp_term t)) (show_s_update_map eng UM) unfold_locations
         level := !level + 1
 
-    let rec eval_term_with_ext_path_cond (G : TERM) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) =
-        with_extended_path_cond eng G (fun t eng -> eval_term t) t (UM, env, pc)
+    let rec eval_term_with_ext_path_cond (unfold_locations : bool) (G : TERM) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) =
+        with_extended_path_cond eng G (fun t eng -> eval_term unfold_locations t) t (UM, env, pc)
 
-    and eval_bool_term_with_ext_path_cond (G : TERM) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) =
-        with_extended_path_cond eng G (fun t eng -> eval_bool_term t) t (UM, env, pc)
+    and eval_bool_term_with_ext_path_cond (unfold_locations : bool) (G : TERM) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) =
+        with_extended_path_cond eng G (fun t eng -> eval_bool_term unfold_locations t) t (UM, env, pc)
 
-    and eval_app_term (fct_id : FCT_ID, ts : TERM list) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM = 
+    and s_eval_term_with_ext_path_cond (unfold_locations : bool) (G : TERM) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) =
+        with_extended_path_cond eng G (fun t eng -> s_eval_term_ eng unfold_locations t) t (UM, env, pc)
 
-        let try_case_distinction_for_term_with_finite_range (f : FCT_ID, ts0 : TERM list) (UM : UPDATE_MAP, env, pc : PATH_COND) : TERM =
-            let generate_cond_term (t, cases : (VALUE * TERM) list) =
-                let mkCondTerm (G, t1, t2) = CondTerm (G, t1, t2)
-                let mkEq t1 t2 = s_equals (t1, t2)
-                let rec mk_cond_term (cases : (VALUE * TERM) list) =
-                    match cases with
-                    |   [] -> failwith "mk_cond_term: empty list of cases"
-                    |   [(x1, t1)] -> t1
-                    |   (x1, t1) :: cases' ->
-                            let eq_term  = eval_term (mkEq t (Value x1)) (UM, env, pc)
-                            match get_term' eq_term with
-                            |   Value' (BOOL true) -> t1
-                            |   Value' (BOOL false) -> mk_cond_term cases'
-                            |   _ -> mkCondTerm (eq_term, t1, mk_cond_term cases')
-                mk_cond_term cases
-            let make_case_distinction (t : TERM) (elem_term_pairs : (VALUE * TERM) list) =
-                if List.isEmpty elem_term_pairs
-                then failwith (sprintf "Engine.try_case_distinction_for_term_with_finite_domain: empty range for term %s" (term_to_string t))
-                generate_cond_term (t, elem_term_pairs)
-            let rec F past_args = function
-            |   [] -> AppTerm (f, List.rev past_args)
-            |   t1 :: ts' ->
+    and eval_app_term (unfold_locations : bool) (fct_id : FCT_ID, ts : TERM list) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM = 
+        // The following lines of code force the unfolding of 'initial' locations contained in this term if 'fct_id' is dynamic (i.e. not static).
+        let unfold_locations = unfold_locations || fct_kind fct_id <> Signature.Static
+        let eval_term t (UM, env, pc) = eval_term unfold_locations t (UM, env, pc)
+        let eval_bool_term t (UM, env, pc) = eval_bool_term unfold_locations t (UM, env, pc)
+
+        let rec F (ts_past_rev : TERM list, xs_past_opt_rev: VALUE list option) (ts : TERM list) (UM, env, pc) =
+            match ts with
+            |   t1 :: ts_fut ->
                     let t1 = eval_term t1 (UM, env, pc)
                     match get_term' t1 with
-                    |   Value' x1 -> F (Value x1 :: past_args) ts'
-                    |   _ ->
-                            match (try enum_finite_type eng (get_term_type t1) with _ -> None) with
-                            |   None ->
-                                    failwith (sprintf "arguments of dynamic function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)"
-                                                (fct_name f) (term_to_string (AppTerm (f, ts0))))
-                            |   Some elems ->
-                                    make_case_distinction t1 (List.map (fun elem -> (elem, F (Value elem :: past_args) ts')) (Set.toList elems))
-            let result = F [] ts0
-            result
-
-        let rec F (ts_past : TERM list, xs_past: VALUE list option) (ts : TERM list) =
-            match ts with
-            |   t :: ts_fut ->
-                    let t = eval_term t (UM, env, pc)
-                    match get_term' t with
-                    |   Value' x1             -> F (t :: ts_past, Option.map (fun xs -> x1 :: xs) xs_past) ts_fut
-                    |   Initial'  (f, xs)     -> F (t :: ts_past, None) ts_fut
-                    |   CondTerm' (G1, t11, t12) -> eval_term (CondTerm (G1, F (ts_past, xs_past) (t11 :: ts_fut), F (ts_past, xs_past) (t12 :: ts_fut))) (UM, env, pc)
-                    |   AppTerm'  _           -> F (t :: ts_past, None) ts_fut
+                    |   Value' x1             -> F (t1 :: ts_past_rev, Option.map (fun xs -> x1 :: xs) xs_past_opt_rev) ts_fut (UM, env, pc)
+                    |   Initial'  (f, xs)     ->
+                            if not unfold_locations then
+                                F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
+                            else
+                                match Option.map Set.toList (enum_finite_type eng (get_term_type t1)) with
+                                |   None -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
+                                |   Some [] -> failwith (sprintf "Engine.eval_app_term: term '%s' has empty domain" (term_to_string t1))       
+                                |   Some elems ->
+                                        let first_elem = List.head elems
+                                        List.fold
+                                            (fun acc x ->
+                                                let eq = s_equals (t1, Value x)
+                                                CondTerm (eq, F (ts_past_rev, xs_past_opt_rev) (Value x :: ts_fut) (UM, env, pc), acc))
+                                            (F (ts_past_rev, xs_past_opt_rev) (Value first_elem :: ts_fut) (UM, env, pc))
+                                            (List.tail elems)
+                    |   CondTerm' (G1, t11, t12) -> CondTerm (G1, F (ts_past_rev, xs_past_opt_rev) (t11 :: ts_fut) (UM, env, pc), F (ts_past_rev, xs_past_opt_rev) (t12 :: ts_fut) (UM, env, pc))
+                    |   AppTerm'  _           -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
                     |   LetTerm'  (v, t1, t2) -> failwith "Engine.eval_app_term: LetTerm should not occur here"
                     |   VarTerm'  v           -> failwith "Engine.eval_app_term: VarTerm should not occur here"
                     |   QuantTerm' _          -> failwith "Engine.eval_app_term: QuantTerm should not occur here"
                     |   DomainTerm' _         -> failwith "Engine.eval_app_term: DomainTerm should not occur here"
             |   [] ->
-                    match Option.map List.rev xs_past with
+                    let xs_opt = Option.map List.rev xs_past_opt_rev
+                    match xs_opt with
                         |   Some xs ->
                                 interpretation eng UM pc fct_id xs       // arguments fully evaluated to values
                         |   None ->
                                 let FctName f_name, { fct_kind = f_kind; fct_interpretation = f_intp }  = get_function' eng fct_id
+                                let ts = List.rev ts_past_rev
                                 match f_kind with
                                 |   Signature.Static ->
-                                        match f_name, List.rev ts_past with
+                                        match f_name, ts with
                                         |   "and", [ t1; t2 ] -> s_and (t1, t2)
                                         |   "or", [ t1; t2 ]  -> s_or (t1, t2)
                                         |   "xor", [ t1; t2 ] -> s_xor (t1, t2)
@@ -1388,14 +1388,14 @@ and s_eval_term (eng : ENGINE) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH
                                         |   "=", [ t1; t2 ]   -> s_equals (t1, t2)
                                         |   _, ts             -> AppTerm (fct_id, ts)
                                 |   Signature.Controlled ->
-                                        let ts = List.rev ts_past
-                                        eval_term (try_case_distinction_for_term_with_finite_range (fct_id, ts) (UM, env, pc)) (UM, env, pc)
+                                        failwith (sprintf "arguments of controlled function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)" f_name (term_to_string (AppTerm (fct_id, ts))))
+                                        // eval_term (try_case_distinction_for_term_with_finite_range (fct_id, ts) (UM, env, pc)) (UM, env, pc)
                                 |   Signature.Derived ->
-                                        let ts = List.rev ts_past
-                                        eval_term (try_case_distinction_for_term_with_finite_range (fct_id, ts) (UM, env, pc)) (UM, env, pc)
+                                        failwith (sprintf "arguments of derived function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)" f_name (term_to_string (AppTerm (fct_id, ts))))
+                                        // let ts = List.rev ts_past
+                                        // eval_term (try_case_distinction_for_term_with_finite_range (fct_id, ts) (UM, env, pc)) (UM, env, pc)
                                 |   other_kind ->
-                                        let ts = List.rev ts_past
-                                        failwith (sprintf "Engine.eval_app_term: %s not evaluable - arguments of %s function '%s' are not fully evaluated" (term_to_string (AppTerm (fct_id, ts))) (Signature.fct_kind_to_string other_kind) f_name)
+                                        failwith (sprintf "function '%s' in term '%s': %s functions are not supported" f_name (term_to_string t) (Signature.fct_kind_to_string (fct_kind fct_id)))
         let f_name = fct_name fct_id
         match f_name, ts with
         |   "and", [ t1; t2 ] ->
@@ -1408,7 +1408,7 @@ and s_eval_term (eng : ENGINE) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH
                     match get_term' t2_eval with
                     |   Value' (BOOL false) -> FALSE
                     |   Value' (BOOL true)  -> t1_eval            // eval_bool_term t1 (UM, env, pc)
-                    |   _ -> if t1_eval = t2_eval then t1_eval else F ([], Some []) [t1_eval; t2_eval]
+                    |   _ -> if t1_eval = t2_eval then t1_eval else F ([], Some []) [t1_eval; t2_eval] (UM, env, pc)
         |   "or", [ t1; t2 ] ->
                 let t1_eval = eval_term t1 (UM, env, pc)
                 match get_term' t1_eval with
@@ -1419,7 +1419,7 @@ and s_eval_term (eng : ENGINE) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH
                     match get_term' t2_eval with
                     |   Value' (BOOL true) -> TRUE
                     |   Value' (BOOL false) -> t1_eval           // t1_eval
-                    |   _ -> if t1_eval = t2_eval then t1_eval else F ([], Some []) [t1_eval; t2_eval]
+                    |   _ -> if t1_eval = t2_eval then t1_eval else F ([], Some []) [t1_eval; t2_eval] (UM, env, pc)
         |   "implies", [ t1; t2 ] ->
                 let t1_eval = eval_term t1 (UM, env, pc)
                 match get_term' t1_eval with
@@ -1430,7 +1430,7 @@ and s_eval_term (eng : ENGINE) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH
                     match get_term' t2_eval with
                     |   Value' (BOOL false) -> s_not t1_eval
                     |   Value' (BOOL true)  -> TRUE
-                    |   _ -> if t1_eval = t2_eval then TRUE else F ([], Some []) [t1_eval; t2_eval]
+                    |   _ -> if t1_eval = t2_eval then TRUE else F ([], Some []) [t1_eval; t2_eval] (UM, env, pc)
         |   "iff", [ t1; t2 ] ->
                 let t1_eval = eval_term t1 (UM, env, pc)
                 match get_term' t1_eval with
@@ -1441,7 +1441,7 @@ and s_eval_term (eng : ENGINE) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH
                     match get_term' t2_eval with
                     |   Value' (BOOL false) -> s_not t1_eval
                     |   Value' (BOOL true)  -> t1_eval
-                    |   _ -> if t1_eval = t2_eval then TRUE else F ([], Some []) [t1_eval; t2_eval]
+                    |   _ -> if t1_eval = t2_eval then TRUE else F ([], Some []) [t1_eval; t2_eval] (UM, env, pc)
         |   "=", [ t1; t2 ] ->
                 let t1_eval = eval_term t1 (UM, env, pc)
                 match get_term' t1_eval with
@@ -1449,12 +1449,14 @@ and s_eval_term (eng : ENGINE) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH
                     let t2_eval = eval_term t2 (UM, env, pc)
                     match get_term' t2_eval with
                     |   Value' x2 -> Value (BOOL (x1 = x2))
-                    |   t2' -> F ([], Some []) [t1_eval; t2_eval]
-                |   t1' -> F ([], Some []) [t1_eval; eval_term t2 (UM, env, pc)]
+                    |   t2' -> F ([], Some []) [t1_eval; t2_eval] (UM, env, pc)
+                |   t1' -> F ([], Some []) [t1_eval; eval_term t2 (UM, env, pc)] (UM, env, pc)
         |   _ ->
-            F ([], Some []) ts
+            F ([], Some []) ts (UM, env, pc)
 
-    and eval_cond_term (G : TERM, t1 : TERM, t2 : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+    and eval_cond_term unfold_locations (G : TERM, t1 : TERM, t2 : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+        let eval_term t (UM, env, pc) = eval_term unfold_locations t (UM, env, pc)
+        let eval_bool_term t (UM, env, pc) = eval_bool_term unfold_locations t (UM, env, pc)
         let G_eval = eval_bool_term G (UM, env, pc)
         match get_term' G_eval with
         |   Value' (BOOL true)  -> eval_term t1 (UM, env, pc)
@@ -1462,39 +1464,53 @@ and s_eval_term (eng : ENGINE) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH
         |   CondTerm' (G', G1, G2) ->
                 eval_term (CondTerm (G', CondTerm (G1, t1, t2), CondTerm (G2, t1, t2))) (UM, env, pc)
         |   G' ->
-                let t1_eval = eval_term_with_ext_path_cond G_eval         t1 (UM, env, pc)
-                let t2_eval = eval_term_with_ext_path_cond (s_not G_eval) t2 (UM, env, pc)
+                let t1_eval = eval_term_with_ext_path_cond unfold_locations G_eval         t1 (UM, env, pc)
+                let t2_eval = eval_term_with_ext_path_cond unfold_locations (s_not G_eval) t2 (UM, env, pc)
                 if t1_eval = t2_eval then t1_eval else CondTerm (G_eval, t1_eval, t2_eval)
 
-    and eval_let_term (v : string, t1 : TERM, t2 : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+    and eval_let_term unfold_locations (v : string, t1 : TERM, t2 : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+        let eval_term t (UM, env, pc) = eval_term unfold_locations t (UM, env, pc)
         let t1 = eval_term t1 (UM, env, pc)
         eval_term t2 (UM, add_binding env (v, t1), pc)
 
-    and eval_domain_term (dom : TYPE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+    and eval_var_term unfold_locations (v : string, ty : TYPE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+        eval_term unfold_locations (get_env env v) (UM, env, pc)
+
+    and eval_domain_term unfold_locations (dom : TYPE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
         match enum_finite_type eng dom with
         |   Some xs -> Value (SET (main_type_of eng dom |> to_signature_type eng, xs))
         |   None -> failwith (sprintf "Engine.s_eval_term_: domain of type '%s' is not enumerable" (dom |> type_to_string eng))
 
-    and eval_quant_term (q_kind, v, t_set, t_cond) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+    and eval_quant_term (unfold_locations : bool) (q_kind, v, t_set, t_cond) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+        let eval_term t (UM, env, pc) = eval_term unfold_locations t (UM, env, pc)
         let eval_tset (UM, env, pc) = eval_term t_set (UM, env, pc)
         let eval_tcond (UM, env, pc) = eval_term t_cond (UM, env, pc)
         expand_quantifier (q_kind, v, eval_tset, eval_tcond) eng (UM, env, pc)
 
-    and eval_term t (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
-        match get_term' t with
-        |   Value' _              -> t
-        |   Initial' _            -> t
-        |   VarTerm' (v, ty)      -> get_env env v
-        |   AppTerm' (f, ts)      -> eval_app_term (f, ts) (UM, env, pc)
-        |   CondTerm' (G, t1, t2) -> eval_cond_term (G, t1, t2) (UM, env, pc)
-        |   LetTerm' (v, t1, t2)  -> eval_let_term (v, t1, t2) (UM, env, pc)
-        |   DomainTerm' dom       -> eval_domain_term dom (UM, env, pc)
-        |   QuantTerm' (q_kind, v, t_set, t_cond) -> eval_quant_term (q_kind, v, t_set, t_cond) (UM, env, pc)
+    and eval_term (unfold_locations : bool) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
+        if !trace > 1 then
+            fprintf stderr "%s[[ %s ]]_%s - unfold=%b\n" (spaces()) (indent (pp_term t)) (show_s_update_map eng UM) unfold_locations
+            level := !level + 1
+        let t_result =
+            match get_term' t with
+            |   Value' _              -> t
+            |   Initial' _            -> t
+            |   VarTerm' (v, ty)      -> eval_var_term unfold_locations (v, ty) (UM, env, pc)
+            |   AppTerm' (f, ts)      -> eval_app_term unfold_locations (f, ts) (UM, env, pc)
+            |   CondTerm' (G, t1, t2) -> eval_cond_term unfold_locations (G, t1, t2) (UM, env, pc)
+            |   LetTerm' (v, t1, t2)  -> eval_let_term unfold_locations (v, t1, t2) (UM, env, pc)
+            |   DomainTerm' dom       -> eval_domain_term unfold_locations dom (UM, env, pc)
+            |   QuantTerm' (q_kind, v, t_set, t_cond) -> eval_quant_term unfold_locations (q_kind, v, t_set, t_cond) (UM, env, pc)
+        if !trace > 1 then 
+            level := !level - 1
+            fprintf stderr "%s-> %s\n" (spaces()) (indent (pp_term t_result))
+        t_result
 
-    and eval_bool_term t (UM, env, pc) =
+
+    and eval_bool_term (unfold_locations : bool) t (UM, env, pc) =
         // specialized version for boolean terms, possibly calling SMT solver
         // only to be called for terms known to be boolean
-        let t_eval = eval_term t (UM, env, pc)
+        let t_eval = eval_term unfold_locations t (UM, env, pc)
         match get_term' t_eval with
         |   Value' (BOOL _) ->
                 t_eval
@@ -1503,15 +1519,15 @@ and s_eval_term (eng : ENGINE) (t : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH
 
     let t_result =
         match get_type' (get_term_type t) with
-        |   Boolean' -> eval_bool_term t (UM, env, pc)
-        |   _ -> eval_term t (UM, env, pc)
+        |   Boolean' -> eval_bool_term unfold_locations t (UM, env, pc)
+        |   _ -> eval_term unfold_locations t (UM, env, pc)
 
-    if !trace > 0 then 
-        level := !level - 1
-        fprintf stderr "%s-> %s\n" (spaces()) (indent (pp_term t_result))
 
     t_result
-    
+
+and s_eval_term eng = s_eval_term_ eng false
+and s_eval_term_with_unfolding eng = s_eval_term_ eng true
+
 //--------------------------------------------------------------------
 
 let rec try_case_distinction_for_update_with_finite_domain
@@ -1556,7 +1572,7 @@ let rec try_case_distinction_for_update_with_finite_domain
 and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : RULE =
     let CondRule, UpdateRule, S_Updates = CondRule eng, UpdateRule eng, S_Updates eng
     let ParRule, SeqRule, IterRule, skipRule = ParRule eng, SeqRule eng, IterRule eng, skipRule eng
-    let s_eval_term, eval_rule = s_eval_term eng, eval_rule eng
+    let s_eval_term, s_eval_term_with_unfolding, eval_rule = s_eval_term eng, s_eval_term_with_unfolding eng, eval_rule eng
     let get_type, get_s_update_set, get_s_update_set', s_update_set_union, s_update_set_empty =
         get_type eng, get_s_update_set eng, get_s_update_set' eng, s_update_set_union eng, s_update_set_empty eng
     let rule_to_string, term_to_string, pp_rule = rule_to_string eng, term_to_string eng, pp_rule eng
@@ -1577,7 +1593,7 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
         |   _ ->
             let rec F (ts_past : TERM list, xs_past : VALUE list option) : TERM list -> RULE = function
                 |   (t1 :: ts_fut) ->
-                    let t1 = s_eval_term t1 (UM, env, pc)
+                    let t1 = s_eval_term_with_unfolding t1 (UM, env, pc)
                     match get_term' eng t1 with
                     |   Value' x1       -> F (t1 :: ts_past, Option.map (fun xs -> x1 :: xs) xs_past) ts_fut
                     |   Initial' _      -> F (t1 :: ts_past, None) ts_fut
@@ -1856,10 +1872,10 @@ let symbolic_execution_for_invariant_checking (eng : ENGINE) (opt_steps : int op
         let check_invariants invs S0 conditions updates =
             let check_one (inv_id, t) =
                 let t' = s_eval_term eng t (apply_s_update_set eng S0 updates, Map.empty, Set.empty)
-                if smt_formula_is_true eng t'
-                then met inv_id
-                else if smt_formula_is_false eng t' then definitely_violated inv_id conditions updates t t'
-                else possibly_violated inv_id conditions updates t t'
+                match get_term' eng (smt_eval_formula t' eng (apply_s_update_set eng S0 updates, Map.empty, Set.empty)) with
+                |   Value' (BOOL true)  -> met inv_id
+                |   Value' (BOOL false) -> definitely_violated inv_id conditions updates t t'
+                |   _                   -> possibly_violated inv_id conditions updates t t'
             printf "%s" (String.concat "" (List.filter (fun s -> s <> "") (List.map check_one invs)))
         match get_rule' eng R with      // check invariants on all paths of state S' = S0 + R by traversing tree of R
         |   CondRule' (G, R1, R2) ->
