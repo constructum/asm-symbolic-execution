@@ -30,7 +30,6 @@ let indent ppt =
 
 type FUNCTION_INTERPRETATION =
 |   Constructor of (VALUE list -> VALUE)
-|   StaticSymbolic of (TERM list -> TERM)       // rewriting rules for term simplification, e.g. for boolean functions 
 |   StaticBackground of (VALUE list -> VALUE)
 |   StaticUserDefined of (VALUE list -> VALUE) * (string list * TERM) option
 |   ControlledInitial of (VALUE list -> VALUE) * (string list * TERM) option
@@ -640,7 +639,7 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
                 |   Some fct_interp ->
                         if Set.contains f_name (Signature.fct_names Background.signature)   // background functions
                         then Some (StaticBackground fct_interp)
-                        else Some (StaticUserDefined (fct_interp, None))   // second component is the AsmetaL definition to be filled in later
+                        else Some (StaticUserDefined (fct_interp, None))        // second component is the AsmetaL definition to be filled in later
         |   Signature.Controlled ->
                 match initial_state._dynamic_initial |> fst |> Map.tryFind f_name with
                 |   Some fct_def -> Some (ControlledInitial (fct_def, None))
@@ -855,7 +854,6 @@ and show_fct_tables (eng as Engine eid: ENGINE) =
                 f_id f_name (Signature.fct_kind_to_string f_kind)
                 (match f_intp with
                     | Constructor _ -> "constructor"
-                    | StaticSymbolic _ -> "static (symbolic)"
                     | StaticBackground _ -> "static (background)"
                     | StaticUserDefined _ -> "static (user-defined)"
                     | ControlledInitial _ -> "controlled (initial)"
@@ -1206,8 +1204,39 @@ let rec interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as F
             with _ -> Initial eng (f, xs)
     |   Derived (fct_def : string list * TERM) ->
             eval_fct_definition_in_curr_state fct_def xs
-    |   StaticSymbolic (s_fct_interpretation: TERM list -> TERM) ->
-            failwith (sprintf "Engine.interpretation: static symbolic function '%s' - not implemented" f_name)
+    |   StaticUserDefined (_, None) ->
+            failwith (sprintf "definition of static function '%s' missing" f_name)
+    |   ControlledInitial (_, None) -> 
+            failwith (sprintf "initial state definition of controlled function '%s' missing" f_name)
+
+and symbolic_interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as FctId f_id) (ts : TERM list) =
+    let Value = Value eng
+    let eval_fct_definition_in_curr_state (fct_definition as (args, body)) (ts : TERM list) =
+        let env = List.fold2 (fun env' arg t -> add_binding env' (arg, t)) Map.empty args ts
+        let body' = body        // alternative: // let body' = replace_vars eng env body
+        s_eval_term eng body' (UM, env, pc)
+    let eval_fct_definition_in_initial_state (fct_definition as (args, body)) (ts : TERM list) =
+        let env = List.fold2 (fun env' arg t -> add_binding env' (arg, t)) Map.empty args ts
+        let body' = body        // alternative: // let body' = replace_vars eng env body
+        s_eval_term eng body' (Map.empty, env, Set.empty)   //!!!! to be modified if at some point initial state constraints are implemented => path condition may then be non-empty
+    let FctName f_name, { fct_interpretation = f_intp; fct_id = f_id } = get_function' eng f
+    match f_intp with
+    |   Constructor (fct_interpretation : VALUE list -> VALUE) ->
+            failwith "symbolic_interpretation: constructor functions not supported"
+    |   StaticBackground (fct_interpretation : VALUE list -> VALUE) ->
+            failwith "symbolic_interpretation: static background functions not supported"
+    |   StaticUserDefined (_ : VALUE list -> VALUE, Some (fct_def : string list * TERM)) ->
+            // memoization of computed values for static user-defined functions
+            let res = initial_state_eval_res eng (AppTerm eng (f, ts))
+            match !res with
+            |   Some t' -> t'
+            |   None -> let t' = eval_fct_definition_in_initial_state fct_def ts in res := Some t'; t'
+    |   ControlledInitial (_ : VALUE list -> VALUE, Some (fct_def : string list * TERM)) -> 
+            failwith "symbolic_interpretation: (initialized) controlled functions not supported"
+    |   ControlledUninitialized ->
+            failwith "symbolic_interpretation: (uninitialized) controlled functions not supported"
+    |   Derived (fct_def : string list * TERM) ->
+            eval_fct_definition_in_curr_state fct_def ts
     |   StaticUserDefined (_, None) ->
             failwith (sprintf "definition of static function '%s' missing" f_name)
     |   ControlledInitial (_, None) -> 
@@ -1337,8 +1366,11 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
         with_extended_path_cond eng G (fun t eng -> s_eval_term_ eng unfold_locations t) t (UM, env, pc)
 
     and eval_app_term (unfold_locations : bool) (fct_id : FCT_ID, ts : TERM list) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM = 
-        // The following lines of code force the unfolding of 'initial' locations contained in this term if 'fct_id' is dynamic (i.e. not static).
-        let unfold_locations = unfold_locations || fct_kind fct_id <> Signature.Static
+        let FctName f_name, { fct_kind = f_kind; fct_interpretation = f_intp }  = get_function' eng fct_id
+        // The following lines of code force the unfolding of 'initial' locations contained in this term if 'fct_id' is controlled or derived.
+        let unfold_locations = unfold_locations || f_kind = Signature.Controlled || f_kind = Signature.Derived
+        // As an alternative, symbolic interpretation without unfolding may be used for non-recursive derived functions.
+
         let eval_term t (UM, env, pc) = eval_term unfold_locations t (UM, env, pc)
         let eval_bool_term t (UM, env, pc) = eval_bool_term unfold_locations t (UM, env, pc)
 
@@ -1375,7 +1407,6 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
                         |   Some xs ->
                                 interpretation eng UM pc fct_id xs       // arguments fully evaluated to values
                         |   None ->
-                                let FctName f_name, { fct_kind = f_kind; fct_interpretation = f_intp }  = get_function' eng fct_id
                                 let ts = List.rev ts_past_rev
                                 match f_kind with
                                 |   Signature.Static ->
@@ -1386,13 +1417,21 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
                                         |   "implies", [ t1; t2 ] -> s_implies (t1, t2)
                                         |   "iff", [ t1; t2 ] -> s_iff (t1, t2)
                                         |   "=", [ t1; t2 ]   -> s_equals (t1, t2)
-                                        |   _, ts             -> AppTerm (fct_id, ts)
+                                        |   _, ts             ->
+                                                match f_intp with
+                                                |   StaticBackground _ -> AppTerm (fct_id, ts)          // if f is a background function, keep term as it is (possibly for SMT mapping later)
+                                                |   StaticUserDefined (_, Some _) -> symbolic_interpretation eng UM pc fct_id ts        // if f is user defined, try symbolic evaluation
+                                                |   StaticUserDefined (_, None) -> failwith (sprintf "definition of static function '%s' missing" f_name)
+                                                |   _ -> failwith (sprintf "function '%s' in term '%s': only static functions should occur here" f_name (term_to_string t))
+                                |   Signature.Derived ->
+                                        // Derived functions are evaluated symbolically, if the arguments could not be fully evaluated.
+                                        // !!! Note: this is dangerous for recursive functions, as symbolic evaluation may sometimes not terminate even if the function always terminates.
+                                        symbolic_interpretation eng UM pc fct_id ts
+                                        // For the above reason, symbolic interpretation is used only as a fallback, when arguments cannot be fully evaluated even after unfolding.
+                                        // As an alternative, symbolic interpretation without unfolding may be used for non-recursive derived functions.
+                                        // This alternative implementation may be especially advantageous in combination with memoization.
                                 |   Signature.Controlled ->
                                         failwith (sprintf "arguments of controlled function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)" f_name (term_to_string (AppTerm (fct_id, ts))))
-                                        // eval_term (try_case_distinction_for_term_with_finite_range (fct_id, ts) (UM, env, pc)) (UM, env, pc)
-                                |   Signature.Derived ->
-                                        failwith (sprintf "arguments of derived function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)" f_name (term_to_string (AppTerm (fct_id, ts))))
-                                        // let ts = List.rev ts_past
                                         // eval_term (try_case_distinction_for_term_with_finite_range (fct_id, ts) (UM, env, pc)) (UM, env, pc)
                                 |   other_kind ->
                                         failwith (sprintf "function '%s' in term '%s': %s functions are not supported" f_name (term_to_string t) (Signature.fct_kind_to_string (fct_kind fct_id)))
@@ -1473,9 +1512,6 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
         let t1 = eval_term t1 (UM, env, pc)
         eval_term t2 (UM, add_binding env (v, t1), pc)
 
-    and eval_var_term unfold_locations (v : string, ty : TYPE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
-        eval_term unfold_locations (get_env env v) (UM, env, pc)
-
     and eval_domain_term unfold_locations (dom : TYPE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
         match enum_finite_type eng dom with
         |   Some xs -> Value (SET (main_type_of eng dom |> to_signature_type eng, xs))
@@ -1495,7 +1531,7 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
             match get_term' t with
             |   Value' _              -> t
             |   Initial' _            -> t
-            |   VarTerm' (v, ty)      -> eval_var_term unfold_locations (v, ty) (UM, env, pc)
+            |   VarTerm' (v, ty)      -> eval_term unfold_locations (get_env env v) (UM, env, pc)
             |   AppTerm' (f, ts)      -> eval_app_term unfold_locations (f, ts) (UM, env, pc)
             |   CondTerm' (G, t1, t2) -> eval_cond_term unfold_locations (G, t1, t2) (UM, env, pc)
             |   LetTerm' (v, t1, t2)  -> eval_let_term unfold_locations (v, t1, t2) (UM, env, pc)
@@ -1505,7 +1541,6 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
             level := !level - 1
             fprintf stderr "%s-> %s\n" (spaces()) (indent (pp_term t_result))
         t_result
-
 
     and eval_bool_term (unfold_locations : bool) t (UM, env, pc) =
         // specialized version for boolean terms, possibly calling SMT solver
