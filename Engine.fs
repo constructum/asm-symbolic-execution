@@ -1397,6 +1397,7 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
                                 |   Some elems ->
                                         // !!! filter the elements, including only those that satisfy t1 = x in the current path condition - use eval_without_unfolding to avoid non-termination
                                         // !!! evaluate the branches with path condition extended with t1 = x (additional component in path condition for values of initial locations)
+                                        let elems = List.rev elems // |> List.filter (fun x -> eval_bool_term_with_ext_path_cond false (s_equals (t1, Value x)) TRUE (UM, env, pc) = TRUE)
                                         let first_elem = List.head elems
                                         List.fold
                                             (fun acc x ->
