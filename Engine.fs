@@ -1251,9 +1251,9 @@ and symbolic_interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f
 
 and smt_eval_formula (phi : TERM) (eng as Engine eid: ENGINE) (UM : UPDATE_MAP, env, pc : PATH_COND) =
     // precondition: term_type sign phi = Boolean
+    // precondition: phi does not contain variables (i.e., it is fully expanded) - this is the case if smt_eval_formula is applied to the result of s_eval_term
     let enable_caching = true
     let C = engines[eid].smt_ctx
-    let phi = expand_term phi eng (UM, env, pc)     // phi must not contain variables, therefore: expand first
     let result_cache = (get_term_attrs eng phi).smt_result
     let scope_id_stack = !C.scopeIdStack
     let inline smt_reduce_bool_expr phi =
@@ -1296,31 +1296,6 @@ and smt_eval_formula (phi : TERM) (eng as Engine eid: ENGINE) (UM : UPDATE_MAP, 
                         inner_result
     if !trace > 0 || trace_smt_calls then fprintf stderr "smt_eval_formula[scope=%d]: %s -> %s\n" (SmtInterface.smt_scope_id C) (term_to_string eng phi) (term_to_string eng result)
     result
-
-and expand_term t (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
-    let get_term_type, type_to_string = get_term_type eng, type_to_string eng
-    term_induction eng (fun x -> x) {
-        Value   = fun x (UM, env, pc) -> Value eng x;
-        Initial = fun (f, xs) (UM, env, pc) -> Initial eng (f, xs)
-        AppTerm = fun (f, ts) (UM : UPDATE_MAP, env, pc) ->
-            let FctName name, { fct_kind = f_kind; fct_interpretation = f_intp } = get_function' eng f
-            match f_intp with
-            |   StaticUserDefined (_, Some (args, body)) ->
-                    let ts = ts >>| fun t -> t (UM, env, pc)
-                    let env = List.fold2 (fun env' arg t -> add_binding env' (arg, s_eval_term eng t (UM, env, pc))) Map.empty args ts
-                    s_eval_term eng body (UM, env, pc)
-            | _ -> AppTerm eng (f, ts >>| fun t -> t (UM, env, pc))
-        CondTerm  = fun (G, t1, t2) (UM : UPDATE_MAP, env, pc) -> CondTerm eng (G (UM, env, pc), t1 (UM, env, pc), t2 (UM, env, pc));
-        VarTerm   = fun (v, _) (UM : UPDATE_MAP, env, pc) -> get_env env v;
-        QuantTerm = fun (q_kind, v, t_set, t_cond) (UM : UPDATE_MAP, env, pc) -> expand_quantifier (q_kind, v, t_set, t_cond) eng (UM, env, pc);
-        LetTerm   = fun (v, t1, t2) (UM : UPDATE_MAP, env, pc) ->
-                        let t1_val = t1 (UM, env, pc)
-                        t2 (UM, add_binding env (v, t1_val), pc);
-        DomainTerm = fun dom (UM : UPDATE_MAP, env, pc) ->
-            match enum_finite_type eng dom with
-            |   Some xs -> Value eng (SET ((main_type_of eng dom) |> to_signature_type eng, xs))
-            |   _ -> failwith (sprintf "Engine.expand_term: domain of type '%s' is not enumerable" (dom |> type_to_string))
-    } t ((UM : UPDATE_MAP), (env : ENV), (pc : PATH_COND))
 
 and expand_quantifier (q_kind, v, t_set : UPDATE_MAP * ENV * PATH_COND -> TERM, t_cond : UPDATE_MAP * ENV * PATH_COND -> TERM)
                         (eng : ENGINE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
