@@ -120,6 +120,8 @@ val type_arity : string -> SIGNATURE -> int
 val type_kind  : string -> SIGNATURE -> TYPE_KIND
 
 val is_rule_name : string -> SIGNATURE -> bool
+val rule_type : string -> SIGNATURE -> TYPE list
+val rule_type_as_fct_type : string -> SIGNATURE -> TYPE list * TYPE
 
 val is_function_name : string -> SIGNATURE -> bool
 val fct_kind : string -> SIGNATURE -> FCT_KIND

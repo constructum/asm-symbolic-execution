@@ -192,6 +192,7 @@ and ErrorDetails' =
 // type errors
 |   TypeMismatch of TYPE * TYPE
 |   FunctionCallTypeMismatch of (string * TYPE list * TYPE) * TYPE list
+|   RuleCallTypeMismatch of string * TYPE list * TYPE list
 |   TypeOfResultUnknown of string * TYPE list * TYPE
 |   NoMatchingFunctionType of string * TYPE list
 |   AmbiguousFunctionCall of string * TYPE list
@@ -215,8 +216,11 @@ let rec error_msg ((eng, fct_name, details) : ErrorDetails) =
     |   TypeMismatch (ty, ty_sign) ->
             sprintf "type mismatch: %s does not match %s" (ty |> type_to_string) (ty_sign |> type_to_string)
     |   FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types) ->
-            sprintf "function '%s : %s -> %s' called with arguments of type(s) %s"
+            sprintf "function '%s : %s -> %s' called with arguments of type(s): %s"
                 fct_name (sign_args_types |> type_list_to_string) (sign_res_type |> type_to_string) (args_types |> type_list_to_string)
+    |   RuleCallTypeMismatch (rname, def_args_types, sign_rule_types) ->
+            sprintf "rule macro '%s'\n  expecting arguments of type(s):   %s\n  called with arguments of type(s): %s"
+                rname (sign_rule_types |> type_list_to_string) (def_args_types |> type_list_to_string)
     |   TypeOfResultUnknown (fct_name, sign_args_types, sign_res_type) ->
             sprintf "type of result of function %s : %s -> %s is unknown (type parameter '%s cannot be instantiated)"
                 fct_name (sign_args_types |> type_list_to_string) (sign_res_type |> type_to_string) (sign_res_type |> type_to_string)
@@ -268,6 +272,9 @@ and type_list_to_string (eng : ENGINE) tys =
 
 and fct_type_to_string (eng : ENGINE) (args_type, res_type) =
     sprintf "%s -> %s" (args_type |> type_list_to_string eng) (res_type |> type_to_string eng)
+
+and inline get_signature (Engine eid) : Signature.SIGNATURE =
+    engines.[eid].signature
 
 and inline get_fct_id (Engine eid) (name : string) : FCT_ID =
     match engines.[eid].functions |> try_get_index (FctName name) with
@@ -1388,11 +1395,14 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
                                 |   None -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
                                 |   Some [] -> failwith (sprintf "Engine.eval_app_term: term '%s' has empty domain" (term_to_string t1))       
                                 |   Some elems ->
+                                        // !!! filter the elements, including only those that satisfy t1 = x in the current path condition - use eval_without_unfolding to avoid non-termination
+                                        // !!! evaluate the branches with path condition extended with t1 = x (additional component in path condition for values of initial locations)
                                         let first_elem = List.head elems
                                         List.fold
                                             (fun acc x ->
-                                                let eq = s_equals (t1, Value x)
-                                                CondTerm (eq, F (ts_past_rev, xs_past_opt_rev) (Value x :: ts_fut) (UM, env, pc), acc))
+                                                let value_x = Value x
+                                                let eq = s_equals (t1, value_x)
+                                                CondTerm (eq, F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (UM, env, pc), acc))
                                             (F (ts_past_rev, xs_past_opt_rev) (Value first_elem :: ts_fut) (UM, env, pc))
                                             (List.tail elems)
                     |   CondTerm' (G1, t11, t12) -> CondTerm (G1, F (ts_past_rev, xs_past_opt_rev) (t11 :: ts_fut) (UM, env, pc), F (ts_past_rev, xs_past_opt_rev) (t12 :: ts_fut) (UM, env, pc))
@@ -1730,6 +1740,13 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
         |   x -> failwith (sprintf "Engine.forall_rule: not a set (%A): %A v" ts x)
 
     and eval_macro_rule_call (r, args) (UM, env, pc) =
+        let typecheck () =
+            let rname = get_rule_name eng r
+            let sign_rule_type = Signature.rule_type_as_fct_type rname (get_signature eng)
+            let def_args_types, def_rhs_type = List.map (fun arg -> to_signature_type eng (get_term_type eng arg)) args, Rule
+            try Signature.match_fct_type rname def_args_types [sign_rule_type] |> ignore
+            with _ -> raise (Error (eng, "eval_macro_rule_call", RuleCallTypeMismatch (rname, def_args_types >>| convert_type eng, fst sign_rule_type >>| convert_type eng)))
+        typecheck ()        // !!!!! this should be done at loading / parsing time, not at evaluation time - or at least using (mapped) engine types, not signature types
         let (formals, body) =
             match get_rule_def eng r with
             |   Some (formals, body) -> (formals, body)
