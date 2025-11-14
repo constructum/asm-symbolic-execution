@@ -544,6 +544,14 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
         |   x -> failwith (sprintf "SymbEval.forall_rule: not a set (%A): %A v" ts x)
 
     and eval_macro_rule_call (r, args) (S, env, C) =
+        let typecheck () =
+            let sign_rule_type = Signature.rule_type_as_fct_type r (signature_of S)
+            let def_args_types, def_rhs_type = List.map get_type args, Rule
+            try Signature.match_fct_type r def_args_types [sign_rule_type] |> ignore
+            with _ -> failwith (sprintf "type mismatch in call of rule macro '%s'\n  expecting arguments of type(s):   %s\n  called with arguments of type(s): %s"
+                        r (fst sign_rule_type |> type_list_to_string) (def_args_types |> type_list_to_string))
+
+        typecheck ()
         let (formals, body) =
             try Map.find r (TopLevel.rules ())     // !!! should not use global TopLevel.rules
             with _ -> failwith (sprintf "SymbEval.s_eval_rule: macro rule %s not found" r)
