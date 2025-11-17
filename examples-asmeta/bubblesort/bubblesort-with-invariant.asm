@@ -11,7 +11,7 @@ signature:
 
 
 definitions:
-    domain Size = { 1 : 10 }
+    domain Size = { 1 : 6 }
 
     invariant ordered_after_execution over a :
         terminated implies
@@ -34,6 +34,11 @@ definitions:
         endseq endif
 
 
+// initialization to verify all sizes in Size
+default init all:
+    function terminated = false
+
+
 // initialization to verify specific sizes
 init n1:
     function n = 1
@@ -43,7 +48,7 @@ init n2:
     function n = 2
     function terminated = false
 
-default init n3:
+init n3:
     function n = 3
     function terminated = false
 
@@ -63,17 +68,6 @@ init n7:
     function n = 7
     function terminated = false
 
-init n8:
-    function n = 8
-    function terminated = false
-
-init n9:
-    function n = 9
-    function terminated = false
-
-init n10:
-    function n = 10
-    function terminated = false
 
 
 // initialization with concrete initial values for non-symbolic execution

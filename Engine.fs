@@ -1344,7 +1344,7 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
     and eval_app_term (unfold_locations : bool) (fct_id : FCT_ID, ts : TERM list) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM = 
         let FctName f_name, { fct_kind = f_kind; fct_interpretation = f_intp }  = get_function' eng fct_id
         // The following lines of code force the unfolding of 'initial' locations contained in this term if 'fct_id' is controlled or derived.
-        let unfold_locations = unfold_locations || f_kind = Signature.Controlled || f_kind = Signature.Derived
+        let unfold_locations = unfold_locations || f_kind = Signature.Controlled || f_kind = Signature.Derived (* || f_kind = Signature.Static *)
         // As an alternative, symbolic interpretation without unfolding may be used for non-recursive derived functions.
 
         let eval_term t (UM, env, pc) = eval_term unfold_locations t (UM, env, pc)
@@ -1353,38 +1353,43 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
         let rec F (ts_past_rev : TERM list, xs_past_opt_rev: VALUE list option) (ts : TERM list) (UM, env, pc) =
             match ts with
             |   t1 :: ts_fut ->
-                    let t1 = eval_term t1 (UM, env, pc)
                     match get_term' t1 with
-                    |   Value' x1             -> F (t1 :: ts_past_rev, Option.map (fun xs -> x1 :: xs) xs_past_opt_rev) ts_fut (UM, env, pc)
-                    |   Initial'  (f, xs)     ->
-                            if not unfold_locations then
-                                F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
-                            else
-                                match Option.map Set.toList (enum_finite_type eng (get_term_type t1)) with
-                                |   None -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
-                                |   Some [] -> failwith (sprintf "Engine.eval_app_term: term '%s' has empty domain" (term_to_string t1))       
-                                |   Some elems ->
-                                        // !!! possible improvement 1: filter the elements, including only those that satisfy t1 = x in the current path condition - use eval_without_unfolding to avoid non-termination
-                                        // !!! possible improvement 2: evaluate the branches with path condition extended with t1 = x (additional component in path condition for values of initial locations)
-                                        let elems = List.rev elems
-                                                    // |> List.filter (fun x -> eval_bool_term_with_ext_path_cond false (s_equals (t1, Value x)) TRUE (UM, env, pc) = TRUE) // possible improvement 1
-                                        let first_elem = List.head elems
-                                        List.fold
-                                            (fun acc x ->
-                                                let value_x = Value x
-                                                let eq = s_equals (t1, value_x)
-                                                CondTerm (eq,
-                                                    F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (UM, env, pc),
-                                                    // eval_term_with_ext_path_cond false eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (UM, env, pc)) (UM, env, pc), // possible improvement 2
-                                                    acc))
-                                            (F (ts_past_rev, xs_past_opt_rev) (Value first_elem :: ts_fut) (UM, env, pc))
-                                            (List.tail elems)
-                    |   CondTerm' (G1, t11, t12) -> CondTerm (G1, F (ts_past_rev, xs_past_opt_rev) (t11 :: ts_fut) (UM, env, pc), F (ts_past_rev, xs_past_opt_rev) (t12 :: ts_fut) (UM, env, pc))
-                    |   AppTerm'  _           -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
-                    |   LetTerm'  (v, t1, t2) -> failwith "Engine.eval_app_term: LetTerm should not occur here"
-                    |   VarTerm'  v           -> failwith "Engine.eval_app_term: VarTerm should not occur here"
-                    |   QuantTerm' _          -> failwith "Engine.eval_app_term: QuantTerm should not occur here"
-                    |   DomainTerm' _         -> failwith "Engine.eval_app_term: DomainTerm should not occur here"
+                    |   CondTerm' (G1, t11, t12) ->
+                            CondTerm (G1, F (ts_past_rev, xs_past_opt_rev) (t11 :: ts_fut) (UM, env, pc), F (ts_past_rev, xs_past_opt_rev) (t12 :: ts_fut) (UM, env, pc))
+                    |   _ ->
+                        let t1 = eval_term t1 (UM, env, pc)
+                        match get_term' t1 with
+                        |   Value' x1             ->
+                                F (t1 :: ts_past_rev, Option.map (fun xs -> x1 :: xs) xs_past_opt_rev) ts_fut (UM, env, pc)
+                        |   Initial'  (f, xs)     ->
+                                if not unfold_locations then
+                                    F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
+                                else
+                                    match Option.map Set.toList (enum_finite_type eng (get_term_type t1)) with
+                                    |   None -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
+                                    |   Some [] -> failwith (sprintf "Engine.eval_app_term: term '%s' has empty domain" (term_to_string t1))       
+                                    |   Some elems ->
+                                            // !!! possible improvement 1: filter the elements, including only those that satisfy t1 = x in the current path condition - use eval_without_unfolding to avoid non-termination
+                                            // !!! possible improvement 2: evaluate the branches with path condition extended with t1 = x (additional component in path condition for values of initial locations)
+                                            let elems = List.rev elems
+                                                        // |> List.filter (fun x -> eval_bool_term_with_ext_path_cond false (s_equals (t1, Value x)) TRUE (UM, env, pc) = TRUE) // possible improvement 1
+                                            let first_elem = List.head elems
+                                            List.fold
+                                                (fun acc x ->
+                                                    let value_x = Value x
+                                                    let eq = s_equals (t1, value_x)
+                                                    CondTerm (eq,
+                                                        F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (UM, env, pc),
+                                                        // eval_term_with_ext_path_cond false eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (UM, env, pc)) (UM, env, pc), // possible improvement 2
+                                                        acc))
+                                                (F (ts_past_rev, xs_past_opt_rev) (Value first_elem :: ts_fut) (UM, env, pc))
+                                                (List.tail elems)
+                        |   AppTerm'  _   -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
+                        |   CondTerm' _   -> F (ts_past_rev, xs_past_opt_rev) (t1 :: ts_fut) (UM, env, pc)
+                        |   LetTerm'  _   -> failwith "Engine.eval_app_term: LetTerm should not occur here"
+                        |   VarTerm'  _   -> failwith "Engine.eval_app_term: VarTerm should not occur here"
+                        |   QuantTerm' _  -> failwith "Engine.eval_app_term: QuantTerm should not occur here"
+                        |   DomainTerm' _ -> failwith "Engine.eval_app_term: DomainTerm should not occur here"
             |   [] ->
                     let xs_opt = Option.map List.rev xs_past_opt_rev
                     match xs_opt with
