@@ -11,7 +11,7 @@ signature:
 
 
 definitions:
-    domain Size = { 1 : 6 }
+    domain Size = { 1 : 2 }
 
     invariant ordered_after_execution over a :
         terminated implies
