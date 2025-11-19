@@ -1357,7 +1357,7 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
             |   t1 :: ts_fut ->
                     match get_term' t1 with
                     |   CondTerm' (G1, t11, t12) ->
-                            eval_term (CondTerm (G1, F (ts_past_rev, xs_past_opt_rev) (t11 :: ts_fut) (UM, env, pc), F (ts_past_rev, xs_past_opt_rev) (t12 :: ts_fut) (UM, env, pc))) (UM, env, pc)
+                            CondTerm (G1, F (ts_past_rev, xs_past_opt_rev) (t11 :: ts_fut) (UM, env, pc), F (ts_past_rev, xs_past_opt_rev) (t12 :: ts_fut) (UM, env, pc))
                     |   _ ->
                         let t1 = eval_term t1 (UM, env, pc)
                         match get_term' t1 with
@@ -1593,7 +1593,7 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
         let t_rhs = s_eval_term t_rhs (UM, env, pc)
         match get_term' t_rhs with
         |   CondTerm' (G, t1, t2) ->
-                eval_rule (CondRule (G, UpdateRule ((f, ts), t1), UpdateRule ((f, ts), t2))) (UM, env, pc)
+                CondRule (G, UpdateRule ((f, ts), t1), UpdateRule ((f, ts), t2))
         |   _ ->
             let rec F ts_initial (ts_past_rev : TERM list, xs_past_opt_rev : VALUE list option) (ts: TERM list) (UM, env, pc) : RULE =
                 let F_reiterate = F
@@ -1602,7 +1602,7 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
                 |   (t1 :: ts_fut) ->
                     match get_term' t1 with
                     |   CondTerm' (G1, t11, t12) ->
-                            eval_rule (CondRule (G1, F (ts_past_rev, xs_past_opt_rev) (t11 :: ts_fut) (UM, env, pc), F (ts_past_rev, xs_past_opt_rev) (t12 :: ts_fut) (UM, env, pc))) (UM, env, pc)
+                            CondRule (G1, F (ts_past_rev, xs_past_opt_rev) (t11 :: ts_fut) (UM, env, pc), F (ts_past_rev, xs_past_opt_rev) (t12 :: ts_fut) (UM, env, pc))
                     |   _ ->
                         let t1 = s_eval_term_with_unfolding t1 (UM, env, pc)
                         match get_term' t1 with
@@ -1636,7 +1636,7 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
                     let xs_opt_eval = Option.map List.rev xs_past_opt_rev
                     match xs_opt_eval with
                     |   Some xs ->
-                            S_Updates (get_s_update_set (Set.singleton ((f, xs), s_eval_term t_rhs (UM, env, pc))))
+                            S_Updates (get_s_update_set (Set.singleton ((f, xs), t_rhs)))
                     |   None ->
                             if AppTerm (f, ts_eval) <> AppTerm (f, ts_initial) then
                                 // fixed point is not reached yet: try reducing further before failing
