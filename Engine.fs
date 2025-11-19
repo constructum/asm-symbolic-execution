@@ -1380,11 +1380,11 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
                                                     let value_x = Value x
                                                     let eq = s_equals (t1, value_x)
                                                     CondTerm (eq,
-                                                        eval_term_with_ext_path_cond unfold_locations eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (add_s_update eng UM ((f, xs), value_x), env, pc)) (UM, env, pc), // possible improvement 2
+                                                        eval_term_with_ext_path_cond unfold_locations eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (UM, env, pc)) (UM, env, pc), // possible improvement 2
                                                         acc))
                                                 (   let value_x = Value first_elem
                                                     let eq = s_equals (t1, value_x)
-                                                    eval_term_with_ext_path_cond unfold_locations eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (add_s_update eng UM ((f, xs), value_x), env, pc)) (UM, env, pc) )
+                                                    eval_term_with_ext_path_cond unfold_locations eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (UM, env, pc)) (UM, env, pc) )
                                                 (List.tail elems)
                         |   AppTerm'  _   -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)    
                         |   CondTerm' _   -> F (ts_past_rev, xs_past_opt_rev) (t1 :: ts_fut) (UM, env, pc)
@@ -1619,11 +1619,11 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
                                                 let value_x = Value x
                                                 let eq = s_equals (t1, value_x)
                                                 CondRule (eq,
-                                                    eval_rule_with_ext_path_cond eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (add_s_update eng UM ((f, xs), value_x), env, pc)) (UM, env, pc),
+                                                    eval_rule_with_ext_path_cond eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (UM, env, pc)) (UM, env, pc),
                                                     acc))
                                             (   let value_x = Value first_elem
                                                 let eq = s_equals (t1, value_x)
-                                                eval_rule_with_ext_path_cond eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (add_s_update eng UM ((f, xs), value_x), env, pc)) (UM, env, pc) )
+                                                eval_rule_with_ext_path_cond eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (UM, env, pc)) (UM, env, pc) )
                                             (List.tail elems)
                         |   CondTerm' _   -> F (ts_past_rev, xs_past_opt_rev) (t1 :: ts_fut) (UM, env, pc)
                         |   AppTerm' _    -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
