@@ -1357,7 +1357,7 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
             |   t1 :: ts_fut ->
                     match get_term' t1 with
                     |   CondTerm' (G1, t11, t12) ->
-                            CondTerm (G1, F (ts_past_rev, xs_past_opt_rev) (t11 :: ts_fut) (UM, env, pc), F (ts_past_rev, xs_past_opt_rev) (t12 :: ts_fut) (UM, env, pc))
+                            eval_term (CondTerm (G1, F (ts_past_rev, xs_past_opt_rev) (t11 :: ts_fut) (UM, env, pc), F (ts_past_rev, xs_past_opt_rev) (t12 :: ts_fut) (UM, env, pc))) (UM, env, pc)
                     |   _ ->
                         let t1 = eval_term t1 (UM, env, pc)
                         match get_term' t1 with
@@ -1371,8 +1371,7 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
                                     |   None -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
                                     |   Some [] -> failwith (sprintf "Engine.eval_app_term: term '%s' has empty domain" (term_to_string t1))       
                                     |   Some elems ->
-                                            // !!! possible improvement 1: filter the elements, including only those that satisfy t1 = x in the current path condition - use eval_without_unfolding to avoid non-termination
-                                            // !!! possible improvement 2: evaluate the branches with path condition extended with t1 = x (additional component in path condition for values of initial locations)
+                                            // !!! possible improvement: filter the elements, including only those that satisfy t1 = x in the current path condition - use eval_without_unfolding to avoid non-termination
                                             let elems = List.rev elems
                                                         // |> List.filter (fun x -> eval_bool_term_with_ext_path_cond false (s_equals (t1, Value x)) TRUE (UM, env, pc) = TRUE) // possible improvement 1
                                             let first_elem = List.head elems
@@ -1381,10 +1380,11 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
                                                     let value_x = Value x
                                                     let eq = s_equals (t1, value_x)
                                                     CondTerm (eq,
-                                                        // F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (UM, env, pc),
-                                                        eval_term_with_ext_path_cond false eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (UM, env, pc)) (UM, env, pc), // possible improvement 2
+                                                        eval_term_with_ext_path_cond unfold_locations eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (add_s_update eng UM ((f, xs), value_x), env, pc)) (UM, env, pc), // possible improvement 2
                                                         acc))
-                                                (F (ts_past_rev, xs_past_opt_rev) (Value first_elem :: ts_fut) (UM, env, pc))
+                                                (   let value_x = Value first_elem
+                                                    let eq = s_equals (t1, value_x)
+                                                    eval_term_with_ext_path_cond unfold_locations eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (add_s_update eng UM ((f, xs), value_x), env, pc)) (UM, env, pc) )
                                                 (List.tail elems)
                         |   AppTerm'  _   -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)    
                         |   CondTerm' _   -> F (ts_past_rev, xs_past_opt_rev) (t1 :: ts_fut) (UM, env, pc)
@@ -1401,30 +1401,42 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
                             let ts_eval = List.rev ts_past_rev
                             match f_kind with
                             |   Signature.Static ->
-                                    match f_name, ts_eval with
-                                    |   "and", [ t1; t2 ] -> s_and (t1, t2)
-                                    |   "or", [ t1; t2 ]  -> s_or (t1, t2)
-                                    |   "xor", [ t1; t2 ] -> s_xor (t1, t2)
-                                    |   "implies", [ t1; t2 ] -> s_implies (t1, t2)
-                                    |   "iff", [ t1; t2 ] -> s_iff (t1, t2)
-                                    |   "=", [ t1; t2 ]   -> s_equals (t1, t2)
-                                    |   _, ts             ->
-                                            match f_intp with
-                                            |   StaticBackground _ -> AppTerm (fct_id, ts)          // if f is a background function, keep term as it is (possibly for SMT mapping later)
-                                            |   StaticUserDefined (_, Some _) -> symbolic_interpretation eng UM pc fct_id ts        // if f is user defined, try symbolic evaluation
-                                            |   StaticUserDefined (_, None) -> failwith (sprintf "definition of static function '%s' missing" f_name)
-                                            |   _ -> failwith (sprintf "Engine.eval_app_term: function '%s' in term '%s': only static functions should occur here" f_name (term_to_string t))
+                                    if AppTerm (fct_id, ts_eval) <> AppTerm (fct_id, ts_initial) then
+                                        // fixed point is not reached yet: try reducing further before failing
+                                        let ts_eval = ts_eval >>| fun t -> eval_term t (UM, env, pc)
+                                        F_reiterate ts_eval ([], Some []) ts_eval (UM, env, pc)
+                                    else
+                                        match f_name, ts_eval with
+                                        |   "and", [ t1; t2 ] -> s_and (t1, t2)
+                                        |   "or", [ t1; t2 ]  -> s_or (t1, t2)
+                                        |   "xor", [ t1; t2 ] -> s_xor (t1, t2)
+                                        |   "implies", [ t1; t2 ] -> s_implies (t1, t2)
+                                        |   "iff", [ t1; t2 ] -> s_iff (t1, t2)
+                                        |   "=", [ t1; t2 ]   -> s_equals (t1, t2)
+                                        |   _, ts             ->
+                                                match f_intp with
+                                                |   StaticBackground _ -> AppTerm (fct_id, ts)          // if f is a background function, keep term as it is (possibly for SMT mapping later)
+                                                |   StaticUserDefined (_, Some _) -> symbolic_interpretation eng UM pc fct_id ts        // if f is user defined, try symbolic evaluation
+                                                |   StaticUserDefined (_, None) -> failwith (sprintf "definition of static function '%s' missing" f_name)
+                                                |   _ -> failwith (sprintf "Engine.eval_app_term: function '%s' in term '%s': only static functions should occur here" f_name (term_to_string t))
                             |   Signature.Derived ->
                                     // Derived functions are evaluated symbolically, if the arguments could not be fully evaluated.
                                     // !!! Note: this is dangerous for recursive functions, as symbolic evaluation may sometimes not terminate even if the function always terminates.
-                                    symbolic_interpretation eng UM pc fct_id ts_eval
+                                    if AppTerm (fct_id, ts_eval) <> AppTerm (fct_id, ts_initial) then
+                                        // fixed point is not reached yet: try reducing further before failing
+                                        let ts_eval = ts_eval >>| fun t -> eval_term t (UM, env, pc)
+                                        F_reiterate ts_eval ([], Some []) ts_eval (UM, env, pc)
+                                    else
+                                        symbolic_interpretation eng UM pc fct_id ts_eval
                                     // For the above reason, symbolic interpretation is used only as a fallback, when arguments cannot be fully evaluated even after unfolding.
                                     // As an alternative, symbolic interpretation without unfolding may be used for non-recursive derived functions.
                                     // This alternative implementation may be especially advantageous in combination with memoization.
                             |   Signature.Controlled ->
                                     if AppTerm (fct_id, ts_eval) <> AppTerm (fct_id, ts_initial) then
                                         // fixed point is not reached yet: try reducing further before failing
-                                        F_reiterate ts_eval ([], Some []) ts_eval (UM, env, pc)
+                                        let ts_eval = ts_eval >>| fun t -> eval_term t (UM, env, pc)
+                                        F_reiterate ts_eval ([], Some []) (ts_eval >>| fun t -> eval_term t (UM, env, pc)) (UM, env, pc)
+                                        //F_reiterate ts_eval ([], Some []) ts_eval (UM, env, pc)
                                     else
                                         failwith (sprintf "Engine.eval_app_term: arguments of controlled function '%s' must be fully evaluable for unambiguous determination of a location\n('%s' found instead)" f_name (term_to_string (AppTerm (fct_id, ts_eval))))
                             |   other_kind ->
@@ -1590,7 +1602,7 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
                 |   (t1 :: ts_fut) ->
                     match get_term' t1 with
                     |   CondTerm' (G1, t11, t12) ->
-                            CondRule (G1, F (ts_past_rev, xs_past_opt_rev) (t11 :: ts_fut) (UM, env, pc), F (ts_past_rev, xs_past_opt_rev) (t12 :: ts_fut) (UM, env, pc))
+                            eval_rule (CondRule (G1, F (ts_past_rev, xs_past_opt_rev) (t11 :: ts_fut) (UM, env, pc), F (ts_past_rev, xs_past_opt_rev) (t12 :: ts_fut) (UM, env, pc))) (UM, env, pc)
                     |   _ ->
                         let t1 = s_eval_term_with_unfolding t1 (UM, env, pc)
                         match get_term' t1 with
@@ -1606,21 +1618,25 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
                                             (fun acc x ->
                                                 let value_x = Value x
                                                 let eq = s_equals (t1, value_x)
-                                                CondRule (eq, F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (UM, env, pc), acc))
-                                            (F (ts_past_rev, xs_past_opt_rev) (Value first_elem :: ts_fut) (UM, env, pc))
+                                                CondRule (eq,
+                                                    eval_rule_with_ext_path_cond eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (add_s_update eng UM ((f, xs), value_x), env, pc)) (UM, env, pc),
+                                                    acc))
+                                            (   let value_x = Value first_elem
+                                                let eq = s_equals (t1, value_x)
+                                                eval_rule_with_ext_path_cond eq (F (ts_past_rev, xs_past_opt_rev) (value_x :: ts_fut) (add_s_update eng UM ((f, xs), value_x), env, pc)) (UM, env, pc) )
                                             (List.tail elems)
                         |   CondTerm' _   -> F (ts_past_rev, xs_past_opt_rev) (t1 :: ts_fut) (UM, env, pc)
-                        |   AppTerm' _      -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
-                        |   LetTerm' _      -> failwith "Engine.eval_update_rule: LetTerm should not occur here"
-                        |   VarTerm' _      -> failwith "Engine.eval_update_rule: VarTerm should not occur here"
-                        |   DomainTerm' _   -> failwith "Engine.eval_update_rule: DomainTerm should not occur here"
-                        |   QuantTerm' _    -> failwith "Engine.eval_update_rule: QuantTerm should not occur here"
+                        |   AppTerm' _    -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
+                        |   LetTerm' _    -> failwith "Engine.eval_update_rule: LetTerm should not occur here"
+                        |   VarTerm' _    -> failwith "Engine.eval_update_rule: VarTerm should not occur here"
+                        |   DomainTerm' _ -> failwith "Engine.eval_update_rule: DomainTerm should not occur here"
+                        |   QuantTerm' _  -> failwith "Engine.eval_update_rule: QuantTerm should not occur here"
                 |   [] ->
                     let ts_eval = List.rev ts_past_rev
                     let xs_opt_eval = Option.map List.rev xs_past_opt_rev
                     match xs_opt_eval with
                     |   Some xs ->
-                            S_Updates (get_s_update_set (Set.singleton ((f, xs), t_rhs)))
+                            S_Updates (get_s_update_set (Set.singleton ((f, xs), s_eval_term t_rhs (UM, env, pc))))
                     |   None ->
                             if AppTerm (f, ts_eval) <> AppTerm (f, ts_initial) then
                                 // fixed point is not reached yet: try reducing further before failing
