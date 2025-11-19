@@ -343,6 +343,19 @@ let is_right_assoc fct_name (sign : SIGNATURE) =
 let precedence fct_name (sign : SIGNATURE) =
     get_fct_info "is_right_assoc" fct_name sign (fun fi -> fi.infix_status |> function Infix (_, n) -> n | _ -> 0)
 
+let get_rule_info msg rule_name (sign : SIGNATURE) f = 
+    if !trace > 0 then fprintf stderr "(|signature| = %d) " (Map.count sign)
+    if !trace > 0 then fprintf stderr "get_fct_info(%s, %s)\n" msg rule_name
+    if !trace > 0 then fprintf stderr $"{Map.containsKey rule_name sign}\n"
+    (try (Map.find rule_name sign) with _ -> failwith (sprintf "Signature.get_rule_info: unknown rule name '%s'" rule_name))
+    |> function RuleInfo ri -> f ri | _ -> failwith (sprintf "Signature.get_rule_info: '%s' is not a rule name" rule_name)
+
+let rule_type rule_name (sign : SIGNATURE) =
+    get_rule_info "rule_type" rule_name sign (fun ri -> ri.rule_type)
+
+let rule_type_as_fct_type rule_name (sign : SIGNATURE) =
+    get_rule_info "rule_type" rule_name sign (fun ri -> ri.rule_type, Rule)
+
 //--------------------------------------------------------------------
 
 let main_type_of ty =

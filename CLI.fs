@@ -171,7 +171,7 @@ let CLI_with_ex(args) =
                                                         parse_arguments (i+1)
                 |   "-symbolic"    -> symbolic := true;    parse_arguments (i+1)
                 |   "-steps"       -> steps := int (args[i+1]); parse_arguments (i+2)
-                |   "-run-steps"   -> steps := int (args[i+1]); state_enumeration_based := true; parse_arguments (i+2)
+//              |   "-run-steps"   -> steps := int (args[i+1]); state_enumeration_based := true; parse_arguments (i+2)  // !!!! disabled, because it does not work properly yet
                 |   "-nonsymbolic" -> symbolic := false;   parse_arguments (i+1)
                 |   "-turbo2basic" -> turbo2basic := true; parse_arguments (i+1)
                 |   "-nosmt"       -> SymbEval.use_smt_solver := false; parse_arguments (i+1)

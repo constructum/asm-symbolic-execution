@@ -17,6 +17,7 @@ type ErrorDetails =
 |   SyntaxError of string
 |   NotAFiniteSet of string * TYPE
 |   FunctionNameNotInSignature of string
+|   FunctionDefinitionTypeError of string * (TYPE list * TYPE) * (TYPE list * TYPE) list
 |   ConstructorCannotBeRedefined of string
 |   FunctionNotDeclaredAsControlled of string
 |   FunctionNotDeclaredAsStaticOrDerived of string
@@ -34,6 +35,10 @@ let error_msg (fct : string, reg : SrcReg option, err : ErrorDetails) =
             sprintf "error: range of variable '%s' must be a finite set (value of type '%s' found instead)" v (type_to_string ty)
     |   FunctionNameNotInSignature f ->
             sprintf "error in function definition: function name '%s' is not declared in the signature" f
+    |   FunctionDefinitionTypeError (f, (def_ty_args, def_ty_res), sign_fct_types) ->
+            sprintf "error in function definition: type mismatch in definition of function '%s':\n" f +
+            sprintf "  definition: (%s) -> %s\n" (String.concat ", " (List.map type_to_string def_ty_args)) (type_to_string def_ty_res) +
+            (List.map (fun (sign_ty_args, sign_ty_res) -> sprintf "  signature:  (%s) -> %s" (String.concat ", " (List.map type_to_string sign_ty_args)) (type_to_string sign_ty_res)) sign_fct_types |> String.concat "\n")
     |   ConstructorCannotBeRedefined f ->
             sprintf "error in function definition: constructor '%s' cannot be redefined" f
     |   FunctionNotDeclaredAsControlled f ->
@@ -399,11 +404,16 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
     
     let parse_asm_with_header = isAsyncr_isModule_name ++ Header
 
+    let typecheck_function_definition reg f param_list t sign =
+        let sign_fct_types, (def_args_types, def_rhs_type) = fct_types f sign, (List.map snd param_list, get_type t)
+        try match_fct_type f def_args_types sign_fct_types |> ignore
+        with _ -> raise (Error ("Asm", Some reg, FunctionDefinitionTypeError(f, (def_args_types, def_rhs_type), sign_fct_types)))
+    
     match parse_asm_with_header s with
     |   ParserFailure x -> ParserFailure x
     |   ParserSuccess (((asyncr, modul, asm_name), (imports, exports, sign')), s') ->
             //let sign = signature_override sign sign'
-            let ((sign, state), (rules_db, macro_db)) : EXTENDED_PARSER_STATE = get_parser_state s'
+            let (sign, state), (rules_db, macro_db) : EXTENDED_PARSER_STATE = get_parser_state s'
             if !trace > 0 then fprintf stderr "parse_asm_with_header: |signature|=%d\n" (Map.count sign)
 
             let parameter_list = (opt_psep1 "(" ( ((ID_VARIABLE >> (kw "in")) ++ getDomainByID) ) "," ")")
@@ -418,13 +428,14 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                 let p1 = (kw "function" << ID_FUNCTION) ++ parameter_list
                 let p2 reg (static_term, env) param_list = (lit "=" << Term_in_env (static_term, extend_env reg env param_list))
                 let p3 =
-                    (   p1 >>== fun reg _ (f, param_list) ->
+                        p1 >>== fun reg _ (f, param_list) ->
                         let is_static =
                             if not (is_function_name f sign)      then raise (Error ("Asm", Some reg, FunctionNameNotInSignature f))
                             else if fct_kind f sign = Constructor then raise (Error ("Asm", Some reg, ConstructorCannotBeRedefined f))
                             else fct_kind f sign = Static
                         p2 reg (is_static, env0) param_list >>= fun t ->
-                        preturn (f, param_list, t)  )
+                        typecheck_function_definition reg f param_list t sign
+                        preturn (f, param_list, t)
                 // !!! to do: proper handling of function overloading
                 p3 |||>> fun reg (_, _) (f, param_list, t) ->
                         if !trace > 0 then fprintf stderr "|signature| = %d - FunctionDefinition '%s'\n" (Map.count sign) f
@@ -447,8 +458,8 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                 let p3 = (p1 >>== fun reg _ (f, param_list) -> p2 reg env0 param_list >>= fun t -> preturn (f, param_list, t))
                 p3 |||>> fun reg _ (rname, param_list, r) ->
                         if List.length param_list > 0
-                        then (rname, (List.map fst param_list, r))
-                        else (rname, ([], r))
+                        then (rname, List.map snd param_list, (List.map fst param_list, r))
+                        else (rname, [], ([], r))
             let TurboDeclaration = R4 (kw "turbo" << kw "rule" << ID_RULE) parameter_list (poption (kw "in" << getDomainByID)) (lit "=" << Rule)
                                         |>> fun (rname, _, _, _) -> failwith (sprintf "not implemented: turbo rule declaration ('%s')" rname)
             let RuleDeclaration = (MacroDeclaration <|> TurboDeclaration)
@@ -490,7 +501,10 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
             let FunctionInitialization =
                 let p1 = (kw "function" << ID_FUNCTION) ++ parameter_list
                 let p2 reg env param_list = (lit "=" << Term_in_env (true, extend_env reg env param_list))    // term used for initialisation must be static
-                let p3 = (p1 >>== fun reg _ (f, param_list) -> p2 reg env0 param_list >>= fun t -> preturn (f, param_list, t))
+                let p3 = p1 >>== fun reg _ (f, param_list) ->
+                                    p2 reg env0 param_list >>= fun t ->
+                                    typecheck_function_definition reg f param_list t sign
+                                    preturn (f, param_list, t)
                 p3 |||>> fun reg _ (f, param_list, t) ->
                     if not (is_function_name f sign) then
                         raise (Error ("Asm", Some reg, FunctionNameNotInSignature f))
@@ -501,7 +515,6 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                             fun (state : STATE, mdb : MACRO_DB) ->
                                   state_override_dynamic_initial state (Map.add f fct Map.empty, add_macro f (parameters, t) Map.empty),
                                   macro_db_override mdb (Map.add f (parameters, t) Map.empty)
-
                         else 
                             raise (Error ("Asm", Some reg, FunctionNotDeclaredAsControlled f))
 
@@ -548,7 +561,8 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                     ->
                     let state' : STATE = List.fold (fun state f -> f state) state domain_definitions
                     let rule_declarations = rule_declarations @ (Option.fold (fun _ x -> [x]) [] opt_main_rule_decl)
-                    let rdb' : RULES_DB = List.fold (fun rdb (rname, r) -> Map.add rname r rdb) empty_rules_db rule_declarations
+                    let rdb' : RULES_DB = List.fold (fun rdb (rname, r_args_types, r) -> Map.add rname r rdb) empty_rules_db rule_declarations
+                    let sign_final = List.fold (fun sign (rname, r_args_types, _) -> add_rule_name rname r_args_types sign) sign rule_declarations
                     let (state'', mdb') : STATE * MACRO_DB =
                         List.fold
                             (fun (state, mdb) (fct_def, macro_fct_def) -> (fct_def state, macro_fct_def mdb))
@@ -578,10 +592,10 @@ let rec Asm env0 (s : ParserInput<EXTENDED_PARSER_STATE>) : ParserResult<ASM, EX
                         is_asyncr = asyncr;
                         imports   = imports;
                         exports   = exports;
-                        signature = sign;
+                        signature = sign_final;
                         invariants = properties;        // properties are only invariants for the moment (temporal properties are ignored)
                         definitions = {
-                            state  = extend_with_carrier_sets (sign, state_override state state'');   // !!! Agent, Reserve added twice ?
+                            state  = extend_with_carrier_sets (sign_final, state_override state state'');   // !!! Agent, Reserve added twice ?
                             rules  = rules_db_override rules_db rdb';
                             macros = macro_db_override macro_db mdb';
                         };
