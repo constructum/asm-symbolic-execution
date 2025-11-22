@@ -1366,7 +1366,7 @@ and expand_quantifier (q_kind, v, t_set : UPDATE_MAP * ENV * PATH_COND -> TERM, 
         match get_type' eng t_set_type with
         |   Powerset' tyname -> tyname
         |   _ -> failwith (sprintf "Engine.expand_quantifier: expected a set or domain type, %s found instead" (type_to_string eng t_set_type))
-    match get_term' eng (s_eval_term eng t_set (UM, env, pc)) with
+    match get_term' eng (s_eval_term_with_unfolding eng t_set (UM, env, pc)) with
     |   Value' (Background.SET (_, xs)) ->
             let eval_instance x = t_cond (UM, add_binding env (v, Value eng x), pc)
             let t_conds = List.map eval_instance (Set.toList xs)
@@ -1374,6 +1374,13 @@ and expand_quantifier (q_kind, v, t_set : UPDATE_MAP * ENV * PATH_COND -> TERM, 
             |   AST.Forall -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_and eng (t_accum, t1)) (TRUE eng)  t_conds
             |   AST.Exist  -> List.fold (fun (t_accum : TERM) -> fun (t1 : TERM) -> s_or  eng (t_accum, t1)) (FALSE eng) t_conds
             |   AST.ExistUnique -> failwith "Engine.expand_quantifier: 'ExistUnique' not implemented"
+    |   CondTerm' (G, t1, t2) ->
+            CondTerm eng (G,
+                expand_quantifier (q_kind, v, (fun (UM, env, pc) -> t1), t_cond) eng (UM, env, pc),
+                expand_quantifier (q_kind, v, (fun (UM, env, pc) -> t2), t_cond) eng (UM, env, pc))
+    |   UnfoldedTerm' ((f, xs), M) ->
+            UnfoldedTerm eng ((f, xs),
+                Map.map (fun _ t_i -> expand_quantifier (q_kind, v, (fun (UM, env, pc) -> t_i), t_cond) eng (UM, env, pc)) M)
     |   x -> failwith (sprintf "Engine.expand_quantifier: not a set (%s)" (term_to_string eng t_set))
 
 and cases eng (condConstructor : ENGINE -> TERM * 'a * 'a -> 'a) (t : TERM) (x_t_list : (VALUE * 'a) list) : 'a =
@@ -1547,8 +1554,8 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
 
     and eval_cond_term unfold_locations (G : TERM, t1 : TERM, t2 : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
         let eval_term t (UM, env, pc) = eval_term unfold_locations t (UM, env, pc)
-        let eval_bool_term t (UM, env, pc) = eval_bool_term unfold_locations t (UM, env, pc)
-        let G_eval = eval_bool_term G (UM, env, pc)
+        //let eval_bool_term t (UM, env, pc) = eval_bool_term unfold_locations t (UM, env, pc)
+        let G_eval = eval_bool_term true G (UM, env, pc)            // evaluate guard with unfolding to reduce the risk of non-termination
         match get_term' G_eval with
         |   Value' (BOOL true)  -> eval_term t1 (UM, env, pc)
         |   Value' (BOOL false) -> eval_term t2 (UM, env, pc)
@@ -1730,7 +1737,7 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
             F ts_lhs ([], Some []) ts_lhs (UM, env, pc)
 
     and eval_cond_rule (G, R1, R2) (UM, env, pc) = 
-        let G = s_eval_term G (UM, env, pc)
+        let G = s_eval_term_with_unfolding G (UM, env, pc)      // evaluate guard with unfolding to reduce the risk of non-termination
         match get_term' G with
         |   Value' (BOOL true)  -> eval_rule R1 (UM, env, pc)
         |   Value' (BOOL false) -> eval_rule R2 (UM, env, pc)
