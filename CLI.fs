@@ -201,7 +201,7 @@ let CLI_with_ex(args) =
                 if !invcheck
                 then simple_exec (Engine.symbolic_execution_for_invariant_checking C !invcheck_steps) R_in
                 else if !state_enumeration_based
-                     then exec_symbolic (fun (R : Engine.RULE) -> Engine.symbolic_sequential_asm_run C R (!steps)) R_in (Engine.pp_rule C, Engine.rule_size C)
+                     then failwith "this should be unreached: state-enumeration-based execution not enabled"    // exec_symbolic (fun (R : Engine.RULE) -> Engine.symbolic_sequential_asm_run C R (!steps)) R_in (Engine.pp_rule C, Engine.rule_size C)
                      else exec_symbolic (fun (R : Engine.RULE) -> Engine.symbolic_execution C R (!steps)) R_in (Engine.pp_rule C, Engine.rule_size C)
                 write $"\n--- number of generated types (type table size): {(Engine.get_engine' C).types |> IndMap.count}\n" 
                 write $"--- number of generated terms (term table size): {(Engine.get_engine' C).terms |> IndMap.count}\n" 
