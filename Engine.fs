@@ -34,7 +34,7 @@ type FUNCTION_INTERPRETATION =
 |   StaticUserDefined of (VALUE list -> VALUE) * (string list * TERM) option
 |   ControlledInitial of (VALUE list -> VALUE) * (string list * TERM) option
 |   ControlledUninitialized
-|   Derived of (string list * TERM)             // string list is the list of arguments, TERM is the body of the derived function
+|   Derived of (string list * TERM) option             // string list is the list of arguments, TERM is the body of the derived function
 
 and FUNCTION' =
     FctName of string
@@ -644,7 +644,7 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
     engines.Add new_engine
     let extract_fct_interpretation_if_possible f_name =
         let f_kind = Signature.fct_kind f_name sign
-        match Signature.fct_kind f_name sign with
+        match f_kind with
         |   Signature.Constructor ->
                 Some (Constructor (fun xs -> CELL (f_name, xs)))
         |   Signature.Static ->
@@ -656,11 +656,11 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
                         else Some (StaticUserDefined (fct_interp, None))        // second component is the AsmetaL definition to be filled in later
         |   Signature.Controlled ->
                 match initial_state._dynamic_initial |> fst |> Map.tryFind f_name with
-                |   Some fct_def -> Some (ControlledInitial (fct_def, None))
+                |   Some fct_def -> Some (ControlledInitial (fct_def, None))    // AsmetaL definition of controlled function initialization will be filled in later
                 |   None -> Some ControlledUninitialized
         |   Signature.Derived ->
                 match fct_def_db |> Map.tryFind f_name with
-                |   Some (args, body) -> Some (Derived (args, convert_term (Engine eid) body))   // !!! convert_term here is problematic, because functions are not yet in fctTable, see how it is done for the other kinds of functions
+                |   Some (args, body) -> Some (Derived None)                    // AsmetaL definition of derived function will be filled in later
                 |   None -> failwith (sprintf "Engine.new_engine: derived function '%s' is in signature, but is not defined\n" f_name)
         |   Signature.Monitored -> failwith (sprintf "Engine.new_engine: monitored function '%s' - not implemented" f_name)
         |   Signature.Shared -> failwith (sprintf "Engine.new_engine: shared function '%s' - not implemented" f_name)
@@ -671,9 +671,10 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
         |   None -> failwith (sprintf "Engine.new_engine: no definition found for rule macro '%s'\n" r_name)
     let add_functions fct_list =
         fct_list
-            |> List.map (fun (name, _) -> (name, extract_fct_interpretation_if_possible name))
+            |> List.map (fun (name, _) -> name, extract_fct_interpretation_if_possible name)   
             |> List.filter (function (_, None) -> false | _ -> true)
             |> Seq.iteri ( fun i (name, opt_fct_interpretation) ->
+                let sign = sign
                 match opt_fct_interpretation with
                 |   None -> ()
                 |   Some fct_interpretation ->
@@ -711,6 +712,11 @@ and new_engine (sign : Signature.SIGNATURE, initial_state : State.STATE, fct_def
                 |   Some (args, body) ->
                         new_engine.functions |> set i (FctName f_name, { f_attrs with fct_interpretation = ControlledInitial (fct_interp, Some (args, convert_term (Engine eid) body)) })
                 |   None -> failwith (sprintf "cannot find initial definition of controlled function '%s'\n" f_name)
+        |   Derived None ->
+                match fct_def_db |> Map.tryFind f_name with
+                |   Some (args, body) ->
+                        new_engine.functions |> set i (FctName f_name, { f_attrs with fct_interpretation = Derived (Some (args, convert_term (Engine eid) body)) })
+                |   None -> failwith (sprintf "cannot find definition of derived function '%s'\n" f_name)
         |   _ -> ()     // if not any of the above cases, do nothing (the entry of fctTable was already completely initialized)
     for i in 0..(new_engine.rule_defs |> count) - 1 do
         let RuleName rd_name, (rd_attrs as { rule_def_id = id; rule_def = _ }) = new_engine.rule_defs |> get i
@@ -882,7 +888,8 @@ and show_fct_tables (eng as Engine eid: ENGINE) =
                     | StaticUserDefined _ -> "static (user-defined)"
                     | ControlledInitial _ -> "controlled (initial)"
                     | ControlledUninitialized -> "controlled (uninitialized)"
-                    | Derived (args, body) -> sprintf "derived (%s) = %s" (String.concat ", " args) (term_to_string eng body) )
+                    | Derived (Some (args, body)) -> sprintf "derived (%s) = %s" (String.concat ", " args) (term_to_string eng body)
+                    | Derived None -> "derived (definition missing)")
     let table_s = e.functions |> show_table show_table_entry
     index_s + table_s
 
@@ -1270,8 +1277,10 @@ let rec interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as F
     |   ControlledUninitialized ->
             try Map.find xs (Map.find (FctId f_id) UM)
             with _ -> Initial eng (f, xs)
-    |   Derived (fct_def : string list * TERM) ->
+    |   Derived (Some (fct_def : string list * TERM)) ->
             eval_fct_definition_in_curr_state fct_def xs
+    |   Derived None ->
+            failwith (sprintf "definition of derived function '%s' missing" f_name)
     |   StaticUserDefined (_, None) ->
             failwith (sprintf "definition of static function '%s' missing" f_name)
     |   ControlledInitial (_, None) -> 
@@ -1303,8 +1312,10 @@ and symbolic_interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f
             failwith "symbolic_interpretation: (initialized) controlled functions not supported"
     |   ControlledUninitialized ->
             failwith "symbolic_interpretation: (uninitialized) controlled functions not supported"
-    |   Derived (fct_def : string list * TERM) ->
+    |   Derived (Some (fct_def : string list * TERM)) ->
             eval_fct_definition_in_curr_state fct_def ts
+    |   Derived None ->
+            failwith (sprintf "definition of derived function '%s' missing" f_name)
     |   StaticUserDefined (_, None) ->
             failwith (sprintf "definition of static function '%s' missing" f_name)
     |   ControlledInitial (_, None) -> 
