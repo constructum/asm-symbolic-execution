@@ -256,16 +256,25 @@ let rec BasicRule env0 (s : ParserInput<PARSER_STATE>) =
                             |>> fun _ -> failwith "not implemented: choose rule"
     let ForallRule =
         // !!! temporary: only one binding allowed
-        let p1 = (VariableTerm) ++ (kw "in" << Term)
-            |||>> fun reg (sign, _) (v, t_range) ->
+        let p1 = VariableTerm ++ (kw "in" << Term)
+            |||>> fun reg (sign, _) (v : string, t_range : TYPED_TERM) ->
                     // !!!! tbd: check that t_range is really a finite set, e.g. not Powerset(Integer)
                     match get_type t_range with
                     |   Powerset v_type -> ((v, v_type), t_range)
                     |   _ -> raise (Error ("BasicRule.ForallRule", Some reg, NotAFiniteSet (v, get_type t_range)))
         let p2 reg env (v, v_type) =
             let env' = add_var_distinct reg (v, v_type) env
-            in (kw "with" << Term_in_env (false, env')) ++ (kw "do" << Rule_in_env env')
-        (p1 >>== fun reg _ ((v, v_type), t_range) -> p2 reg env0 (v, v_type) >>= fun (t_filter, R) -> preturn (ForallRule (v, t_range, t_filter, R)) )
+            in (poption (kw "with" << Term_in_env (false, env'))) ++ (kw "do" << Rule_in_env env')
+        p1 >>== fun reg (sign, _) ((v, v_type), t_range) ->
+                    p2 reg env0 (v, v_type) >>=
+                        fun (t_filter, R) ->
+                                preturn (ForallRule (
+                                    v, t_range,
+                                    (match t_filter with
+                                    |   Some tf -> tf
+                                    |   None -> Parser.mkAppTerm true (Some reg) sign (BoolConst true, [])),   // missing "with"-clause is equivalent to "with true"
+                                    R
+                                ))
 
     (   (kw "skip" |>> fun _ -> skipRule)
     <|> (kw "par"    << no_backtrack "'par' rule" BlockRule)
