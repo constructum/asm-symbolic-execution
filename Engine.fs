@@ -1572,7 +1572,7 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
         |   Value' (BOOL false) -> eval_term t2 (UM, env, pc)
         |   CondTerm' (G', G1, G2) ->
                 if get_type' (get_term_type G1) <> Boolean' || get_type' (get_term_type G2) <> Boolean'
-                then failwith (sprintf "Engine.eval_cond_rule: '%s' and '%s' must be boolean terms" (term_to_string G1) (term_to_string G2))
+                then failwith (sprintf "Engine.eval_cond_term: '%s' and '%s' must be boolean terms" (term_to_string G1) (term_to_string G2))
                 else eval_term (CondTerm (G', CondTerm (G1, t1, t2), CondTerm (G2, t1, t2))) (UM, env, pc)
         |   UnfoldedTerm' ((f, xs), M) ->
                 eval_term (UnfoldedTerm ((f, xs), Map.map (fun _ R_i -> CondTerm (R_i, t1, t2)) M)) (UM, env, pc)
@@ -1620,7 +1620,7 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
     and eval_domain_term unfold_locations (dom : TYPE) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
         match enum_finite_type eng dom with
         |   Some xs -> Value (SET (main_type_of eng dom |> to_signature_type eng, xs))
-        |   None -> failwith (sprintf "Engine.s_eval_term_: domain of type '%s' is not enumerable" (dom |> type_to_string eng))
+        |   None -> failwith (sprintf "Engine.eval_domain_term: domain of type '%s' is not enumerable" (dom |> type_to_string eng))
 
     and eval_quant_term (unfold_locations : bool) (q_kind, v, t_set, t_cond) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
         let eval_term t (UM, env, pc) = eval_term unfold_locations t (UM, env, pc)
@@ -1809,12 +1809,12 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
                         eval_rule (CondRule (G2, ParRule [ S_Updates U1; R21 ], ParRule [ S_Updates U1; R22 ])) (UM, env, pc)
                 |   UnfoldedRule' ((f, xs), M) ->
                         eval_rule (UnfoldedRule ((f, xs), Map.map (fun _ R2_i -> ParRule [ S_Updates U1; R2_i ]) M)) (UM, env, pc)
-                |   _ -> failwith (sprintf "eval_binary_par: %s" (rule_to_string R2_eval))
+                |   _ -> failwith (sprintf "eval_binary_par_rule: %s" (rule_to_string R2_eval))
         |   CondRule' (G1, R11, R12) ->
                 eval_rule (CondRule (G1, ParRule [ R11; R2 ], ParRule [ R12; R2 ])) (UM, env, pc)
         |   UnfoldedRule' ((f, xs), M) ->
                 eval_rule (UnfoldedRule ((f, xs), Map.map (fun _ R1_i -> ParRule [ R1_i; R2 ]) M)) (UM, env, pc)
-        |   _ -> failwith (sprintf "eval_binary_par: %s" (rule_to_string R1_eval))
+        |   _ -> failwith (sprintf "eval_binary_par_rule: %s" (rule_to_string R1_eval))
 
     and eval_seq_rule Rs (UM, env, pc) =
         match Rs with
@@ -1829,7 +1829,7 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
                 let S' =
                     try sequel_s_state eng UM (get_s_update_set' U1)
                     with Error (_, _, InconsistentUpdates (C, _, u1, u2, _)) ->
-                            raise (Error (eng, "eval_rule.eval_binary_seq",
+                            raise (Error (eng, "eval_rule.eval_binary_seq_rule",
                                 InconsistentUpdates (C, Some (List.ofSeq (fst pc)), u1, u2, Some (get_s_update_set' U1))))
                 let R2_eval = eval_rule R2 (S', env, pc)
                 match get_rule' R2_eval with
@@ -1839,12 +1839,12 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
                         eval_rule (CondRule (G2, SeqRule [ S_Updates U1; R21 ], SeqRule [ S_Updates U1; R22 ])) (UM, env, pc)
                 |   UnfoldedRule' ((f, xs), M) ->
                         eval_rule (UnfoldedRule ((f, xs), Map.map (fun _ R2_i -> SeqRule [ S_Updates U1; R2_i ]) M)) (UM, env, pc)
-                |   _ -> failwith (sprintf "eval_binary_seq: %s" (rule_to_string R2_eval))
+                |   _ -> failwith (sprintf "eval_binary_seq_rule: %s" (rule_to_string R2_eval))
         |   CondRule' (G1, R11, R12) ->
                 eval_rule (CondRule (G1, SeqRule [ R11; R2 ], SeqRule [ R12; R2 ])) (UM, env, pc)
         |   UnfoldedRule' ((f, xs), M) ->
                 eval_rule (UnfoldedRule ((f, xs), Map.map (fun _ R1_i -> SeqRule [ R1_i; R2 ]) M)) (UM, env, pc)
-        |   _ -> failwith (sprintf "eval_binary_seq: %s" (rule_to_string R1_eval))
+        |   _ -> failwith (sprintf "eval_binary_seq_rule: %s" (rule_to_string R1_eval))
 
     and eval_iter_rule R (UM, env, pc) =
         match get_rule' (eval_rule R (UM, env, pc)) with
@@ -1857,7 +1857,7 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
                 eval_rule (CondRule (G, SeqRule [R1; IterRule R], SeqRule [R2; IterRule R])) (UM, env, pc)
         |   UnfoldedRule' ((f, xs), M) ->
                 eval_rule (UnfoldedRule ((f, xs), Map.map (fun _ R_i -> SeqRule [ R_i; IterRule R ]) M)) (UM, env, pc)
-        |   R' -> failwith (sprintf "SymEvalRules.eval_rule: eval_iter_rule - R'' = %s" (rule_to_string (get_rule eng R')))
+        |   R' -> failwith (sprintf "eval_iter_rule - R'' = %s" (rule_to_string (get_rule eng R')))
 
     and eval_let_rule (v, t, R) (UM, env, pc) =
         let t' = s_eval_term t (UM, env, pc)
@@ -1872,7 +1872,7 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
                     CondRule (s_eval_term G (UM, env', pc), eval_rule R (UM, env', pc), skipRule)
                 let Rs = List.map (fun x -> eval_instance x) (Set.toList xs)
                 eval_rule (ParRule Rs) (UM, env, pc)
-        |   x -> failwith (sprintf "Engine.forall_rule: not a set (%A): %A v" ts x)
+        |   x -> failwith (sprintf "eval_forall_rule: not a set (%A): %A v" ts x)
 
     and eval_macro_rule_call (r, args) (UM, env, pc) =
         let typecheck () =
@@ -1885,7 +1885,7 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
         let (formals, body) =
             match get_rule_def eng r with
             |   Some (formals, body) -> (formals, body)
-            |   None -> failwith (sprintf "Engine.eval_macro_rule_call: macro rule '%s' not defined" (get_rule_name eng r))
+            |   None -> failwith (sprintf "eval_macro_rule_call: macro rule '%s' not defined" (get_rule_name eng r))
         let env' =
             List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (UM, env, pc))) env formals args
         eval_rule body (UM, env', pc)
@@ -1966,13 +1966,13 @@ let count_s_updates eng = rule_induction eng (fun _ -> ()) {
     S_Updates = fun _ -> 1;
     CondRule  = fun (_, R1, R2) -> R1 + R2;
     UnfoldedRule = fun ((f, xs), M) -> Map.toList M >>| snd |> List.sum;
-    UpdateRule = fun _ -> failwith "there should be no UpdateRule here";
-    ParRule   = fun _ -> failwith "there should be no ParRule here";
-    SeqRule   = fun _ -> failwith "there should be no SeqRule here";
-    IterRule  = fun _ -> failwith "there should be no IterRule here";
-    LetRule   = fun _ -> failwith "there should be no LetRule here";
-    MacroRuleCall = fun _ -> failwith "there should be no MacroRuleCall here";
-    ForallRule = fun _ -> failwith "there should be no ForallRule here";
+    UpdateRule = fun _ -> failwith "count_s_updates: there should be no UpdateRule here";
+    ParRule   = fun _  -> failwith "count_s_updates: there should be no ParRule here";
+    SeqRule   = fun _  -> failwith "count_s_updates: there should be no SeqRule here";
+    IterRule  = fun _  -> failwith "count_s_updates: there should be no IterRule here";
+    LetRule   = fun _  -> failwith "count_s_updates: there should be no LetRule here";
+    MacroRuleCall = fun _ -> failwith "count_s_updates: there should be no MacroRuleCall here";
+    ForallRule = fun _ -> failwith "count_s_updates: there should be no ForallRule here";
 }
 
 //--------------------------------------------------------------------
