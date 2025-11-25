@@ -28,6 +28,10 @@ let indent ppt =
 
 //--------------------------------------------------------------------
 
+let always_unfold_guards = true
+
+//--------------------------------------------------------------------
+
 type FUNCTION_INTERPRETATION =
 |   Constructor of (VALUE list -> VALUE)
 |   StaticBackground of (VALUE list -> VALUE)
@@ -1566,7 +1570,7 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
     and eval_cond_term unfold_locations (G : TERM, t1 : TERM, t2 : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
         let eval_term t (UM, env, pc) = eval_term unfold_locations t (UM, env, pc)
         //let eval_bool_term t (UM, env, pc) = eval_bool_term unfold_locations t (UM, env, pc)
-        let G_eval = eval_bool_term true G (UM, env, pc)            // evaluate guard with unfolding to reduce the risk of non-termination
+        let G_eval = eval_bool_term (if always_unfold_guards then true else unfold_locations) G (UM, env, pc)
         match get_term' G_eval with
         |   Value' (BOOL true)  -> eval_term t1 (UM, env, pc)
         |   Value' (BOOL false) -> eval_term t2 (UM, env, pc)
@@ -1748,7 +1752,7 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
             F ts_lhs ([], Some []) ts_lhs (UM, env, pc)
 
     and eval_cond_rule (G, R1, R2) (UM, env, pc) = 
-        let G = s_eval_term_with_unfolding G (UM, env, pc)      // evaluate guard with unfolding to reduce the risk of non-termination
+        let G = if always_unfold_guards then s_eval_term_with_unfolding G (UM, env, pc) else s_eval_term G (UM, env, pc)
         match get_term' G with
         |   Value' (BOOL true)  -> eval_rule R1 (UM, env, pc)
         |   Value' (BOOL false) -> eval_rule R2 (UM, env, pc)
