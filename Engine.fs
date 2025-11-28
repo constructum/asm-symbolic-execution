@@ -2111,6 +2111,20 @@ let rule_size eng =
 
 //--------------------------------------------------------------------
 // first element of pair returned is the number of S_Updates rules, i.e. paths in the decision tree
+
+let collect_distinct_symbolic_update_sets eng = rule_induction eng (fun _ -> 0) {
+    S_Updates = fun SUS -> Set.singleton SUS;
+    CondRule  = fun (_, R1, R2) -> Set.union R1 R2;
+    UnfoldedRule = fun ((f, xs), M) -> Map.toList M >>| snd |> Set.unionMany;
+    UpdateRule = fun _ -> failwith "collect_distinct_symbolic_update_sets: there should be no UpdateRule here";
+    ParRule   = fun _  -> failwith "collect_distinct_symbolic_update_sets: there should be no ParRule here";
+    SeqRule   = fun _  -> failwith "collect_distinct_symbolic_update_sets: there should be no SeqRule here";
+    IterRule  = fun _  -> failwith "collect_distinct_symbolic_update_sets: there should be no IterRule here";
+    LetRule   = fun _  -> failwith "collect_distinct_symbolic_update_sets: there should be no LetRule here";
+    MacroRuleCall = fun _ -> failwith "collect_distinct_symbolic_update_sets: there should be no MacroRuleCall here";
+    ForallRule = fun _ -> failwith "collect_distinct_symbolic_update_sets: there should be no ForallRule here";
+} 
+
 let symbolic_execution (eng : ENGINE) (R_in : RULE) (steps : int) : int * int option * RULE =
     if (!trace > 2) then fprintf stderr "symbolic_execution\n"
     if (steps <= 0) then failwith "Engine.symbolic_execution: number of steps must be >= 1"
@@ -2118,7 +2132,7 @@ let symbolic_execution (eng : ENGINE) (R_in : RULE) (steps : int) : int * int op
     let R_in_n_times = [ for _ in 1..steps -> R_in ]
     let R_in' = SeqRule eng (R_in_n_times @ [ skipRule eng ])      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets
     let R_out = eval_rule eng R_in' (Map.empty, Map.empty, empty_path_cond)
-    (count_s_updates eng R_out, None, reconvert_rule eng R_out)
+    (count_s_updates eng R_out, Some (Set.count (collect_distinct_symbolic_update_sets eng R_out)), reconvert_rule eng R_out)
 
 let symbolic_execution_for_invariant_checking (eng : ENGINE) (opt_steps : int option) (R_in : RULE) : unit =
     let Initial, Value, CondRule, UpdateRule, S_Updates = Initial eng, Value eng, CondRule eng, UpdateRule eng, S_Updates eng

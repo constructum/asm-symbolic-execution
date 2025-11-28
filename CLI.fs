@@ -91,7 +91,7 @@ let exec_symbolic (symb_exec_fct : 'rule -> 'a * 'a option * 'rule) (R_in : 'rul
             write $"\n\n--- size of generated rule: {(rule_size R_out)}\n"
             write $"\n--- number of paths in decision tree: {no_of_leaves}\n"
             match no_of_distinct_states with
-            |   Some n  -> write $"--- number of distinct symbolic states reached: {n}\n"
+            |   Some n  -> write $"--- number of distinct symbolic update sets in decision tree: {n}\n"
             |   None    -> ()
             write $"\n--- number of SMT solver calls: {!TopLevel.smt_ctx.ctr}\n"     //!!! in DAG version, Toplevel should not be used
             print_time (cpu, usr, sys)
