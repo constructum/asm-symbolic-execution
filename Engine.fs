@@ -119,6 +119,7 @@ and TERM' =
 |   Initial'    of (FCT_ID * VALUE list)    // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
 |   AppTerm'    of (FCT_ID * TERM list)
 |   CondTerm'   of (TERM * TERM * TERM)
+|   TupleTerm'  of (TERM list)
 |   VarTerm'    of (string * TYPE)
 |   QuantTerm'  of (AST.QUANT_KIND * string * TERM * TERM)
 |   LetTerm'    of (string * TERM * TERM)
@@ -141,6 +142,7 @@ and TERM_INDUCTION<'fct_id, 'term> = {
     Initial    : ('fct_id * VALUE list) -> 'term;
     AppTerm    : ('fct_id * 'term list) -> 'term;
     CondTerm   : ('term * 'term * 'term) -> 'term;
+    TupleTerm  : ('term list) -> 'term;
     VarTerm    : (string * TYPE) -> 'term;
     QuantTerm  : (AST.QUANT_KIND * string * 'term * 'term) -> 'term;
     LetTerm    : (string * 'term * 'term) -> 'term;
@@ -228,7 +230,7 @@ let rec error_msg ((eng, fct_name, details) : ErrorDetails) =
             sprintf "function '%s : %s -> %s' called with arguments of type(s): %s"
                 fct_name (sign_args_types |> type_list_to_string) (sign_res_type |> type_to_string) (args_types |> type_list_to_string)
     |   RuleCallTypeMismatch (rname, def_args_types, sign_rule_types) ->
-            sprintf "rule macro '%s'\n  expecting arguments of type(s):   %s\n  called with arguments of type(s): %s"
+            sprintf "rule macro '%s'\n  expecting arguments of type(s):   (%s)\n  called with arguments of type(s): (%s)"
                 rname (sign_rule_types |> type_list_to_string) (def_args_types |> type_list_to_string)
     |   TypeOfResultUnknown (fct_name, sign_args_types, sign_res_type) ->
             sprintf "type of result of function %s : %s -> %s is unknown (type parameter '%s cannot be instantiated)"
@@ -299,7 +301,7 @@ and inline fct_types eng fct_id = (snd (get_function' eng fct_id)).fct_types
 and inline fct_interpretation eng fct_id = (snd (get_function' eng fct_id)).fct_interpretation
 
 and inline make_type (eng as Engine eid : ENGINE) (ty' : TYPE') (opt_sign_type : Signature.TYPE option) : TYPE =
-    let enum_finite_type (ty' : TYPE') (S : State.STATE) =
+    let enum_elems (ty' : TYPE') (S : State.STATE) : VALUE Set option =
         match ty' with
         |   Boolean' -> Some State.boolean_carrier_set
         |   Integer' -> None
@@ -316,7 +318,14 @@ and inline make_type (eng as Engine eid : ENGINE) (ty' : TYPE') (opt_sign_type :
                 try Some (Option.get (Map.find tyname S._carrier_sets))
                 with _ -> failwith (sprintf "SymbState.enum_finite_type: carrier set of '%s' not found" tyname)
         |   TypeCons' (tyname, _)  -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for user-defined type '%s' with type arity > 0" tyname)
-        |   Prod' _  -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for 'Prod' types")
+        |   Prod' tys ->
+                let list_option_list = tys >>| enum_finite_type eng
+                match List.foldBack (fun head tail -> 
+                                            tail |> Option.bind (fun t -> 
+                                            head |> Option.map (fun h -> h::t))
+                                        ) list_option_list (Some []) with
+                |   Some lists -> ((Common.product_of_lists (lists >>| Set.toList)) >>| TUPLE) |> Set.ofList |> Some
+                |   None -> None
         |   Seq' _   -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for 'Seq' types")
         |   Powerset' _ -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for 'Powerset' types")
         |   Bag' _ -> failwith (sprintf "SymbState.enum_finite_type: not yet implemented for 'Bag' types")
@@ -346,7 +355,7 @@ and inline make_type (eng as Engine eid : ENGINE) (ty' : TYPE') (opt_sign_type :
             let attrs = {
                 type_id = type_id;
                 signature_type = match opt_sign_type with Some sign_ty -> sign_ty | None -> type'_to_sign_type ty';
-                carrier_set = try enum_finite_type ty' e.initial_state with _ -> None        //!!!! temporarily set to None for type where enum_finite_type is not yet implemented
+                carrier_set = try enum_elems ty' e.initial_state with _ -> None        //!!!! temporarily set to None for type where enum_finite_type is not yet implemented
             }
             e.types |> add (ty', attrs) |> Type
 
@@ -373,7 +382,7 @@ and convert_type (eng as Engine eid) (ty : Signature.TYPE) : TYPE =
 and inline to_signature_type (eng as Engine eid) (Type type_id : TYPE) : Signature.TYPE =
     (snd (engines.[eid].types |> get type_id)).signature_type
 
-and inline enum_finite_type (eng as Engine eid) (Type type_id : TYPE) : VALUE Set option =
+and enum_finite_type (eng as Engine eid) (Type type_id : TYPE) : VALUE Set option =
     (snd (engines.[eid].types |> get type_id)).carrier_set
 
 and inline BooleanType (eng : ENGINE) = get_type eng Boolean'
@@ -427,7 +436,14 @@ and match_one_fct_type eng (fct_name : string) (args_types : TYPE list) (sign_fc
                 match_types (args_types', sign_arg_types', ty_env_1)
         |   (_, _, _) -> // arity does not match
                 raise (Error (eng, "match_one_fct_type", FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types)))
-    let (_, result_type) = match_types (args_types, sign_args_types, Map.empty)
+//    let (_, result_type) = match_types (args_types, sign_args_types, Map.empty)
+    let (_, result_type) =
+        match args_types with
+        |   [ty] ->
+                match get_type' eng ty with
+                |   Prod' args_types -> match_types (args_types, sign_args_types, Map.empty)    // one single tuple (x_1, ..., x_n) is equivalent to n arguments x_1, ..., x_n 
+                |   _ -> match_types (args_types, sign_args_types, Map.empty)
+            |   _ -> match_types (args_types, sign_args_types, Map.empty)
     result_type
 
 and match_fct_type (eng as Engine eid) (fct_name : string) (args_types : TYPE list) (sign_fct_types : list<TYPE list * TYPE>) : TYPE =
@@ -456,7 +472,11 @@ and compute_type (eng as Engine eid) (t' : TERM') : TYPE =
     |   Value' x -> type_of_value x
     |   Initial' (f, xs) -> match_fct_type eng (fct_name f) (xs >>| type_of_value) (fct_types f)
     |   AppTerm' (f, ts) -> match_fct_type eng (fct_name f) (ts >>| get_term_type) (fct_types f)
-    |   CondTerm' (G, t1, t2) -> if get_term_type t1 = get_term_type t2 then get_term_type t1 else failwith "compute_type: types of branches of conditional term do not match"
+    |   CondTerm' (G, t1, t2) ->
+            let ty1 = main_type_of eng (get_term_type t1)
+            let ty2 = main_type_of eng (get_term_type t2)
+            if ty1 = ty2 then ty1 else failwith "compute_type: types of branches of conditional term do not match"
+    |   TupleTerm' ts -> ProdType eng (ts >>| get_term_type)
     |   VarTerm' (v, ty) -> ty
     |   QuantTerm' (_, _, t_set, _) -> BooleanType eng
     |   LetTerm' (_, t1, t2) -> get_term_type t2
@@ -504,6 +524,7 @@ and inline Value eng x = get_term eng (Value' x)
 and inline Initial eng (f, xs) = get_term eng (Initial' (f, xs))
 and inline AppTerm eng (f, ts) = get_term eng (AppTerm' (f, ts))
 and inline CondTerm eng (G, t1, t2) = get_term eng (CondTerm' (G, t1, t2))
+and inline TupleTerm eng ts = get_term eng (TupleTerm' ts)
 and inline VarTerm eng v = get_term eng (VarTerm' v)
 and inline QuantTerm eng (q_kind, v, t_set, t_cond) = get_term eng (QuantTerm' (q_kind, v, t_set, t_cond))
 and inline LetTerm eng (x, t1, t2) = get_term eng (LetTerm' (x, t1, t2))
@@ -533,9 +554,10 @@ and convert_term (eng : ENGINE) (t : AST.TYPED_TERM) : TERM =
                                     AppTerm eng (f_id, ts)
                                 with ex as Signature.Error (Signature.NoMatchingFunctionType (f, tys)) ->
                                     fprintf stderr "convert_term: in term %A\n" (AppTerm eng (f_id, ts))
-                                    raise ex
+                                    raise ex;
+        TupleTerm  = fun (_, ts) -> TupleTerm eng ts;
         CondTerm   = fun (_, (G, t1, t2)) -> CondTerm eng (G, t1, t2);
-        VarTerm    = fun (ty, v) -> VarTerm eng (v, convert_type eng ty)
+        VarTerm    = fun (ty, v) -> VarTerm eng (v, convert_type eng ty);
         QuantTerm  = fun (ty, (q_kind, v, t_set, t_cond)) -> QuantTerm eng (q_kind, v, t_set, t_cond);
         LetTerm    = fun (_, (v, t1, t2)) -> LetTerm eng (v, t1, t2);
         DomainTerm = fun (_, D) -> DomainTerm eng (convert_type eng D);
@@ -767,6 +789,7 @@ and term_induction (eng: ENGINE) (fct_id : FCT_ID -> 'fct_id) (F : TERM_INDUCTIO
     |   Initial' (f, xs)      -> F.Initial (fct_id f, xs)
     |   AppTerm' (f, ts)      -> F.AppTerm (fct_id f, List.map (fun t -> term_ind t) ts)
     |   CondTerm' (G, t1, t2) -> F.CondTerm (term_ind G, term_ind t1, term_ind t2)
+    |   TupleTerm' ts         -> F.TupleTerm (List.map (fun t -> term_ind t) ts)
     |   VarTerm' (v, ty)      -> F.VarTerm (v, ty)
     |   QuantTerm' (q_kind, v, t_set, t_cond) -> F.QuantTerm (q_kind, v, term_ind t_set, term_ind t_cond)
     |   LetTerm' (x, t1, t2)  -> F.LetTerm (x, term_ind t1, term_ind t2)
@@ -832,6 +855,7 @@ and pp_term (eng : ENGINE) (t : TERM) =
         CondTerm = fun (G, t1, t2) -> blo0 [ str "if "; G; line_brk; str "then "; t1; line_brk; str "else "; t2; line_brk; str "endif" ];
         Value    = fun x -> str (value_to_string x);
         Initial  = fun (f, xs) -> pp_location_term "initial" (fct_name eng f, xs);
+        TupleTerm = fun ts -> blo0 [ str "("; blo0 (pp_list [str",";brk 1] ts); str ")" ];
         VarTerm = fun (x, _) -> str x;
         QuantTerm = fun (q_kind, v, t_set, t_cond) ->
             blo0 [ str ("("^(AST.quant_kind_to_str q_kind)^" "); str v; str " in "; t_set; str " with "; t_cond; str ")" ];
@@ -979,6 +1003,7 @@ and sequel_s_state : ENGINE -> UPDATE_MAP -> UPDATE_SET -> UPDATE_MAP = apply_s_
 //--------------------------------------------------------------------
 
 and get_env (env : ENV) (var : string) =
+    // fprintf stderr "get_env: looking for variable '%s'\n" var;
     Map.find var env
 
 and add_binding (env : ENV) (var : string, t : TERM) =
@@ -990,6 +1015,7 @@ and replace_vars (eng : ENGINE) (env : ENV) (t : TERM) : TERM =
         Initial    = Initial eng
         AppTerm    = AppTerm eng
         CondTerm   = CondTerm eng
+        TupleTerm  = TupleTerm eng
         VarTerm    = fun (v, _) -> get_env env v
         QuantTerm  = QuantTerm eng
         LetTerm    = LetTerm eng
@@ -1251,6 +1277,7 @@ let smt_formula_is_false (eng as Engine eid) (phi : TERM) =
 
 let rec interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as FctId f_id) (xs : VALUE list) =
     let Value = Value eng
+    let xs = match xs with [TUPLE xs'] -> xs' | _ -> xs    // unpack single tuple (x_1, ..., x_n) into arguments x_1, ..., x_n, if needed
     let eval_fct_definition_in_curr_state (fct_definition as (args, body)) xs =
         let env = List.fold2 (fun env' arg x -> add_binding env' (arg, Value x)) Map.empty args xs
         let body' = body        // alternative: // let body' = replace_vars eng env body
@@ -1292,6 +1319,17 @@ let rec interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as F
 
 and symbolic_interpretation (eng : ENGINE) (UM : UPDATE_MAP) (pc : PATH_COND) (f as FctId f_id) (ts : TERM list) =
     let Value = Value eng
+    let ts =            // unpack single tuple (t_1, ..., t_n) into arguments t_1, ..., t_n, if needed
+        match ts with
+        | [t] ->
+            match get_type' eng (get_term_type eng t) with
+            |   Prod' _ ->  // single argument is of product type, i.e. a tuple => try to extract arguments from tuple
+                match get_term' eng t with
+                |   TupleTerm' ts' -> ts'
+                |   Value' (TUPLE ts') -> ts' >>| Value
+                |   _ -> failwith (sprintf "symbolic_interpretation: cannot extract arguments of '%s' from term '%s', which is of product type (i.e. a tuple)" (fct_name eng f) (term_to_string eng t))
+            |   _ -> ts     // single argument is not expected to be a tuple => continue normally
+        | _ -> ts
     let eval_fct_definition_in_curr_state (fct_definition as (args, body)) (ts : TERM list) =
         let env = List.fold2 (fun env' arg t -> add_binding env' (arg, t)) Map.empty args ts
         let body' = body        // alternative: // let body' = replace_vars eng env body
@@ -1451,7 +1489,8 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
                         match get_term' t1 with
                         |   Value' x1     -> F (t1 :: ts_past_rev, Option.map (fun xs -> x1 :: xs) xs_past_opt_rev) ts_fut (UM, env, pc)
                         |   Initial' _    -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
-                        |   AppTerm'  _   -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)    
+                        |   AppTerm'  _   -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc) 
+                        |   TupleTerm' _  -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)   
                         |   CondTerm' _   -> F (ts_past_rev, xs_past_opt_rev) (t1 :: ts_fut) (UM, env, pc)      // reiterate 'lifting' of conditional, if needed, until no conditional left
                         |   UnfoldedTerm' _  -> F (ts_past_rev, xs_past_opt_rev) (t1 :: ts_fut) (UM, env, pc)      // reiterate 'lifting' of unfolded term, if needed, until no unfolded term left
                         |   LetTerm'  _   -> failwith "Engine.eval_app_term: LetTerm should not occur here"
@@ -1566,6 +1605,38 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
         |   _ ->
         F ([], Some []) ts (UM, env, pc)
 
+    and eval_tuple_term (unfold_locations : bool) (ts : TERM list) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM = 
+        let eval_term t = eval_term unfold_locations t (UM, env, pc)
+        let rec F ts_initial (ts_past_rev : TERM list, xs_past_opt_rev: VALUE list option) (ts : TERM list) =
+            let F_reiterate = F
+            let F = F ts_initial
+            match ts with
+            |   t1 :: ts_fut ->
+                    match get_term' t1 with
+                    |   CondTerm' (G1, t11, t12) ->
+                            CondTerm (G1, F (ts_past_rev, xs_past_opt_rev) (t11 :: ts_fut), F (ts_past_rev, xs_past_opt_rev) (t12 :: ts_fut))
+                    |   UnfoldedTerm' ((f, xs), M) ->
+                            UnfoldedTerm ((f, xs), Map.map (fun _ t_i -> F (ts_past_rev, xs_past_opt_rev) (t_i :: ts_fut)) M)
+                    |   _ ->
+                        let t1 = eval_term t1
+                        match get_term' t1 with
+                        |   Value' x1     -> F (t1 :: ts_past_rev, Option.map (fun xs -> x1 :: xs) xs_past_opt_rev) ts_fut
+                        |   Initial' _    -> F (t1 :: ts_past_rev, None) ts_fut
+                        |   AppTerm'  _   -> F (t1 :: ts_past_rev, None) ts_fut
+                        |   TupleTerm' _  -> F (t1 :: ts_past_rev, None) ts_fut
+                        |   CondTerm' _   -> F (ts_past_rev, xs_past_opt_rev) (t1 :: ts_fut)        // reiterate 'lifting' of conditional, if needed, until no conditional left
+                        |   UnfoldedTerm' _ -> F (ts_past_rev, xs_past_opt_rev) (t1 :: ts_fut)      // reiterate 'lifting' of unfolded term, if needed, until no unfolded term left
+                        |   LetTerm'  _   -> failwith "Engine.eval_app_term: LetTerm should not occur here"
+                        |   VarTerm'  _   -> failwith "Engine.eval_app_term: VarTerm should not occur here"
+                        |   QuantTerm' _  -> failwith "Engine.eval_app_term: QuantTerm should not occur here"
+                        |   DomainTerm' _ -> failwith "Engine.eval_app_term: DomainTerm should not occur here"
+            |   [] ->
+                    let xs_opt_eval = Option.map List.rev xs_past_opt_rev
+                    match xs_opt_eval with
+                    |   Some xs ->  Value (TUPLE xs)       // arguments fully evaluated to values
+                    |   None ->     let ts_eval = List.rev ts_past_rev
+                                    if ts_eval <> ts_initial then F_reiterate ts_eval ([], Some []) (ts_eval >>| eval_term) else TupleTerm eng ts_eval
+        F ts ([], Some []) ts
 
     and eval_cond_term unfold_locations (G : TERM, t1 : TERM, t2 : TERM) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : TERM =
         let eval_term t (UM, env, pc) = eval_term unfold_locations t (UM, env, pc)
@@ -1655,6 +1726,7 @@ and s_eval_term_ (eng : ENGINE) (unfold_locations : bool) (t : TERM) (UM : UPDAT
             |   Initial' (f, xs)      -> eval_initial unfold_locations t (f, xs) (UM, env, pc)
             |   VarTerm' (v, ty)      -> eval_term unfold_locations (get_env env v) (UM, env, pc)
             |   AppTerm' (f, ts)      -> eval_app_term unfold_locations (f, ts) (UM, env, pc)
+            |   TupleTerm' ts         -> eval_tuple_term unfold_locations ts (UM, env, pc)
             |   CondTerm' (G, t1, t2) -> eval_cond_term unfold_locations (G, t1, t2) (UM, env, pc)
             |   LetTerm' (v, t1, t2)  -> eval_let_term unfold_locations (v, t1, t2) (UM, env, pc)
             |   DomainTerm' dom       -> eval_domain_term unfold_locations dom (UM, env, pc)
@@ -1708,6 +1780,17 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
 
     and eval_update_rule ((f_lhs, ts_lhs), t_rhs) (UM : UPDATE_MAP, env : ENV, pc : PATH_COND) : RULE =
         if !trace > 0 then fprintf stderr "eval_update_rule: %s\n" (rule_to_string (UpdateRule ((f_lhs, ts_lhs), t_rhs)))
+        let ts_lhs =            // unpack single tuple (t_1, ..., t_n) into arguments t_1, ..., t_n, if needed
+            match ts_lhs with
+            | [t] ->
+                match get_type' (get_term_type t) with
+                |   Prod' _ ->  // single argument is of product type, i.e. a tuple => try to extract arguments from tuple
+                    match get_term' (s_eval_term t (UM, env, pc)) with
+                    |   TupleTerm' ts' -> ts'
+                    |   Value' (TUPLE ts') -> ts' >>| Value
+                    |   _ -> failwith (sprintf "eval_update_rule: cannot extract arguments of '%s' from term '%s', which is of product type (i.e. a tuple)" (fct_name eng f_lhs) (term_to_string t))
+                |   _ -> ts_lhs     // single argument is not expected to be a tuple => continue normally
+            | _ -> ts_lhs
         let t_rhs = s_eval_term t_rhs (UM, env, pc)
         match get_term' t_rhs with
         |   CondTerm' (G, t1, t2) ->
@@ -1733,6 +1816,7 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
                         |   CondTerm' _   -> F (ts_past_rev, xs_past_opt_rev) (t1 :: ts_fut) (UM, env, pc)      // reiterate 'lifting' of conditional, if needed, until no conditional left
                         |   UnfoldedTerm' _  -> F (ts_past_rev, xs_past_opt_rev) (t1 :: ts_fut) (UM, env, pc)      // reiterate 'lifting' of unfolded term, if needed, until no unfolded term left
                         |   AppTerm' _    -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
+                        |   TupleTerm' _  -> F (t1 :: ts_past_rev, None) ts_fut (UM, env, pc)
                         |   LetTerm' _    -> failwith "Engine.eval_update_rule: LetTerm should not occur here"
                         |   VarTerm' _    -> failwith "Engine.eval_update_rule: VarTerm should not occur here"
                         |   DomainTerm' _ -> failwith "Engine.eval_update_rule: DomainTerm should not occur here"
@@ -1878,21 +1962,33 @@ and eval_rule (eng : ENGINE) (R : RULE) (UM : UPDATE_MAP, env : ENV, pc : PATH_C
                 eval_rule (ParRule Rs) (UM, env, pc)
         |   x -> failwith (sprintf "eval_forall_rule: not a set (%A): %A v" ts x)
 
-    and eval_macro_rule_call (r, args) (UM, env, pc) =
-        let typecheck () =
-            let rname = get_rule_name eng r
-            let sign_rule_type = Signature.rule_type_as_fct_type rname (get_signature eng)
-            let def_args_types, def_rhs_type = List.map (fun arg -> to_signature_type eng (get_term_type arg)) args, Rule
-            try Signature.match_fct_type rname def_args_types [sign_rule_type] |> ignore
-            with _ -> raise (Error (eng, "eval_macro_rule_call", RuleCallTypeMismatch (rname, def_args_types >>| convert_type eng, fst sign_rule_type >>| convert_type eng)))
-        typecheck ()        // !!! this should be done at loading / parsing time, not at evaluation time - or at least using (mapped) engine types, not signature types
-        let (formals, body) =
-            match get_rule_def eng r with
-            |   Some (formals, body) -> (formals, body)
-            |   None -> failwith (sprintf "eval_macro_rule_call: macro rule '%s' not defined" (get_rule_name eng r))
-        let env' =
-            List.fold2 (fun env' formal arg -> add_binding env' (formal, s_eval_term arg (UM, env, pc))) env formals args
-        eval_rule body (UM, env', pc)
+    and eval_macro_rule_call (r, args) (UM, env, pc) : RULE =
+        let rname = get_rule_name eng r
+        let sign_rule_type = Signature.rule_type_as_fct_type rname (get_signature eng)
+        let convert_to_sign_types tys = List.map (fun ty -> to_signature_type eng ty) tys 
+        let args_types = convert_to_sign_types (args >>| get_term_type) >>| Signature.main_type_of
+        let sign_rule_type = (fst sign_rule_type >>| Signature.main_type_of, snd sign_rule_type |> Signature.main_type_of)
+        match args_types with
+        |   [Signature.Prod tys] ->
+                // single tuple arg (x_1, ..., x_n) is equivalent to multiple args x_1, ..., x_n
+                try Signature.match_fct_type rname tys [sign_rule_type] |> ignore
+                with _ -> raise (Error (eng, "eval_macro_rule_call", RuleCallTypeMismatch (rname, tys >>| convert_type eng, fst sign_rule_type >>| convert_type eng)))
+                match get_term' (s_eval_term (List.head args) (UM, env, pc)) with
+                |   TupleTerm' ts     -> eval_macro_rule_call (r, ts) (UM, env, pc)    // unpack tuple argument
+                |   Value' (TUPLE xs) -> eval_macro_rule_call (r, xs >>| Value) (UM, env, pc)    // unpack tuple argument
+                |   _ -> failwith (sprintf "eval_macro_rule_call: expected tuple as single argument, got '%s'" (term_to_string (List.head args)))
+        |   _ ->
+                // normal case: one (non-tuple) arguments, or n arguments with n != 1
+                try Signature.match_fct_type rname args_types [sign_rule_type] |> ignore
+                with _ -> raise (Error (eng, "eval_macro_rule_call", RuleCallTypeMismatch (rname, args_types >>| convert_type eng, fst sign_rule_type >>| convert_type eng)))
+                let (formals, body) =
+                    match get_rule_def eng r with
+                    |   Some (formals, body) -> (formals, body)
+                    |   None -> failwith (sprintf "eval_macro_rule_call: macro rule '%s' not defined" (get_rule_name eng r))
+                let env' =
+                    List.fold2 (fun env_ formal arg -> add_binding env_ (formal, s_eval_term arg (UM, env, pc))) env formals args
+                eval_rule body (UM, env', pc)
+        
  
     and eval_rule R (UM, env, pc) =
         match get_rule' R with
@@ -1937,6 +2033,7 @@ let rec reconvert_value (eng : ENGINE) x =
     |   SET (_, fs) -> //AppTerm (FctName "asSet", ?????)
                     failwith "reconvert_value: SET not implemented yet"
     |   CELL (tag, args) -> AppTerm eng (get_fct_id eng tag, args >>| reconvert_value eng)
+    |   TUPLE ts -> TupleTerm eng (ts >>| reconvert_value eng)
 
 let reconvert_term (eng : ENGINE) t =
     term_induction eng (fun x -> x) {
@@ -1944,6 +2041,7 @@ let reconvert_term (eng : ENGINE) t =
         Initial    = fun (f, xs) -> AppTerm eng (f, xs >>| Value eng);
         AppTerm    = AppTerm eng;
         CondTerm   = CondTerm eng;
+        TupleTerm  = TupleTerm eng;
         VarTerm    = VarTerm eng;
         QuantTerm  = QuantTerm eng;
         LetTerm    = LetTerm eng;
@@ -1987,6 +2085,7 @@ let term_size eng =
     term_induction eng name_size {
         Value = fun _ -> 1;
         AppTerm = fun (f, ts : int list) -> 1 + f + List.sum ts;
+        TupleTerm = fun ts -> 1 + List.sum ts;
         CondTerm = fun (G, t1, t2) -> 1 + G + t1 + t2;
         Initial = fun _ -> 1;
         VarTerm = fun _ -> 1;

@@ -51,6 +51,7 @@ let rec eval_term (t : TYPED_TERM) =
         Value      = fun (_, x) (_ : STATE, _ : ENV) -> x;
         AppTerm    = fun (_, (f, ts)) (S, env) -> (f S) (ts >>| fun t -> t (S, env))
         CondTerm   = fun (_, (G, t1, t2)) (S, env) -> if G (S, env) = BOOL true then t1 (S, env) else t2 (S, env);
+        TupleTerm  = fun (_, ts) (S, env) -> TUPLE (ts >>| fun t -> t (S, env));
         Initial    = fun (_, _) -> failwith "Eval.eval_term not defined on 'InitLoc' terms";
         VarTerm    = fun (_, v) (_, env) -> get_env env v;
         QuantTerm  = fun (_, (q_kind, v, t_set, t_cond)) (S, env) -> eval_quantifier (q_kind, v, t_set, t_cond) (S, env);

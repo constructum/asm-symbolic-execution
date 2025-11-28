@@ -20,22 +20,22 @@ type 'annotation ANN_TERM =
 |   Initial'    of 'annotation * (FCT_NAME * VALUE list)   // used for special purposes (symbolic evaluation): "partially interpreted term", not an actual term of the language
 |   AppTerm'    of 'annotation * (NAME * 'annotation ANN_TERM list)
 |   CondTerm'   of 'annotation * ('annotation ANN_TERM * 'annotation ANN_TERM * 'annotation ANN_TERM)
+|   TupleTerm'  of 'annotation * ('annotation ANN_TERM list)
 |   VarTerm'    of 'annotation * (string)
 |   QuantTerm'  of 'annotation * (QUANT_KIND * string * 'annotation ANN_TERM * 'annotation ANN_TERM)
 |   LetTerm'    of 'annotation * (string * 'annotation ANN_TERM * 'annotation ANN_TERM)
 |   DomainTerm' of 'annotation * TYPE                  // AsmetaL construct: finite type (e.g. enum, abstract, subsetof) used as finite set
-//  | TupleTerm   of 'annotation * ('annotation ANN_TERM list)
 
 let get_annotation = function
 |   Value' (ann, _) -> ann
 |   Initial' (ann, _) -> ann
 |   AppTerm' (ann, _) -> ann
 |   CondTerm' (ann, _) -> ann
+|   TupleTerm' (ann, _) -> ann
 |   VarTerm' (ann, _) -> ann
 |   QuantTerm' (ann, _) -> ann
 |   LetTerm' (ann, _) -> ann
 |   DomainTerm' (ann, _) -> ann
-//  |   TupleTerm (ann, _) -> ann
 
 type TYPED_TERM = TYPE ANN_TERM
 let get_type : TYPED_TERM -> TYPE = get_annotation
@@ -95,6 +95,7 @@ type ANN_TERM_INDUCTION<'annotation, 'name, 'term> = {
     Initial    : 'annotation * (string * VALUE list) -> 'term;
     AppTerm    : 'annotation * ('name * 'term list) -> 'term;
     CondTerm   : 'annotation * ('term * 'term * 'term) -> 'term;
+    TupleTerm  : 'annotation * ('term list) -> 'term;
     VarTerm    : 'annotation * (string) -> 'term;
     QuantTerm  : 'annotation * (QUANT_KIND * string * 'term * 'term) -> 'term;
     LetTerm    : 'annotation * (string * 'term * 'term) -> 'term;
@@ -108,6 +109,7 @@ let rec ann_term_induction (name : NAME -> 'name) (F : ANN_TERM_INDUCTION<'annot
     |   Initial' (ann, (f, xs))      -> F.Initial (ann, (f, xs))
     |   AppTerm'  (ann, (f, ts))     -> F.AppTerm (ann, (name f, List.map (fun t -> term_ind F t) ts))
     |   CondTerm' (ann, (G, t1, t2)) -> F.CondTerm (ann, (term_ind F G, term_ind F t1, term_ind F t2))
+    |   TupleTerm' (ann, ts)         -> F.TupleTerm (ann, List.map (fun t -> term_ind F t) ts)
     |   VarTerm' (ann, v)            -> F.VarTerm (ann, v)
     |   QuantTerm' (ann, (q_kind, v, t_set, t_cond)) -> F.QuantTerm (ann, (q_kind, v, term_ind F t_set, term_ind F t_cond))
     |   LetTerm' (ann, (x, t1, t2))  -> F.LetTerm (ann, (x, term_ind F t1, term_ind F t2))
@@ -153,6 +155,7 @@ let rec term_size t =
         Value = fun (_, _) -> 1;
         AppTerm = fun (_, (f, ts : int list)) -> 1 + f + List.sum ts;
         CondTerm = fun (_, (G, t1, t2)) -> 1 + G + t1 + t2;
+        TupleTerm = fun (_, ts) -> 1 + List.sum ts;
         Initial = fun (_, _) -> 1;
         VarTerm = fun (_, _) -> 1;
         QuantTerm = fun (_, (q_kind, v, t_set, t_cond)) -> 1 + t_set + t_cond;
@@ -210,6 +213,7 @@ let rec pp_term (sign : SIGNATURE) (t : TYPED_TERM) =
         CondTerm = fun (_, (G, t1, t2)) -> blo0 [ str "if "; G; line_brk; str "then "; t1; line_brk; str "else "; t2; line_brk; str "endif" ];
         Value    = fun (_, x) -> str (value_to_string x);
         Initial  = fun (_, (f, xs)) -> pp_location_term "initial" (f, xs);
+        TupleTerm = fun (_, ts) -> blo0 [ str "("; blo0 (pp_list [str",";brk 1] ts); str ")" ];
         VarTerm = fun (_, x) -> str x;
         QuantTerm = fun (_, (q_kind, v, t_set, t_cond)) ->
             blo0 [ str ("("^(quant_kind_to_str q_kind)^" "); str v; str " in "; t_set; str " with "; t_cond; str ")" ];

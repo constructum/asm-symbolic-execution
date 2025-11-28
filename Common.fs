@@ -26,6 +26,12 @@ let set_product S1 S2 =
         (Set.map (fun (S, y) -> Set.map (fun x -> (x, y)) S)
             (Set.unionMany (Set.map (fun x -> Set.singleton (S1, x)) S2)))
 
+let product_of_lists lists =
+    List.fold (fun acc list ->
+        acc |> List.collect (fun xs -> 
+            list |> List.map (fun x -> xs @ [x])))
+        [[]] lists
+
 let time f args = 
     let capture_cpu_time (proc : Process) =
         (proc.TotalProcessorTime, proc.UserProcessorTime, proc.PrivilegedProcessorTime)

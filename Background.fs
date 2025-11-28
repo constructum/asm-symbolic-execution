@@ -14,7 +14,7 @@ type VALUE =
 | STRING of string
 | CELL of string * VALUE list     // for values of user-defined inductive data types
 | SET of TYPE * VALUE Set                // for sets of values
-//| TUPLE of VALUE list
+| TUPLE of VALUE list
 
 let TRUE = BOOL true
 let FALSE = BOOL false
@@ -26,6 +26,9 @@ let rec value_to_string = function
 |   STRING s -> "\"" + s + "\""
 |   SET (_, s) -> "{" + (s |> Set.toList |> List.map value_to_string |> String.concat ", ") + "}"
 |   CELL (tag, args) -> if List.isEmpty args then tag else tag + " (" + (args >>| value_to_string |> String.concat ", ") + ")"
+|   TUPLE ts -> "(" + (ts |> List.map value_to_string |> String.concat ", ") + ")"
+
+//--------------------------------------------------------------------
 
 let rec type_of_value (sign : SIGNATURE) (x : VALUE) =
     match x with
@@ -35,6 +38,7 @@ let rec type_of_value (sign : SIGNATURE) (x : VALUE) =
     |   STRING s -> String
     |   SET (ty, _) -> Powerset ty   
     |   CELL (tag, _) -> let (_, ran) = fct_type tag sign in ran
+    |   TUPLE ts -> Prod (List.map (type_of_value sign) ts)
 
 //--------------------------------------------------------------------
 
@@ -100,7 +104,7 @@ let div = function
 | _ -> UNDEF
 
 let mod_ = function
-| [ INT x; INT y ] -> if y = 0 then failwith (sprintf "Division by zero error: %d mod %d" x y) else INT (x % y)
+| [ INT x; INT y ] -> if y = 0 then failwith (sprintf "Division by zero error: %d mod %d" x y) else INT (let r = x % y in if r < 0 then r + y else r)
 | _ -> UNDEF
 
 let _not = function

@@ -383,7 +383,10 @@ let match_one_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_ty
                 match_types (args_types', sign_arg_types', ty_env_1)
         |   (_, _, _) -> // arity does not match
                 raise (Error (FunctionCallTypeMismatch ((fct_name, sign_args_types, sign_res_type), args_types)))
-    let (_, result_type) = match_types (args_types, sign_args_types, Map.empty)
+    let (_, result_type) =
+        match args_types with
+        |   [Prod args_types] -> match_types (args_types, sign_args_types, Map.empty)    // one single tuple (x_1, ..., x_n) is equivalent to n arguments x_1, ..., x_n 
+        |   _ -> match_types (args_types, sign_args_types, Map.empty)
     result_type
 
 let match_fct_type (fct_name : string) (args_types : TYPE list) (sign_fct_types : list<TYPE list * TYPE>) : TYPE =

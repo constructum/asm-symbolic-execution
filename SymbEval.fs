@@ -174,6 +174,7 @@ and expand_term t (S, env, C) =
                     else AppTerm' (ty, (f, ts >>| fun t -> t (S, env, C)))
             |   _ -> AppTerm' (ty, (f, ts >>| fun t -> t (S, env, C)));
         CondTerm  = fun (ty, (G, t1, t2)) (S, env, C) -> CondTerm' (ty, (G (S, env, C), t1 (S, env, C), t2 (S, env, C)));
+        TupleTerm = fun (ty, ts) (S, env, C) -> TupleTerm' (ty, (ts >>| fun t -> t (S, env, C)));
         VarTerm   = fun (ty, v)           (S, env, C) -> fst (get_env env v);
         QuantTerm = fun (ty, (q_kind, v, t_set, t_cond)) (S, env, C) -> expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C);
         LetTerm   = fun (ty, (v, t1, t2)) (S, env, C) ->
@@ -245,6 +246,7 @@ and eval_app_term ty (S : S_STATE, env : ENV, C : CONTEXT) (fct_name, ts : (S_ST
                 |   Initial' (_, (f, xs))     -> F (t :: ts_past) ts_fut
                 |   CondTerm' (_, (G1, t11, t12)) -> s_eval_term_ (CondTerm' (ty, (G1, F ts_past ((fun (S, env, C) -> t11) :: ts_fut), F ts_past ((fun (S, env, C) -> t12) :: ts_fut)))) (S, env, C)
                 |   LetTerm' (_, (v, t1, t2)) -> F (t :: ts_past) ts_fut
+                |   TupleTerm' _              -> F (t :: ts_past) ts_fut
                 |   VarTerm' (_, v)           -> F (t :: ts_past) ts_fut
                 |   AppTerm' (_, _)           -> F (t :: ts_past) ts_fut
                 |   QuantTerm' _              -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
@@ -369,6 +371,7 @@ and s_eval_term_ (t : TYPED_TERM) ((S, env, C) : S_STATE * ENV * CONTEXT) =
         Initial    = fun (ty, (f, xs)) _ -> Initial' (ty, (f, xs));
         AppTerm    = fun (ty, (f, ts)) (S, env, C) -> eval_app_term ty (S, env, C) (f, ts)
         CondTerm   = fun (ty, (G, t1, t2)) (S, env, C) -> eval_cond_term ty (S, env, C) (G, t1, t2);
+        TupleTerm  = fun (ty, ts) (S, env, C) -> TupleTerm' (ty, (ts >>| fun t -> t (S, env, C)));
         VarTerm    = fun (ty, v) -> fun (S, env, _) -> fst (get_env env v);
         QuantTerm  = fun (ty, (q_kind, v, t_set, t_cond)) (S, env, C) -> expand_quantifier (ty, (q_kind, v, t_set, t_cond)) (S, env, C);
         LetTerm    = fun (ty, (v, t1, t2)) -> fun (S, env, _) -> eval_let_term (S, env, C) (v, t1, t2) 
@@ -444,6 +447,7 @@ and s_eval_rule (R : RULE) (S : S_STATE, env : ENV, C : CONTEXT) : RULE =
             let rec F ts_past = function
             |   (t1 as Value' _ :: ts_fut)        -> F (t1 :: ts_past) ts_fut
             |   (t1 as Initial' _ :: ts_fut)      -> F (t1 :: ts_past) ts_fut
+            |   (t1 as TupleTerm' _ :: ts_fut)    -> F (t1 :: ts_past) ts_fut
             |   (CondTerm' (ty, (G1, t11, t12)) :: ts_fut) ->
                     s_eval_rule (CondRule (G1, F ts_past (t11 :: ts_fut), F ts_past (t12 :: ts_fut))) (S, env, C)
             |   (QuantTerm' _:: ts_fut)           -> failwith "SymbEval.eval_app_term: QuantTerm not implemented"
@@ -589,6 +593,7 @@ let rec reconvert_value sign x =
     |   SET (_, _) -> //AppTerm (FctName "asSet", ?????)
                     failwith "reconvert_value: SET not implemented yet"
     |   CELL (tag, args) -> AppTerm' (type_of_value sign x, (FctName tag, args >>| reconvert_value sign))
+    |   TUPLE xs -> TupleTerm' (type_of_value sign x, xs >>| reconvert_value sign)
 
 let reconvert_term sign t =
     ann_term_induction (fun x -> x) {
@@ -596,6 +601,7 @@ let reconvert_term sign t =
         Initial  = fun (ty, (f, xs)) -> AppTerm' (ty, (FctName f, xs >>| mkValue sign));
         AppTerm  = AppTerm';
         CondTerm = CondTerm';
+        TupleTerm = TupleTerm';
         VarTerm  = VarTerm';
         QuantTerm = QuantTerm';
         LetTerm  = LetTerm';

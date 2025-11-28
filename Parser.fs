@@ -275,18 +275,25 @@ let rec operator_parser (static_term, env) (elem : bool * TypeEnv.TYPE_ENV -> Pa
 
 // --- syntactic sugar for terms -------------------------------------
 
-let mkAppTerm (static_term : bool) (reg : SrcReg option) sign args =
-    match args with
-    |   (UndefConst, _)    -> AppTerm' (Undef, args)
-    |   (BoolConst _, _)   -> AppTerm' (Boolean, args)
-    |   (IntConst _, _)    -> AppTerm' (Integer, args)
-    |   (StringConst _, _) -> AppTerm' (String, args)
+let rec mkAppTerm (static_term : bool) (reg : SrcReg option) sign (f_args as (f : NAME, args : TYPED_TERM list)) =
+    //fprintf stderr "mkAppTerm: args = %s\n" (args >>| term_to_string sign |> String.concat "; ")
+    match (f, args) with
+    |   (UndefConst, _)    -> AppTerm' (Undef, f_args)
+    |   (BoolConst _, _)   -> AppTerm' (Boolean, f_args)
+    |   (IntConst _, _)    -> AppTerm' (Integer, f_args)
+    |   (StringConst _, _) -> AppTerm' (String, f_args)
+    |   (FctName f, [TupleTerm' (Prod tys, ts)]) ->
+            mkAppTerm static_term reg sign (FctName f, ts)
     |   (FctName f, ts)    ->
             try let kind = fct_kind f sign
                 if static_term && not (kind = Static || kind = Constructor)
                 then raise (Error ("mkAppTerm", reg, StaticFunctionExpected (f, kind)))
-                else AppTerm' (match_fct_type f (ts >>| get_type) (fct_types f sign), args)       // !!!! no overloading yet
+                else AppTerm' (match_fct_type f (ts >>| get_type) (fct_types f sign), f_args)       // !!!! no overloading yet
             with Signature.Error details -> raise (Error ("mkAppTerm", reg, SignatureError details))
+
+let mkTupleTerm (reg : SrcReg option) sign args =
+    TupleTerm' (Prod (args >>| get_type), args)       // !!!! no overloading yet
+
 let mkVarTerm reg env v =
     try VarTerm' (TypeEnv.get v env, v)
     with _ -> raise (Error ("mkVarTerm", Some reg, UndefinedVariable v))
@@ -294,7 +301,7 @@ let mkVarTerm reg env v =
 let mkCondTerm (reg : SrcReg option) (G, t1, t2) =
     if get_type G <> Boolean
     then raise (Error ("mkCondTerm", reg, CondTermGuardNotBoolean))
-    else let (t1_type, t2_type) = (get_type t1, get_type t2)
+    else let (t1_type, t2_type) = (Signature.main_type_of (get_type t1), Signature.main_type_of (get_type t2))
          if t1_type = t2_type
          then CondTerm' (t1_type, (G, t1, t2))
          else raise (Error ("mkCondTerm", reg, CondTermBranchesWithDifferentTypes (t1_type, t2_type)))
@@ -431,6 +438,8 @@ let rec simple_term (static_term, env0 : TypeEnv.TYPE_ENV) (s : ParserInput<PARS
         <|> ( lit "(" << quantificationTerm >> lit ")" )
         <|> ( DomainTerm |>> fun tyname -> mkDomainTerm tyname )
         <|> ( lit "(" << term >> lit ")" )
+        <|> ( R2 ( lit "(" << term) (pmany (lit "," << term) >> lit ")")
+                |||>> fun reg (sign, _) (t, ts) -> mkTupleTerm (Some reg) sign (t :: ts) ) 
     ) s
 
 and term (static_term : bool, env : TypeEnv.TYPE_ENV) (s : ParserInput<PARSER_STATE>) : ParserResult<TYPED_TERM, PARSER_STATE> = 
