@@ -2127,7 +2127,7 @@ let collect_distinct_symbolic_update_sets eng = rule_induction eng (fun _ -> 0) 
 
 let symbolic_execution (eng : ENGINE) (R_in : RULE) (steps : int) : int * int option * RULE =
     if (!trace > 2) then fprintf stderr "symbolic_execution\n"
-    if (steps <= 0) then failwith "Engine.symbolic_execution: number of steps must be >= 1"
+    if (steps < 0) then failwith "Engine.symbolic_execution: number of steps must be >= 0"
     //  if (!trace > 2) then fprintf stderr "---\n%s\n---\n" (Signature.signature_to_string (signature_of C))
     let R_in_n_times = [ for _ in 1..steps -> R_in ]
     let R_in' = SeqRule eng (R_in_n_times @ [ skipRule eng ])      // this is to force the application of the symbolic update sets of R_in, thus identifying any inconsistent update sets

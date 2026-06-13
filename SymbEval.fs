@@ -640,7 +640,7 @@ let count_s_updates = rule_induction (fun _ -> ()) {
 // first element of pair returned is the number of S_Updates rules, i.e. paths in the decision tree
 let symbolic_execution (R_in : RULE) (steps : int) : int * int option * RULE =
     if (!trace > 2) then fprintf stderr "symbolic_execution\n"
-    if (steps <= 0) then failwith "SymbEval.symbolic_execution: number of steps must be >= 1"
+    if (steps < 0) then failwith "SymbEval.symbolic_execution: number of steps must be >= 0"
     let S0 = TopLevel.initial_state ()
     if (!trace > 2) then fprintf stderr "---\n%s\n---\n" (signature_to_string (signature_of (state_to_s_state S0)))
     let R_in_n_times = [ for _ in 1..steps -> R_in ]
