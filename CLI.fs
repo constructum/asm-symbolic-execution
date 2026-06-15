@@ -18,8 +18,9 @@ let usage () =
             "  -file <file>   load definitions contained in file <file>"
             "                   into top-level environment"
             ""
+            "  -legacy        use legacy UASM-based language as input language"
             "  -asmeta        use AsmetaL as input language"
-            "  -asmeta-dag    use AsmetaL with experimental DAG-based symbolic execution"
+            "  -asmeta-dag    use AsmetaL with DAG-based symbolic execution (default)"
             "  -init <state>  (AsmetaL only) start from initial state named <state>"
             "  -invcheck <n>  (AsmetaL only) check invariants during symbolic execution"
             "                   for at most <n> steps or indefinitely, if <n> not specified"
@@ -147,7 +148,7 @@ let CLI_with_ex(args) =
         let steps = ref 1
         let turbo2basic = ref false
         let asmeta_flag = ref false
-        let asmeta_dag_flag = ref false
+        let asmeta_dag_flag = ref true
         let invcheck = ref false
         let invcheck_steps = ref None
         let objects_to_load = ref []
@@ -158,8 +159,9 @@ let CLI_with_ex(args) =
             if i < n then 
                 match args[i] with
                 |   "-license"     -> license (); exit 0
-                |   "-asmeta"      -> asmeta_flag := true; main_rule_name := "r_Main"; parse_arguments (i+1)
-                |   "-asmeta-dag"  -> asmeta_dag_flag := true; main_rule_name := "r_Main"; parse_arguments (i+1)
+                |   "-legacy"      -> asmeta_flag := false; asmeta_dag_flag := false; main_rule_name := "r_Main"; parse_arguments (i+1)
+                |   "-asmeta"      -> asmeta_flag := true;  asmeta_dag_flag := false; main_rule_name := "r_Main"; parse_arguments (i+1)
+                |   "-asmeta-dag"  -> asmeta_flag := false; asmeta_dag_flag := true;  main_rule_name := "r_Main"; parse_arguments (i+1)
                 |   "-init"        -> if i+1 < n
                                       then  initial_state_name := Some args[i+1]; parse_arguments (i+2)
                                       else writeln_err "-init requires an argument"; exit 1
