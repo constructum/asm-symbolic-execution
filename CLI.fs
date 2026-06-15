@@ -149,19 +149,19 @@ let CLI_with_ex(args) =
         let turbo2basic = ref false
         let asmeta_flag = ref false
         let asmeta_dag_flag = ref true
+        let main_rule_name = ref "r_Main"
         let invcheck = ref false
         let invcheck_steps = ref None
         let objects_to_load = ref []
-        let main_rule_name = ref "Main"
         let initial_state_name = ref None
         let state_enumeration_based = ref false
         let rec parse_arguments i = 
             if i < n then 
                 match args[i] with
                 |   "-license"     -> license (); exit 0
-                |   "-legacy"      -> asmeta_flag := false; asmeta_dag_flag := false; main_rule_name := "r_Main"; parse_arguments (i+1)
+                |   "-legacy"      -> asmeta_flag := false; asmeta_dag_flag := false; main_rule_name := "Main"; parse_arguments (i+1)
                 |   "-asmeta"      -> asmeta_flag := true;  asmeta_dag_flag := false; main_rule_name := "r_Main"; parse_arguments (i+1)
-                |   "-asmeta-dag"  -> asmeta_flag := false; asmeta_dag_flag := true;  main_rule_name := "r_Main"; parse_arguments (i+1)
+                |   "-asmeta-dag"  -> asmeta_flag := false; asmeta_dag_flag := true; main_rule_name := "r_Main"; parse_arguments (i+1)
                 |   "-init"        -> if i+1 < n
                                       then  initial_state_name := Some args[i+1]; parse_arguments (i+2)
                                       else writeln_err "-init requires an argument"; exit 1
