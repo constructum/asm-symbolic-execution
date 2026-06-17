@@ -1,0 +1,1 @@
+time dotnet run -asmeta-dag -invcheck $1 -file examples-asmeta/binary-search/binary-search-inv-wrong.asm

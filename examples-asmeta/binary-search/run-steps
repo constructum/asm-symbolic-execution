@@ -1,0 +1,1 @@
+time dotnet run -asmeta-dag -steps $1 -file examples-asmeta/binary-search/binary-search.asm
